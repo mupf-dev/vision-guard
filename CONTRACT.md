@@ -167,6 +167,10 @@ Ergänzungen, die bei der Umsetzung hinzukamen. Sie sind abwärtskompatibel und 
 - Ohne gültiges Cookie wird der Handshake abgelehnt (HTTP 403) – Client behandelt das als „abgemeldet“.
 - `{"type":"event","action":"delete","event":...}` beim Löschen eines Events.
 - `{"type":"identity","identity":{"id","kind","deleted":true[,"merged_into"]}}` beim Löschen/Zusammenführen.
+- `detections.ts` ist die Worker-Wanduhr (Unix-s), zu der das Frame von ffmpeg gelesen wurde – **nicht** der
+  Sendezeitpunkt nach der Inferenz. Das Frontend puffert Detektionen je Kamera und zeichnet sie um die gemessene
+  Video-Verzögerung (+ manueller Versatz „Overlay-Verzögerung“, je Kamera in `localStorage`) versetzt
+  (`frontend/src/lib/overlaySync.ts`).
 
 **MQTT**
 - Extern `{prefix}/events`: Payload `{"action":"new|update|end","event":{...}}`.

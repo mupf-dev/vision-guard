@@ -3,6 +3,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useLive, useUi, toast } from "./store";
 import type { Camera, WsMessage } from "./types";
 import { labelName } from "./labels";
+import { pushDetection } from "./overlaySync";
 
 function wsUrl(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -13,6 +14,7 @@ function handle(msg: WsMessage, qc: QueryClient) {
   const s = useLive.getState();
   switch (msg.type) {
     case "detections":
+      pushDetection(msg);
       s.setDetections(msg);
       break;
     case "camera_status":

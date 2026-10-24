@@ -53,6 +53,9 @@ src/
     api.ts                   REST-Client (credentials: include, 401 -> Login)
     types.ts                 Typen laut CONTRACT.md
     store.ts                 zustand: Live-Daten (detections/status/feed), Toasts, UI-Prefs (localStorage)
+    overlaySync.ts           Overlay-Synchronisation: Detektionspuffer je Kamera (nach Frame-ts), Messung der
+                             Video-Verzögerung (WebRTC: requestVideoFrameCallback, MSE: Pufferlänge),
+                             Standbild-Erkennung, Interpolation zwischen Analyse-Frames
     useLiveSocket.ts         einziger WebSocket /api/ws, Reconnect mit Exponential-Backoff,
                              react-query-Invalidierung bei event/identity/camera_status
     labels.ts, format.ts     Label-Farben/-Namen (Person/Fahrzeug/Tier), Datumsformat de-DE
@@ -62,7 +65,9 @@ src/
                              muted, ohne Controls; berechnet Letterbox-Rechteck (object-fit: contain)
                              und gibt es als Render-Prop an Overlays
     DetectionOverlay.tsx     SVG-Boxen (normierte bbox -> Bildrechteck), Label/Score/Track/Identität,
-                             optionale Zonen-Polygone; Detektionen > 2,5 s alt werden ausgeblendet
+                             optionale Zonen-Polygone; zeichnet die zum Videobild passende (verzögerte)
+                             Detektion, blendet Boxen > 1,5 s ohne Detektion aus, friert sie bei hängendem
+                             Video ein („Video hängt“). Fokusansicht: „Sync“ = manuelle Overlay-Verzögerung
     ZoneEditor.tsx           Polygon-Editor auf /api/cameras/{id}/snapshot.jpg (zeichnen, Punkte ziehen,
                              Doppelklick auf Kante = Punkt einfügen, Rechtsklick = Punkt löschen)
     EventBits.tsx            Feed-Eintrag, Ereignis-Detaildialog (Clip/Snapshot/Ausschnitt, Attribute, Regeln)

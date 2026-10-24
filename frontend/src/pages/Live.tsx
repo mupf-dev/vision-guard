@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowLeft, Cctv, ChevronRight, ChevronsLeft, Eye, Gauge, Grid2x2, Grid3x3, LayoutGrid, Layers, Maximize2, Plus, Radio, Square, Timer, Users,
+  ArrowLeft, Cctv, Clock, ChevronRight, ChevronsLeft, Eye, Gauge, Grid2x2, Grid3x3, LayoutGrid, Layers, Maximize2, Plus, Radio, Square, Timer, Users,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Camera, CameraStatus, DetObject, VGEvent } from "../lib/types";
 import { useLive, useUi } from "../lib/store";
 import { LivePlayer } from "../components/LivePlayer";
 import { DetectionOverlay, useCameraObjects } from "../components/DetectionOverlay";
+import { OFFSET_MAX_S, OFFSET_MIN_S, useSyncedFrame } from "../lib/overlaySync";
 import { Empty, LabelIcon, Loading } from "../components/ui";
 import { EventDetailDialog, FeedItem } from "../components/EventBits";
 import { labelColor, labelName } from "../lib/labels";
@@ -44,7 +45,7 @@ function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; o
   return (
     <div className={`cam-tile ${alert ? "alert" : ""}`} onClick={onOpen} role="button" tabIndex={0} aria-label={cam.name} onKeyDown={(k) => k.key === "Enter" && onOpen()}>
       <LivePlayer cameraId={cam.id} aspect={aspect} offline={offline}>
-        {(r) => <DetectionOverlay rect={r} objects={objects} zones={cam.zones} showZones={showZones} compact={compact} />}
+        {(r) => <DetectionOverlay rect={r} cameraId={cam.id} zones={cam.zones} showZones={showZones} compact={compact} />}
       </LivePlayer>
       <div className="tile-top">
         {!offline && analysing && <span className="badge live"><span className="dot" />LIVE</span>}
@@ -130,6 +131,42 @@ function Kpis({ cams }: { cams: Camera[] }) {
   );
 }
 
+const MODE_NAME = { webrtc: "WebRTC", mse: "MSE", mjpeg: "MJPEG", none: "–" } as const;
+
+/** Fokusansicht: manueller Versatz der Boxen zum Video ("Overlay-Verzögerung"), je Kamera im Browser gespeichert. */
+function OverlaySyncControl({ cameraId }: { cameraId: number }) {
+  const [open, setOpen] = useState(false);
+  const overlayDelay = useUi((s) => s.overlayDelay);
+  const set = useUi((s) => s.set);
+  const manual = overlayDelay?.[cameraId] ?? 0;
+  const f = useSyncedFrame(cameraId, open ? 250 : 2000);
+  const setManual = (v: number) => set({ overlayDelay: { ...overlayDelay, [cameraId]: Math.round(v * 10) / 10 } });
+  return (
+    <div className="sync-ctl">
+      <button className={`btn btn-sm ${open || manual ? "active" : ""}`} onClick={() => setOpen(!open)} title="Overlay-Verzögerung: Boxen zeitlich an das Video anpassen">
+        <Clock size={14} />Sync{manual ? ` ${manual > 0 ? "+" : ""}${manual.toFixed(1)} s` : ""}
+      </button>
+      {open && (
+        <div className="sync-pop">
+          <b>Overlay-Verzögerung</b>
+          <span className="muted">
+            Die Boxen werden automatisch um die gemessene Verzögerung des Videos ({MODE_NAME[f.mode]}: {(f.autoMs / 1000).toFixed(2)} s) verschoben.
+            Laufen sie dem Bild trotzdem voraus (positiv) oder hinterher (negativ), hier nachkorrigieren.
+          </span>
+          <div className="range">
+            <input type="range" min={OFFSET_MIN_S} max={OFFSET_MAX_S} step={0.1} value={manual} onChange={(e) => setManual(Number(e.target.value))} aria-label="Zusätzliche Verzögerung in Sekunden" />
+            <output>{manual > 0 ? "+" : ""}{manual.toFixed(1)} s</output>
+          </div>
+          <span className="muted">Gesamt: {(f.delayMs / 1000).toFixed(2)} s{f.stalled ? " · Video hängt" : ""}</span>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button className="btn btn-sm" onClick={() => setManual(0)} disabled={!manual}>Zurücksetzen</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; onPick: (e: VGEvent) => void }) {
   const status = useStatus(cam);
   const objects = useCameraObjects(cam.id);
@@ -152,11 +189,12 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
           <span key={l} className="tile-count" style={{ ["--lc" as string]: labelColor(l), height: 30 }}><LabelIcon label={l} />{n} {labelName(l)}</span>
         ))}
         <button className={`btn btn-sm ${showZones ? "active" : ""}`} onClick={() => set({ showZones: !showZones })}><Layers size={14} />Zonen</button>
+        {!offline && <OverlaySyncControl cameraId={cam.id} />}
       </div>
       <div className="focus">
         <div className="focus-video">
           <LivePlayer cameraId={cam.id} aspect={aspect} offline={offline}>
-            {(r) => <DetectionOverlay rect={r} objects={objects} zones={cam.zones} showZones={showZones} />}
+            {(r) => <DetectionOverlay rect={r} cameraId={cam.id} zones={cam.zones} showZones={showZones} />}
           </LivePlayer>
         </div>
         <div className="focus-side"><EventFeed cameraId={cam.id} onPick={onPick} collapsible={false} /></div>

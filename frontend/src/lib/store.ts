@@ -86,6 +86,8 @@ interface UiState {
   showZones: boolean;
   feedOpen: boolean;
   eventToasts: boolean;
+  /** manueller Overlay-Versatz je Kamera in Sekunden (zusätzlich zur automatisch gemessenen Video-Verzögerung) */
+  overlayDelay: Record<number, number>;
   set: (p: Partial<Omit<UiState, "set">>) => void;
 }
 
@@ -103,6 +105,7 @@ export const useUi = create<UiState>((set) => ({
   showZones: false,
   feedOpen: true,
   eventToasts: true,
+  overlayDelay: {},
   ...initialUi,
   set: (p) =>
     set((s) => {
