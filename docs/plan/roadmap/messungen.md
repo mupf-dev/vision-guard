@@ -12,12 +12,12 @@ Detektion blieb bei 5,0 fps.
 | Thema | Test | Go/No-Go | Empfehlung in einem Satz |
 |---|---|---|---|
 | C1 Sturz/Liegen | `posetest` | **Go mit Auflagen** | `yolo11n-pose` (+0,1 GB) genügt. Größtes Risiko ist nicht die Pose, sondern dass der Detektor liegende Personen nur in 48 % der Frames findet: Track-Abriss im Liegen als Signal werten. |
-| D1 Armgesten | `posetest` | **Go (vorläufig)** | Regelklassifikator ohne Fehlalarme auf 56 Negativ-Clips; Halte-Gesten mangels Material nicht gemessen → eigene Aufnahmen vor der Abnahme. |
+| D1 Armgesten | `posetest` | **Go (vorläufig)** | Regelklassifikator mit höchstens 1 Fehlalarm auf 56 Negativ-Clips; Halte-Gesten mangels Material nicht gemessen → eigene Aufnahmen vor der Abnahme. |
 | B4/D2 Exemplare | `itemtest` | **Bedingt Go** | DINOv2 nur für Gegenstände ab ≈ 90–120 px; Go-Kriterium AUC ≥ 0,90 bei ≥ 60 px verfehlt (0,84). Kleine Dinge (Schlüssel) → No-Go, UI-Warnung. |
 | C5 Kamera-Gesundheit | `healthtest` (CPU) | **Go** | 6 ms/Frame auf der CPU; an `cam_3` alle Störungen erkannt, 0 Fehlalarme, auch nachts im IR-Betrieb. |
 | B1 Zeitmaschine | `histtest` | **Go** | SigLIP 2 B/16-256 (Bild-Turm +0,29 GB, 14 ms) – deutlich besser als MobileCLIP2, Deutsch brauchbar. |
 | A2 Frag die Kamera | `vlm/bench.py` | **Go nur mit GPU-Lease** | Moondream 2 INT4 läuft mit torch 2.5.1 (0,99 s/Antwort, 21/22 richtig), Spitze 5,70 GB **mit** YOLOE → YOLOE muss entladen werden. |
-| A1 Flackern | `flickertest` | **No-Go für Rohzustände, Go mit Filter** | Nachts ≈ 300 appear/disappear pro Stunde an einer ruhigen Szene. A1/B2 brauchen Verzögerung ≥ 120 s und eine Score-Hysterese. |
+| A1 Flackern | `flickertest` | **No-Go für Rohzustände, Go mit Filter** | Nachts 250–300 appear/disappear pro Stunde an einer ruhigen Szene. `confirm_n` 3 / `miss_m` 10 senkt das in der Simulation um ≈ 93 %; dazu Verzögerung ≥ 120 s und Score-Hysterese. |
 
 ---
 
@@ -25,7 +25,7 @@ Detektion blieb bei 5,0 fps.
 
 | Messung | Wert |
 |---|---|
-| Haupt-Worker inkl. YOLOE-11m, 1 Kamera + Inventar (NVML, Gerät gesamt) | **2,84–3,65 GB**, schwankend (Mittel ≈ 3,2 GB). Der PyTorch-Cache des Workers wächst und schrumpft mit den YOLOE-Durchläufen. |
+| Haupt-Worker inkl. YOLOE-11m, 1 Kamera + Inventar (NVML, Gerät gesamt) | **2,84–3,42 GB** (jeweils ohne Testprozess gemessen), schwankend. Der PyTorch-Cache des Workers wächst und schrumpft mit den YOLOE-Durchläufen. |
 | eigener CUDA-Kontext eines Test-Containers | ≈ 0,1–0,25 GB (nicht trennbar unter WSL2; NVML liefert keine Werte je Prozess) |
 
 Hinweis für alle Folgewellen: Unter **WSL2 sieht `cudaMemGetInfo` die anderen Prozesse nicht zuverlässig**
@@ -38,7 +38,7 @@ NVML bestimmen (gilt für die GPU-Lease in K3/A2).
 (ultralytics 8.3.253, fp16). Daten:
 - **Liegen:** UR Fall Detection Dataset (Kwolek & Kępski 2014, CC BY-NC-SA 4.0), 30 Stürze + 40 Alltagsszenen,
   Kamera 0, RGB-Hälfte 320×240 (ähnlich klein wie Personen im Detect-Stream). Frame-Wahrheit aus den Label-CSVs
-  (2373 Frames „liegt“, 7009 „liegt nicht“).
+  (2373 Frames „liegt“, 7452 „liegt nicht“).
 - **Gesten:** UTD-MHAD (Chen et al. 2015, nur Forschung/privat), 8 Personen, 640×480, 15 fps, Clips ≈ 3 s.
 - Detektor wie im Produkt: `yolo11s.pt` aus dem Produktiv-Volume (nur lesend).
 
@@ -77,11 +77,12 @@ Gerätespitze im ganzen Test: **3,76 GB** (< 4,5 GB). Unter Konkurrenz (erster L
 | Geste | Positiv-Clips | erkannt in ≥ 1 Frame | ≥ 0,5 s gehalten | Fehlalarm auf 56 Negativ-Clips (Frame / 0,5 s) |
 |---|---|---:|---:|---:|
 | Arme verschränkt | a6 | 6/8 | 2/8 | 0 / 0 |
-| Hand über Kopf | a3 Winken, a17 Aufschlag | 11/16 | 5–7/16 | 1 / 0–1 |
+| Hand über Kopf | a3 Winken, a17 Aufschlag | 11/16 | 5–7/16 | 1 / 1 |
 | Arm seitlich gestreckt | a1/a2 Wischen | 10–12/16 | 3/16 | 0 / 0 |
 
 UTD-Gesten sind kurze Bewegungen, keine Haltegesten; eine 1-s-Haltezeit (Entwurf `gesture_hold_s`) lässt sich
-damit nicht prüfen. Positiv: **keine** Fehlalarme bei Klatschen, Bizeps-Curl, Joggen, Gehen, Hinsetzen/Aufstehen.
+damit nicht prüfen. Positiv: keine Fehlalarme bei Klatschen, Bizeps-Curl, Joggen, Gehen, Hinsetzen/Aufstehen;
+der eine „Hand über Kopf“-Treffer stammt aus einer Kniebeuge mit gestreckten Armen.
 
 **Go/No-Go:** C1 **Go mit Auflagen**, D1 **Go (vorläufig)**.
 
@@ -109,7 +110,7 @@ damit nicht prüfen. Positiv: **keine** Fehlalarme bei Klatschen, Bizeps-Curl, J
 
 | Crop-Größe (längste Seite) | AUC (Galerie einfach) | AUC (Galerie + Augmentierung) | TPR bei 5 % FPR (aug) |
 |---|---:|---:|---:|
-| 40 px | 0,74 | 0,77 | 0,38 |
+| 40 px | 0,74 | 0,77 | 0,35 |
 | 60 px | 0,81 | **0,84** | 0,52 |
 | 90 px | 0,86 | 0,87 | 0,60 |
 | 120 px | 0,88 | 0,88 | 0,66 |
@@ -215,16 +216,17 @@ gehoben, Regal, Flaschen, Person/Auto ja/nein, Licht an/aus, rotes/blaues Rechte
 | **Moondream 2 INT4** (2025-04-14, Apache-2.0) | 2,1 s | 2,1–3,5 s | **0,99 s** | 1,5 s | **21/22** | 2,75 GB | **5,70 GB** | nein (wiederholt die Frage) |
 | Qwen2.5-VL-3B NF4 (bitsandbytes, Qwen-Research-Lizenz) | 10 s | 1,0–1,4 s | 0,80 s | 1,7 s | 20/22 | 2,63 GB | 5,59 GB | **ja** („Ja, die Person liegt auf dem Boden.“) |
 | SmolVLM-500M (bf16, Apache-2.0) | 2,3 s | 0,6–0,8 s | 0,50 s | 0,8 s | 20/22 | 1,53 GB | 4,49 GB | knapp („Ja.“) |
-| SmolVLM-256M (bf16) | 1,8 s | 0,7 s | 0,51 s | 1,0 s | 19/22 | 1,02 GB | 4,03 GB | – |
+| SmolVLM-256M (bf16) | 1,8 s | 0,7 s | 0,51 s | 1,0 s | 19/22 | 1,02 GB | 4,03 GB | nicht geprüft |
 
 - **torchao 0.11.0 + torch 2.5.1 funktioniert** (offener Punkt aus `00-wellenplan.md` §6 erledigt); `trust_remote_code`
   mit gepinnter Revision; `model.compile()` nicht getestet.
 - Fehler: Moondream hält das fast schwarze Bild für „Licht an“; Qwen übersieht einmal die liegende Person und die
-  verschränkten Arme; SmolVLM-500M verneint das Supermarktregal.
+  verschränkten Arme; SmolVLM-500M verneint das Supermarktregal und sieht eine sitzende Person als liegend.
 - Während der VLM-Fragen blieb die Detektion bei 5,0 fps; die YOLOE-Durchläufe dauerten statt 41 ms 100–300 ms
   (GPU-Konkurrenz), es fielen keine Takte aus.
-- **Budget:** Mit YOLOE geladen liegt Moondream bei 5,70 GB (Grenze 5,6 GB ✗). YOLOE-11m belegt laut Phase 3
-  ≈ 0,33 GB (torch) [G]; nach dem Entladen per Lease ≈ **5,3–5,4 GB** [S aus G] ✓. Qwen NF4 lag mit YOLOE knapp unter
+- **Budget:** Mit YOLOE geladen liegt Moondream bei 5,70 GB (zweiter Lauf; erster Lauf bei höherer Grundlast
+  5,78 GB) – Grenze 5,6 GB ✗. YOLOE-11m belegt laut Phase 3 ≈ 0,33 GB (torch) [G]; nach dem Entladen per Lease
+  ≈ **5,4 GB** [S aus G] ✓. Qwen NF4 lag mit YOLOE knapp unter
   der Grenze (5,59 GB), braucht aber 10 s zum Laden.
 
 **Go/No-Go:** **Go – nur mit GPU-Lease** (YOLOE entladen + `empty_cache` vor dem Laden), Antwortzeit < 5 s ✓,
@@ -306,7 +308,17 @@ Einzelclips und Label-CSVs liegen unter `testcam/videos/raw/` (für `posetest`).
 Sturz in einer echten Wohnung (UR Fall ist Büro/Wohnung, 320×240) → **eigene Aufnahmen bleiben nötig** (C1/D1-Abnahme).
 Für Regal-Füllstände (C4) gibt es nur das Intel-Video, keine voll/halb/leer-Serie → `supplytest` braucht eigene Fotos.
 
-## 9. Reproduzieren
+## 9. Offen (nicht gemessen)
+
+- **Lasttest 16 Kameras mit allen Modellen gleichzeitig** (`selftest --replicate 8` + Pose + SigLIP): gehört laut
+  Wellenplan zum Wellenabschluss; hier nur Einzelmessungen neben dem Haupt-Worker (1 Kamera).
+- **C2 ReID (OSNet)** aus dem `posetest`-Entwurf: ONNX-Export über `torchreid` nicht versucht.
+- Wegnehm-Test kleiner Gegenstände (A1), Haltegesten (D1), eigene Handyfotos (B4), Tag/Nacht-Wechsel (C5),
+  Dedupe tagsüber (B1) – brauchen jemanden vor Ort bzw. Tageslicht.
+- Moondream mit `model.compile()` (schnellere Antworten) und VLM-Fragen an echte `cam_3`-Bilder (bewusst
+  ausgelassen: Personen im Bild, nur öffentliche Testbilder verwendet).
+
+## 10. Reproduzieren
 
 ```bash
 # einmalig
