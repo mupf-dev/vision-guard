@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import signal
 import threading
 import time
@@ -13,6 +14,7 @@ import requests
 from . import settings
 from .gpu import gpu_info
 from .pipeline import Pipeline
+from .util import with_worker_id
 
 log = logging.getLogger("vg.service")
 
@@ -35,7 +37,7 @@ class Backend:
         return r.json()
 
     def identify(self, body: dict) -> dict | None:
-        r = self.s.post(f"{settings.BACKEND_URL}/api/internal/identify", json=body, timeout=15)
+        r = self.s.post(f"{settings.BACKEND_URL}/api/internal/identify", json=with_worker_id(body), timeout=15)
         r.raise_for_status()
         return r.json()
 
@@ -46,7 +48,7 @@ class Service:
         self.stop_ev = threading.Event()
         self.reload_ev = threading.Event()
         self.mqtt_connected = False
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"vg-worker-{int(time.time())}",
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"vg-worker-{settings.WORKER_ID}-{int(time.time())}",
                                   clean_session=True)
         self.client.reconnect_delay_set(1, 30)
         self.client.max_queued_messages_set(2000)
@@ -60,7 +62,10 @@ class Service:
         if not self.mqtt_connected and qos == 0:
             return      # drop live data while disconnected; QoS1 messages are queued by paho
         try:
-            self.client.publish(topic, json.dumps(payload, separators=(",", ":")), qos=qos, retain=retain)
+            # zentrale Stelle: JEDE Worker-Nachricht trägt worker_id (detections, track, status, system,
+            # cmd_result, inventory) – D3-Vorbereitung, das Backend wertet es bisher nur für system aus
+            self.client.publish(topic, json.dumps(with_worker_id(payload), separators=(",", ":")), qos=qos,
+                                retain=retain)
         except Exception as e:  # noqa: BLE001
             log.debug("publish %s failed: %s", topic, e)
 
@@ -162,4 +167,9 @@ def main():
     logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    if not re.match(settings.WORKER_ID_PATTERN, settings.WORKER_ID):
+        log.error("VG_WORKER_ID ungültig (%r): erlaubt sind A-Z, a-z, 0-9, _ und -, 1..64 Zeichen",
+                  settings.WORKER_ID)
+        raise SystemExit(2)
+    log.info("worker id: %s", settings.WORKER_ID)
     Service().run()

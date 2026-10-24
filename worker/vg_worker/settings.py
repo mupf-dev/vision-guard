@@ -27,6 +27,12 @@ def _bool(name: str, default: bool) -> bool:
     return _env(name, "1" if default else "0").lower() in ("1", "true", "yes", "on")
 
 
+# --- Identität (D3-Vorbereitung) --------------------------------------------
+# Kennung dieses Workers in allen MQTT-Nachrichten (`worker_id`) und in der MQTT-client_id.
+# Erlaubt: [A-Za-z0-9_-], 1..64 Zeichen (Topic-Segment, späterer Schlüssel der Tabelle `workers`).
+WORKER_ID = _env("VG_WORKER_ID", "local").strip()
+WORKER_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+
 # --- services -------------------------------------------------------------
 BACKEND_URL = _env("VG_BACKEND_URL", "http://backend:8000").rstrip("/")
 MQTT_HOST = _env("VG_MQTT_HOST", "mosquitto")

@@ -16,7 +16,7 @@ import uuid
 from collections import deque
 
 from . import settings
-from .util import abs_media_path, rtsp_input_args
+from .util import media_target, rtsp_input_args
 
 log = logging.getLogger("vg.recorder")
 
@@ -146,8 +146,6 @@ class RingRecorder:
             chosen = [p for _, p in segs[:-1]]
         if not chosen:
             raise RuntimeError("no completed segments in buffer")
-        full = abs_media_path(rel_path)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
         lst = os.path.join(self.dir, f"concat-{os.getpid()}-{threading.get_ident()}.txt")
         # hardlink/copy segments first so the cleaner cannot delete them mid-concat
         tmpdir = os.path.join(self.dir, f"clip-{threading.get_ident()}-{int(time.time()*1000)}")
@@ -169,20 +167,20 @@ class RingRecorder:
             with open(lst, "w") as f:
                 for q in local:
                     f.write(f"file '{q}'\n")
-            tmp_out = full + ".part.mp4"
-            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                   "-f", "concat", "-safe", "0", "-i", lst,
-                   "-c", "copy", "-movflags", "+faststart", tmp_out]
-            r = subprocess.run(cmd, capture_output=True, timeout=120)
-            if r.returncode != 0 or not os.path.exists(tmp_out):
-                # retry with timestamp regeneration + AAC-less output (audio codecs like pcm_alaw can't go to mp4)
+            # Ziel nur über util.media_target (einzige Schreibstelle für Medien, D3-Vorbereitung)
+            with media_target(rel_path, ".mp4") as tmp_out:
                 cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                       "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", lst,
-                       "-map", "0:v:0", "-c", "copy", "-movflags", "+faststart", tmp_out]
+                       "-f", "concat", "-safe", "0", "-i", lst,
+                       "-c", "copy", "-movflags", "+faststart", tmp_out]
                 r = subprocess.run(cmd, capture_output=True, timeout=120)
-            if r.returncode != 0:
-                raise RuntimeError(f"ffmpeg concat failed: {r.stderr.decode(errors='replace')[-300:]}")
-            os.replace(tmp_out, full)
+                if r.returncode != 0 or not os.path.exists(tmp_out):
+                    # retry with timestamp regeneration + AAC-less output (audio codecs like pcm_alaw can't go to mp4)
+                    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                           "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", lst,
+                           "-map", "0:v:0", "-c", "copy", "-movflags", "+faststart", tmp_out]
+                    r = subprocess.run(cmd, capture_output=True, timeout=120)
+                if r.returncode != 0:
+                    raise RuntimeError(f"ffmpeg concat failed: {r.stderr.decode(errors='replace')[-300:]}")
             return rel_path
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
