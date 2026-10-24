@@ -302,7 +302,8 @@ EXPECT = {"arms_cross": "arms_cross", "wave": "hand_up", "swipe_left": "arm_side
 
 def eval_gestures(pose: Pose, d: str) -> dict:
     vids = sorted(glob.glob(os.path.join(d, "a*_s*_t*_color.avi")))
-    res = defaultdict(lambda: defaultdict(lambda: {"clips": 0, "held_1s": 0, "any_frame": 0}))
+    import cv2
+    res = defaultdict(lambda: defaultdict(lambda: {"clips": 0, "held_1s": 0, "held_05s": 0, "any_frame": 0}))
     for v in vids:
         m = re.match(r"a(\d+)_s(\d+)_t(\d+)", os.path.basename(v))
         act = UTD_ACTIONS.get(int(m.group(1))) if m else None
@@ -310,6 +311,9 @@ def eval_gestures(pose: Pose, d: str) -> dict:
             continue
         flags = defaultdict(list)
         n = 0
+        cap = cv2.VideoCapture(v)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 15.0  # UTD-MHAD: 15 fps, Clips ≈ 3 s
+        cap.release()
         for _i, _t, f in read_video_frames(v):
             ppl = pose.full(f)
             p = max(ppl, key=lambda x: x["score"]) if ppl else None
@@ -320,7 +324,8 @@ def eval_gestures(pose: Pose, d: str) -> dict:
         for g in ("arms_cross", "hand_up", "arms_up", "arm_side"):
             r = res[act][g]
             r["clips"] += 1
-            r["held_1s"] += held(flags[g], 30.0, 1.0)
+            r["held_1s"] += held(flags[g], fps, 1.0)
+            r["held_05s"] += held(flags[g], fps, 0.5)
             r["any_frame"] += any(flags[g])
     out = {a: {g: dict(v) for g, v in gd.items()} for a, gd in res.items()}
     # Zusammenfassung: Trefferquote auf der erwarteten Geste, Fehlalarme (held_1s) auf Negativ-Aktionen
@@ -333,7 +338,10 @@ def eval_gestures(pose: Pose, d: str) -> dict:
         fp = sum(out[a][g]["held_1s"] for a in neg)
         nn = sum(out[a][g]["clips"] for a in neg)
         summ[g] = {"positives": pos, "hit_held_1s": f"{tp}/{np_}", "false_alarm_held_1s": f"{fp}/{nn}",
-                   "hit_any_frame": f"{sum(out[a][g]['any_frame'] for a in pos)}/{np_}"}
+                   "hit_held_05s": f"{sum(out[a][g]['held_05s'] for a in pos)}/{np_}",
+                   "false_alarm_held_05s": f"{sum(out[a][g]['held_05s'] for a in neg)}/{nn}",
+                   "hit_any_frame": f"{sum(out[a][g]['any_frame'] for a in pos)}/{np_}",
+                   "false_alarm_any_frame": f"{sum(out[a][g]['any_frame'] for a in neg)}/{nn}"}
     return {"summary": summ, "by_action": out}
 
 
@@ -388,9 +396,9 @@ def main() -> None:
         rep[mp] = mr
         del pose
     rep["device_peak_total_mib"] = mib(probe.stop())
-    with open(os.path.join(a.out, "posetest.json"), "w") as f:
+    with open(os.path.join(a.out, f"posetest_{a.parts.replace(',', '_')}.json"), "w") as f:
         json.dump(rep, f, indent=1, ensure_ascii=False, default=str)
-    print("Bericht:", os.path.join(a.out, "posetest.json"))
+    print("Bericht:", os.path.join(a.out, f"posetest_{a.parts.replace(',', '_')}.json"))
 
 
 if __name__ == "__main__":

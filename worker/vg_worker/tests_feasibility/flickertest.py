@@ -17,6 +17,7 @@ import os
 import statistics
 import threading
 import time
+import uuid
 from collections import defaultdict
 
 import paho.mqtt.client as mqtt
@@ -46,7 +47,7 @@ def main() -> None:
         with lock:
             msgs.append(d)
 
-    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"vg-flickertest-{os.getpid()}")
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"vg-flickertest-{uuid.uuid4().hex[:8]}")
     c.on_message = on_msg
     c.connect(a.host, a.port, 30)
     c.subscribe(f"vg/internal/inventory/{a.camera}", qos=1)
@@ -82,14 +83,16 @@ def analyse(msgs: list[dict], minutes: float) -> dict:
             changes[ch.get("type")] += 1
         for it in m.get("items") or []:
             r = items.setdefault(it["item_id"], {"label": it["label"], "states": [], "scores": [], "centers": [],
-                                                 "hits": [], "occluded": 0, "runs": 0})
+                                                 "hits": [], "occluded": 0, "runs": 0, "seq": ""})
             r["runs"] += 1
             r["states"].append(it["state"])
             r["scores"].append(it["score"])
             b = it["bbox"]
             r["centers"].append(((b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
-            r["hits"].append(it.get("last_seen") == m.get("frame_ts"))
+            hit = it.get("last_seen") == m.get("frame_ts")
+            r["hits"].append(hit)
             r["occluded"] += bool(it.get("occluded"))
+            r["seq"] += "O" if (it.get("occluded") and not hit) else ("H" if hit else "M")
     by_item = {}
     for iid, r in items.items():
         st = r["states"]
@@ -102,7 +105,7 @@ def analyse(msgs: list[dict], minutes: float) -> dict:
             "flips": flips, "hit_rate": sum(r["hits"]) / max(len(r["hits"]), 1),
             "score_mean": statistics.fmean(r["scores"]), "score_sd": statistics.pstdev(r["scores"]),
             "drift_max": drift, "occluded_runs": r["occluded"],
-            "first_state": st[0], "last_state": st[-1],
+            "first_state": st[0], "last_state": st[-1], "seq": r["seq"],
         }
     by_label: dict[str, dict] = {}
     for lab in sorted({v["label"] for v in by_item.values()}):
@@ -127,7 +130,40 @@ def analyse(msgs: list[dict], minutes: float) -> dict:
         "interval_s": statistics.median([m.get("interval_s", 0) for m in msgs]) if msgs else None,
         "model": msgs[-1].get("model") if msgs else None,
     }
+    summary["simulated"] = simulate(by_item, minutes)
     return {"summary": summary, "by_label": by_label, "by_item": by_item}
+
+
+def simulate(by_item: dict, minutes: float) -> dict:
+    """Spielt die Treffer-Folgen (H=Treffer, M=Fehlschlag, O=verdeckt) mit anderen Hysterese-Werten nach:
+    Zustandswechsel present->missing je Stunde für confirm_n/miss_m-Kombinationen (nur bestätigte Gegenstände,
+    Gegenstände mit < 5 Durchläufen ignoriert). Hinweis: Folgen beginnen erst, wenn der Worker den Gegenstand führt."""
+    out = {}
+    h = minutes / 60
+    for cn in (2, 3):
+        for mm in (3, 5, 10, 20):
+            gone = 0
+            for v in by_item.values():
+                seq = v.get("seq", "")
+                if len(seq) < 5:
+                    continue
+                state, hits, miss = "candidate", 0, 0
+                for ch in seq:
+                    if ch == "H":
+                        hits += 1
+                        miss = 0
+                        if state != "present" and hits >= cn:
+                            state = "present"
+                    elif ch == "M":
+                        miss += 1
+                        if state == "present" and miss >= mm:
+                            state = "missing"
+                            gone += 1
+                            hits = 0
+                        elif state == "candidate":
+                            hits = 0
+            out[f"confirm{cn}_miss{mm}"] = {"gone_events": gone, "gone_per_hour": round(gone / h, 1)}
+    return out
 
 
 if __name__ == "__main__":

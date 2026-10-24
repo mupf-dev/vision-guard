@@ -138,11 +138,13 @@ def run_model(key: str, qs: list, set_dir: str, probe: Probe, a) -> dict:
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
-    free, total = torch.cuda.mem_get_info()
-    cap = max(0.05, (free - a.margin_mb * MiB) / total)
+    # Unter WSL2 sieht cudaMemGetInfo die anderen Prozesse nicht zuverlässig -> freien Speicher per NVML bestimmen
+    total = probe.total()
+    free = total - probe.used()
+    cap = max(0.05, min(1.0, (free - a.margin_mb * MiB) / torch.cuda.mem_get_info()[1]))
     torch.cuda.set_per_process_memory_fraction(cap)
     res: dict = {"model": key, "repo": MODELS[key][0], "revision": MODELS[key][1],
-                 "device_before_mib": round(probe.used() / MiB), "cap_mib": round(cap * total / MiB)}
+                 "device_before_mib": round(probe.used() / MiB), "cap_mib": round(cap * torch.cuda.mem_get_info()[1] / MiB)}
     probe.reset()
     t0 = time.time()
     try:
@@ -171,6 +173,8 @@ def run_model(key: str, qs: list, set_dir: str, probe: Probe, a) -> dict:
             yn = yes_no(ans)
             answers.append({**q, "answer": ans[:120], "yn": yn, "ok": yn == q["truth"], "s": round(dt, 2)})
             print(f"  [{key}] {q['image']}: {q['question']} -> {ans[:60]!r} ({yn}, Wahrheit {q['truth']}) {dt:.2f}s", flush=True)
+        res["device_peak_qa_mib"] = round(probe.peak / MiB)
+        res["torch_reserved_peak_qa_mib"] = round(torch.cuda.max_memory_reserved() / MiB)
         # große Auflösung wie cam_3 (2880×1616)
         big = img0.resize((2880, 1616))
         bt = []
@@ -179,6 +183,8 @@ def run_model(key: str, qs: list, set_dir: str, probe: Probe, a) -> dict:
             m.ask(big, "Describe the scene in one short sentence.")
             bt.append(time.time() - t)
         res["caption_2880_s_median"] = round(statistics.median(bt), 2)
+        # deutsche Frage (Sprachtauglichkeit; Bild 0 zeigt eine liegende Person)
+        res["german_example"] = m.ask(img0, "Liegt eine Person auf dem Boden? Antworte mit ja oder nein.")[:120]
         # freie Frage (kurze Antwort, keine Ja/Nein-Wertung)
         t = time.time()
         res["free_question_example"] = m.ask(img0, "What objects are visible? Answer briefly.")[:200]
@@ -214,8 +220,9 @@ def main() -> None:
     a = ap.parse_args()
     qs = json.load(open(os.path.join(a.set, "questions.json")))
     probe = Probe()
+    before = round(probe.used() / MiB)  # Grundlast ohne eigenen CUDA-Kontext
     torch.cuda.init()
-    rep = {"gpu_total_mib": round(probe.total() / MiB), "device_used_before_cuda_mib": None,
+    rep = {"gpu_total_mib": round(probe.total() / MiB), "device_used_before_cuda_mib": before,
            "torch": torch.__version__, "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     import transformers
     rep["transformers"] = transformers.__version__
