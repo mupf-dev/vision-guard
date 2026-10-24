@@ -516,3 +516,44 @@ Ergänzungen der Umsetzung (MCP, additiv):
 - Server: MCP-SDK `mcp==2.3.0`, `stateless_http=True`, `json_response=True`; versteht auch ältere
   Protokollversionen (z. B. `2025-03-26`). Compose-Variable `MCP_ALLOWED_HOSTS` → `VG_MCP_ALLOWED_HOSTS`; gesetzt
   aktiviert sie die Host-/Origin-Prüfung des SDK (nginx reicht `Host` ohne Port durch).
+
+## Nachträge: Welle 0 – Vorbereitung verteilter Worker (D3)
+
+Abwärtskompatibel; mit einem einzelnen Worker ändert sich kein Verhalten. Hintergrund:
+`docs/plan/roadmap/d3-verteilte-worker.md` (Abschnitt 1) und `docs/plan/roadmap/00-wellenplan.md` (W0).
+
+**Worker-ID**
+- Env `VG_WORKER_ID` (Worker, Default `"local"`), erlaubt `^[A-Za-z0-9_-]{1,64}$`; ungültig → Worker startet nicht.
+- **Jede** Worker-Nachricht unter `vg/internal/…` trägt zusätzlich `worker_id: str` (`detections`, `track`,
+  `status`, `system`, `cmd_result`, `inventory`). Gesetzt wird es zentral beim Senden (`Service.publish`). Der
+  Body von `POST /api/internal/identify` enthält es ebenfalls (Backend ignoriert es).
+- MQTT-`client_id` des Workers: `vg-worker-<worker_id>-<unix_ts>`.
+- Backend: Nachrichten ohne `worker_id` gelten als `"local"`. `system` wird **je `worker_id`** gespeichert
+  (`state.set_worker_system`; ein späteres Topic `vg/internal/system/{worker_id}` wird bereits verstanden, das
+  Feld `worker_id` hat Vorrang vor dem Topic-Segment). `GET /system.worker` zeigt unverändert **einen** Worker:
+  bevorzugt einen online-Worker (`local` vor anderen), sonst den mit der jüngsten Meldung (`ts`). Alle übrigen
+  Nachrichten wertet das Backend weiterhin nicht nach Worker aus.
+
+**Medien schreiben (Worker)**
+- Medien (Crops, Snapshots, Inventar-Bilder, Clips) schreibt der Worker ausschließlich über
+  `worker/vg_worker/util.py`: `store_media(rel_path, data)` (Bytes, z. B. JPEG über `write_jpeg`) bzw.
+  `media_target(rel_path, suffix)` (Kontextmanager für Dateien, die ffmpeg erzeugt, z. B. Clips). Beide schreiben
+  atomar (temporäre Datei + `os.replace`) und nur innerhalb von `VG_MEDIA_DIR`. Der spätere Upload-Modus (D3,
+  `PUT /api/internal/media/{path}`) ändert nur diese beiden Funktionen.
+- Pfade in Nachrichten bleiben **relativ** zu `/data/media`. Das Backend darf nicht annehmen, dass eine Datei
+  zu `crop_path` bereits existiert (`identify` speichert dann ein Sample ohne Bild, wie bisher).
+
+**Interne Endpunkte**
+- Alle Router unter `/api/internal/` hängen an der Dependency `auth.require_internal` (heute ohne Wirkung, liefert
+  `"local"`). Neue interne Endpunkte müssen sie ebenfalls verwenden. Der Schutz bleibt vorerst allein nginx (403).
+
+**Datenbank**
+- `db.py::ADDITIVE_INDEXES` – Liste `(indexname, tabelle, spalten)`; `init_db()` führt sie nach
+  `ADDITIVE_COLUMNS` als `CREATE INDEX IF NOT EXISTS` aus (Namen `[a-z_][a-z0-9_]*`, je Index eigene Transaktion,
+  Fehler werden geloggt und stoppen den Start nicht). Indizes für **bestehende** Tabellen nur dort eintragen.
+
+**Reservierte Kamera-Slugs (externes MQTT)**
+- Themen-Topics stehen direkt hinter dem Präfix. Ergibt der Slug eines Kameranamens eines der reservierten Wörter
+  `available`, `events`, `health`, `sensor`, `gesture`, `pets`, `notifications`, `report`, `review`, bekommt er
+  das Suffix `_cam` (Kamera „Events“ → `{prefix}/events_cam/{label}`). Liste: `backend/app/util.py::RESERVED_SLUGS`,
+  Funktion `camera_slug(name)`. Neue Themen-Topics hinter dem Präfix müssen dort ergänzt werden.
