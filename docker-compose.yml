@@ -1,0 +1,115 @@
+name: vision-guard
+
+x-common-env: &common-env
+  TZ: ${TZ:-Europe/Berlin}
+  VG_DATABASE_URL: postgresql+psycopg://vg:${POSTGRES_PASSWORD:-vg}@db:5432/visionguard
+  VG_MQTT_HOST: mosquitto
+  VG_MQTT_PORT: "1883"
+  VG_GO2RTC_URL: http://go2rtc:1984
+  VG_GO2RTC_RTSP: rtsp://go2rtc:8554
+  VG_MEDIA_DIR: /data/media
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: visionguard
+      POSTGRES_USER: vg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vg}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vg -d visionguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    restart: unless-stopped
+    ports:
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    volumes:
+      - ./go2rtc/go2rtc.yaml:/config/go2rtc.yaml
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      mosquitto: { condition: service_started }
+      go2rtc: { condition: service_started }
+    environment:
+      <<: *common-env
+      VG_ADMIN_USER: ${ADMIN_USER:-admin}
+      VG_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      VG_SECRET_KEY: ${SECRET_KEY:-change-me-please}
+      VG_DEMO_CAMERAS: ${DEMO_CAMERAS:-1}
+    volumes:
+      - media:/data/media
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  worker:
+    build: ./worker
+    restart: unless-stopped
+    depends_on:
+      backend: { condition: service_healthy }
+    environment:
+      <<: *common-env
+      VG_MODELS_DIR: /models
+      VG_BUFFER_DIR: /buffer
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    volumes:
+      - media:/data/media
+      - models:/models
+    # Ringpuffer für Clips liegt nur im RAM
+    tmpfs:
+      - /buffer:size=${BUFFER_SIZE:-1g}
+    shm_size: 1g
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - go2rtc
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+
+  # Simulierte Kameras zum Testen (RTSP: rtsp://testcam:8554/cam1, cam2)
+  testcam:
+    image: bluenviron/mediamtx:1.15.3-ffmpeg
+    restart: unless-stopped
+    profiles: ["demo"]
+    ports:
+      - "8554:8554"
+    volumes:
+      - ./testcam/mediamtx.yml:/mediamtx.yml:ro
+      - ./testcam/videos:/videos:ro
+
+volumes:
+  db-data:
+  media:
+  models:

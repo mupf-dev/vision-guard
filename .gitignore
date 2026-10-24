@@ -1,0 +1,22 @@
+# Lokale Konfiguration / Geheimnisse
+.env
+
+# Node / Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Testvideos (werden per testcam/download-videos.sh geladen)
+testcam/videos/*.mp4
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

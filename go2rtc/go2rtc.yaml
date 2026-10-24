@@ -1,0 +1,13 @@
+# Streams werden vom Backend per API verwaltet (cam_<id>)
+api:
+  listen: ":1984"
+  origin: "*"
+rtsp:
+  listen: ":8554"
+webrtc:
+  listen: ":8555"
+  candidates:
+    - stun:8555
+log:
+  level: info
+streams: {}

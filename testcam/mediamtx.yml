@@ -1,0 +1,13 @@
+# Simulierte Kameras: Testvideos in Endlosschleife als RTSP
+rtspTransports: [tcp]
+hls: no
+webrtc: no
+rtmp: no
+srt: no
+paths:
+  cam1:
+    runOnInit: ffmpeg -re -stream_loop -1 -i /videos/face-demographics-walking.mp4 -an -c:v copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnInitRestart: yes
+  cam2:
+    runOnInit: ffmpeg -re -stream_loop -1 -i /videos/person-bicycle-car-detection.mp4 -an -c:v copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnInitRestart: yes
