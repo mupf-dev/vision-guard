@@ -54,6 +54,12 @@ In einer WSL-Sandbox ohne systemd muss der Docker-Daemon ggf. manuell gestartet 
 Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: Stack hochfahren, Ereignisse unter
 `/api/events` bzw. in der Oberfläche kontrollieren, bei UI-Änderungen Screenshot ansehen.
 
+## Angepasste Fremdbibliotheken
+
+- `frontend/public/vendor/video-rtc.js` (go2rtc-Player) ist gepatcht (Kommentar `VisionGuard-Patch`): MSE-Puffer wird
+  nur deutlich hinter dem Abspielkopf gekürzt, sonst friert das Bild bei Quellen mit langem Keyframe-Abstand
+  (YouTube) ein. Bei einem Update des Players den Patch übernehmen.
+
 ## Wo liegt was
 
 | Thema | Datei(en) |

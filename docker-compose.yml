@@ -40,7 +40,8 @@ services:
       - "8555:8555/tcp"
       - "8555:8555/udp"
     volumes:
-      - ./go2rtc/go2rtc.yaml:/config/go2rtc.yaml
+      # read-only: go2rtc soll per API angelegte Streams (inkl. Zugangsdaten) nie in die Datei schreiben
+      - ./go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
 
   backend:
     build: ./backend

@@ -192,5 +192,10 @@ Ergänzungen, die bei der Umsetzung hinzukamen. Sie sind abwärtskompatibel und 
   `ffmpeg:<hls>#input=youtube#video=copy`. Die Adresse wird gecacht und vor Ablauf (≈ 30 min vorher) erneuert.
 - Es wird **nichts heruntergeladen oder gespeichert**: ffmpeg liest den Stream live in den Speicher (go2rtc-Template
   `youtube` mit `-re`), Clips nur wie bei allen Kameras aus dem RAM-Ringpuffer bei Regel-Auslösung.
+- Ist `detect_url` derselbe YouTube-Link wie `url`, wird `cam_N_detect` in go2rtc nur als Alias auf `cam_N` angelegt
+  (kein zweiter Abruf; Analyse und Live-Bild auf derselben Zeitachse).
+- Das Backend setzt Streams per `PATCH` (nur im Speicher von go2rtc; `PUT` würde Quellen inkl. Zugangsdaten in
+  `go2rtc.yaml` schreiben – die Datei ist zusätzlich read-only eingebunden) und merkt sich die gesetzte Quelle, damit
+  der 30-s-Sync laufende Streams nicht neu aufbaut.
 - Nicht erreichbare/beendete Streams: `/cameras/test` liefert einen Fehler; beim Sync bleibt der Stream
   unverändert und wird nach 60 s erneut aufgelöst.

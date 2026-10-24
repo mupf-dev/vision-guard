@@ -7,9 +7,11 @@ rtsp:
 webrtc:
   listen: ":8555"
   candidates:
-    - stun:8555
+    - 127.0.0.1:8555   # Browser auf demselben Rechner (Docker Desktop / WSL2: Port 8555 wird auf localhost weitergeleitet)
+    - stun:8555        # öffentliche Adresse per STUN
 ffmpeg:
-  # YouTube/HLS: in Echtzeit lesen (-re), sonst kommen Segmente schubweise und Zeitstempel springen
+  # YouTube/HLS: in Echtzeit lesen (-re), sonst kommen die 5-s-Segmente schubweise (Browser-Puffer läuft leer,
+  # Worker bekommt Bursts). Gemessen: ohne -re Ankunftsschwankung ~17 s, mit -re < 1 s.
   youtube: "-re -fflags nobuffer+genpts -i {input}"
 log:
   level: info

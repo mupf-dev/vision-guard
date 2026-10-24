@@ -465,13 +465,18 @@ export class VideoRTC extends HTMLElement {
                 }
 
                 if (!sb.updating && sb.buffered && sb.buffered.length) {
+                    // VisionGuard-Patch: Original entfernte alles vor `end - 5` s. Bei Quellen mit langem
+                    // Keyframe-Abstand (YouTube/HLS: 5 s) löscht SourceBuffer.remove() dabei auch die Frames
+                    // vor dem Abspielkopf bis zum nächsten Keyframe -> Bild stand jeweils ~4 s, dann Schub.
+                    // Jetzt: nur Daten deutlich hinter dem Abspielkopf entfernen (mind. ein GOP bleibt erhalten).
                     const end = sb.buffered.end(sb.buffered.length - 1);
                     const start = end - 5;
                     const start0 = sb.buffered.start(0);
-                    if (start > start0) {
-                        sb.remove(start0, start);
-                        ms.setLiveSeekableRange(start, end);
+                    const trim = Math.min(start, this.video.currentTime) - 10;
+                    if (trim > start0) {
+                        sb.remove(start0, trim);
                     }
+                    ms.setLiveSeekableRange(Math.max(start0, trim), end);
                     if (this.video.currentTime < start) {
                         this.video.currentTime = start;
                     }
