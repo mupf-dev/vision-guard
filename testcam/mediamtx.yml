@@ -11,3 +11,13 @@ paths:
   cam2:
     runOnInit: ffmpeg -re -stream_loop -1 -i /videos/person-bicycle-car-detection.mp4 -an -c:v copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
     runOnInitRestart: yes
+  # Zusatz-Kameras (nur nach testcam/download-extra-videos.sh; fehlt das Video, bleibt der Pfad leer)
+  cam3:  # Sturz (UR Fall): Stürze mit 10 s Liegen + Alltagsszenen
+    runOnInit: sh -c 'test -f /videos/sturz.mp4 && exec ffmpeg -re -stream_loop -1 -i /videos/sturz.mp4 -an -c:v copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH || exec sleep 3600'
+    runOnInitRestart: yes
+  cam4:  # Gesten (UTD-MHAD): Winken, Arme verschränken, Wischen + Negativ-Aktionen
+    runOnInit: sh -c 'test -f /videos/gesten.mp4 && exec ffmpeg -re -stream_loop -1 -i /videos/gesten.mp4 -an -c:v copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH || exec sleep 3600'
+    runOnInitRestart: yes
+  cam5:  # Regal (Intel store-aisle + bottle-detection)
+    runOnInit: sh -c 'test -f /videos/regal.mp4 && exec ffmpeg -re -stream_loop -1 -i /videos/regal.mp4 -an -c:v copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH || exec sleep 3600'
+    runOnInitRestart: yes
