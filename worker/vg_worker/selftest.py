@@ -138,7 +138,8 @@ def main():
                                   "-of", "compact", clip], capture_output=True, text=True).stdout
             print(f"clip {clip}: {os.path.getsize(clip)} bytes {out.strip()}")
         for c in cams:
-            d = os.path.join(settings.BUFFER_DIR, f"cam_{c['id']}")
+            cam = p.cameras.get(c["id"]) if hasattr(p, "cameras") else None
+            d = cam.recorder.dir if cam is not None and cam.recorder else ""
             if os.path.isdir(d):
                 fs = sorted(os.listdir(d))
                 print(f"ring buffer cam_{c['id']}: {len(fs)} files, {sum(os.path.getsize(os.path.join(d, f)) for f in fs if os.path.isfile(os.path.join(d, f)))/1e6:.1f} MB")

@@ -42,6 +42,7 @@ BUFFER_DIR = _env("VG_BUFFER_DIR", "/buffer")
 MAX_FRAME_WIDTH = _int("VG_MAX_FRAME_WIDTH", 1920)      # decoded frame (crops/snapshots)
 HWACCEL = _env("VG_HWACCEL", "none").lower()            # none | cuda | auto
 STALL_TIMEOUT_S = _float("VG_STALL_TIMEOUT", 10.0)
+FIRST_FRAME_TIMEOUT_S = _float("VG_FIRST_FRAME_TIMEOUT", 30.0)
 
 # --- ring buffer ----------------------------------------------------------
 BUFFER_SEGMENT_S = _float("VG_BUFFER_SEGMENT_S", 2.0)

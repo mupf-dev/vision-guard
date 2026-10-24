@@ -179,11 +179,16 @@ class FrameSource:
 
         # watchdog: kill ffmpeg if no frame arrives for STALL_TIMEOUT
         last = [time.time()]
+        first = [True]
 
         def _watch():
             while proc.poll() is None and not self._stop.is_set():
                 time.sleep(1.0)
-                if time.time() - last[0] > max(settings.STALL_TIMEOUT_S, 3.0 / self.fps):
+                # erstes Bild darf länger dauern (z. B. YouTube/HLS: go2rtc muss die Quelle erst öffnen)
+                limit = max(settings.STALL_TIMEOUT_S, 3.0 / self.fps)
+                if first[0]:
+                    limit = max(limit, settings.FIRST_FRAME_TIMEOUT_S)
+                if time.time() - last[0] > limit:
                     self.last_error = "stream stalled"
                     log.warning("[%s] no frames for %.0fs – restarting ffmpeg", self.name, time.time() - last[0])
                     self._kill()
@@ -199,6 +204,7 @@ class FrameSource:
                     break
                 now = time.time()
                 last[0] = now
+                first[0] = False
                 # Quellen mit unzuverlässigen Zeitstempeln (z. B. HLS/YouTube) liefern Frames schubweise und mehr
                 # als detect_fps: per Token-Bucket nach Wanduhr drosseln (toleriert Jitter, verhindert Schübe)
                 tokens = min(1.5, tokens + (now - t_prev) * self.fps)

@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 
 from . import settings
@@ -24,7 +25,9 @@ class RingRecorder:
     def __init__(self, name: str, url: str):
         self.name = name
         self.url = url
-        self.dir = os.path.join(settings.BUFFER_DIR, name)
+        # eigenes Verzeichnis je Instanz: beim Neustart einer Kamera räumt der alte Recorder (join) sonst
+        # das Verzeichnis des neuen weg
+        self.dir = os.path.join(settings.BUFFER_DIR, f"{name}-{uuid.uuid4().hex[:8]}")
         self.state = "starting"
         self._stop = threading.Event()
         self._proc: subprocess.Popen | None = None
@@ -73,6 +76,8 @@ class RingRecorder:
             t0 = time.time()
             err: deque[str] = deque(maxlen=5)
             try:
+                # Verzeichnis kann beim Neustart der Kamera vom alten Recorder (join) gelöscht worden sein
+                os.makedirs(self.dir, exist_ok=True)
                 self._proc = subprocess.Popen(self._cmd(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 self.state = "online"
                 cleaner = threading.Thread(target=self._clean_loop, args=(self._proc,), daemon=True)
