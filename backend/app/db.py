@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 
 from sqlalchemy import create_engine, text
@@ -50,10 +51,33 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
 ]
 
 
+# Additive Index-Nachrüstung (wie ADDITIVE_COLUMNS): create_all legt Indizes nur für NEUE Tabellen an.
+# Indizes für bestehende Tabellen hier eintragen (im Modell darf derselbe Index zusätzlich stehen –
+# gleicher Name, dann bleibt es idempotent). Wird nach ADDITIVE_COLUMNS ausgeführt (Spalten existieren).
+ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
+    # (Indexname, Tabelle, Spaltenliste bzw. Ausdruck), z. B.
+    # ("ix_inventory_history_cam_ts", "inventory_history", "camera_id, ts"),
+]
+
+_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
 def _add_columns() -> None:
     with engine.begin() as c:
         for table, column, ddl in ADDITIVE_COLUMNS:
             c.execute(text(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "{column}" {ddl}'))
+
+
+def _add_indexes() -> None:
+    for name, table, columns in ADDITIVE_INDEXES:
+        if not (_IDENT.match(name) and _IDENT.match(table)):
+            raise ValueError(f"ungültiger Index-/Tabellenname in ADDITIVE_INDEXES: {name!r} / {table!r}")
+        # eigene Transaktion je Index: ein fehlerhafter Eintrag soll die übrigen nicht verhindern
+        try:
+            with engine.begin() as c:
+                c.execute(text(f'CREATE INDEX IF NOT EXISTS "{name}" ON {table} ({columns})'))
+        except Exception as e:  # noqa: BLE001
+            log.error("Index %s auf %s konnte nicht angelegt werden: %s", name, table, e)
 
 
 def init_db() -> None:
@@ -62,3 +86,4 @@ def init_db() -> None:
     wait_for_db()
     Base.metadata.create_all(engine)
     _add_columns()
+    _add_indexes()

@@ -7,11 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import go2rtc, identity, settings_store
+from ..auth import require_internal
 from ..db import SessionLocal, get_db
 from ..models import Camera
 from ..schemas import IdentifyIn, IdentifyOut
 
-router = APIRouter(prefix="/api/internal", tags=["internal"])
+# Jeder interne Router hängt an require_internal (heute ohne Wirkung, später Worker-Key-Prüfung – D3).
+router = APIRouter(prefix="/api/internal", tags=["internal"], dependencies=[Depends(require_internal)])
 log = logging.getLogger("vg.internal")
 
 

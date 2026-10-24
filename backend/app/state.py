@@ -9,8 +9,10 @@ WORKER_STALE_S = 15.0
 
 _lock = threading.Lock()
 camera_status: dict[int, dict[str, Any]] = {}   # camera_id -> letzte Statusnachricht + _rx
-worker_system: dict[str, Any] = {}
-worker_rx: float = 0.0
+# D3-Vorbereitung: letzte `system`-Nachricht je worker_id (Nachrichten ohne worker_id gelten als "local").
+# Heute gibt es genau einen Worker; /system.worker zeigt den lokalen (bzw. zuletzt gemeldeten) Worker.
+LOCAL_WORKER_ID = "local"
+worker_systems: dict[str, dict[str, Any]] = {}   # worker_id -> letzte system-Nachricht + _rx
 mqtt_connected: bool = False
 
 
@@ -19,12 +21,16 @@ def set_camera_status(camera_id: int, msg: dict[str, Any]) -> None:
         camera_status[camera_id] = {**msg, "_rx": time.time()}
 
 
-def set_worker_system(msg: dict[str, Any]) -> None:
-    global worker_rx
+def worker_id_of(msg: dict[str, Any], topic_worker_id: Optional[str] = None) -> str:
+    """worker_id einer Worker-Nachricht (Feld vor Topic-Segment, Default "local")."""
+    wid = msg.get("worker_id") or topic_worker_id or LOCAL_WORKER_ID
+    return str(wid)[:64]
+
+
+def set_worker_system(msg: dict[str, Any], topic_worker_id: Optional[str] = None) -> None:
+    wid = worker_id_of(msg, topic_worker_id)
     with _lock:
-        worker_system.clear()
-        worker_system.update(msg)
-        worker_rx = time.time()
+        worker_systems[wid] = {**msg, "worker_id": wid, "_rx": time.time()}
 
 
 def _iso_from_unix(ts: Optional[float]) -> Optional[str]:
@@ -61,14 +67,39 @@ def status_for(camera_id: int, enabled: bool = True) -> dict[str, Any]:
     return base
 
 
-def worker_info() -> dict[str, Any]:
-    with _lock:
-        sysmsg = dict(worker_system)
-        rx = worker_rx
-    online = bool(rx) and (time.time() - rx) <= WORKER_STALE_S
+def _worker_dict(sysmsg: dict[str, Any]) -> dict[str, Any]:
+    rx = sysmsg.get("_rx") or 0.0
+    online = bool(rx) and (time.time() - rx) <= WORKER_STALE_S and sysmsg.get("online", True) is not False
     return {
         "online": online,
         "gpu": sysmsg.get("gpu") or {},
         "models": sysmsg.get("models") or {},
         "last_seen": _iso_from_unix(sysmsg.get("ts") or rx or None),
     }
+
+
+def worker_info(worker_id: Optional[str] = None) -> dict[str, Any]:
+    """Status eines Workers für /system.worker: der angefragte; sonst bevorzugt ein online-Worker
+    ("local" vor anderen), danach der mit der jüngsten Meldung (`ts`). Ein retained Altbestand eines
+    umbenannten Workers verdeckt so nicht den laufenden."""
+    with _lock:
+        if worker_id is not None:
+            sysmsg = dict(worker_systems.get(worker_id) or {})
+        elif worker_systems:
+            now = time.time()
+
+            def rank(m: dict[str, Any]):
+                online = now - (m.get("_rx") or 0.0) <= WORKER_STALE_S and m.get("online", True) is not False
+                return (online, m.get("worker_id") == LOCAL_WORKER_ID, m.get("ts") or m.get("_rx") or 0.0)
+
+            sysmsg = dict(max(worker_systems.values(), key=rank))
+        else:
+            sysmsg = {}
+    return _worker_dict(sysmsg)
+
+
+def workers_info() -> dict[str, dict[str, Any]]:
+    """Alle bekannten Worker (worker_id -> Status wie worker_info); Grundlage für D3 `/system.workers`."""
+    with _lock:
+        msgs = {wid: dict(m) for wid, m in worker_systems.items()}
+    return {wid: _worker_dict(m) for wid, m in sorted(msgs.items())}

@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from .db import SessionLocal
 from .models import Camera
-from .util import slugify
+from .util import camera_slug
 
 _lock = threading.Lock()
 _cams: dict[int, dict[str, Any]] = {}
@@ -19,7 +19,7 @@ def reload() -> None:
             c.id: {
                 "id": c.id,
                 "name": c.name,
-                "slug": slugify(c.name),
+                "slug": camera_slug(c.name),
                 "enabled": c.enabled,
                 "labels": list(c.labels or []),
                 "room": c.room,
