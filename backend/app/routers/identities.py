@@ -25,16 +25,24 @@ def _get(db: Session, iid: int) -> Identity:
 
 
 @router.get("")
-def list_identities(db: Session = Depends(get_db), kind: Optional[str] = None, named: Optional[bool] = None):
+def list_identities(db: Session = Depends(get_db), kind: Optional[str] = None, named: Optional[bool] = None,
+                    locked: Optional[bool] = None, with_suggestion: bool = False):
     q = select(Identity)
     if kind:
         q = q.where(Identity.kind == kind)
+    if locked is not None:
+        q = q.where(Identity.learning_locked.is_(locked))
     if named is True:
         q = q.where(Identity.name.is_not(None), Identity.name != "")
     elif named is False:
         q = q.where((Identity.name.is_(None)) | (Identity.name == ""))
-    items = db.scalars(q.order_by(Identity.last_seen.desc())).all()
-    return identities_json(db, list(items))
+    items = list(db.scalars(q.order_by(Identity.last_seen.desc())).all())
+    data = identities_json(db, items)
+    if with_suggestion:
+        best = ident_svc.best_suggestions(db, items)
+        for d in data:
+            d["suggestion"] = best.get(d["id"])
+    return data
 
 
 @router.get("/{iid}")
@@ -51,6 +59,8 @@ def patch_identity(iid: int, body: IdentityPatch, db: Session = Depends(get_db))
         i.name = name or None
     if "notes" in fields:
         i.notes = body.notes or ""
+    if "learning_locked" in fields and body.learning_locked is not None:
+        i.learning_locked = bool(body.learning_locked)
     db.commit()
     data = identity_json(db, i)
     hub.broadcast({"type": "identity", "identity": data})
@@ -77,12 +87,26 @@ def merge_identity(iid: int, body: MergeIn, db: Session = Depends(get_db)):
     dst = _get(db, body.into_id)
     if src.kind != dst.kind:
         raise HTTPException(422, "Nur Identitäten gleicher Art können zusammengeführt werden")
-    dst = ident_svc.merge(db, src, dst)
+    try:
+        dst, src_deleted = ident_svc.merge(db, src, dst, body.sample_ids)
+    except ident_svc.MergeError as e:
+        db.rollback()
+        raise HTTPException(422, str(e)) from e
     data = identity_json(db, dst)
-    hub.broadcast({"type": "identity", "identity": {"id": iid, "kind": data["kind"], "deleted": True,
-                                                     "merged_into": dst.id}})
-    hub.broadcast({"type": "identity", "identity": data})
+    if src_deleted:
+        hub.broadcast({"type": "identity", "identity": {"id": iid, "kind": data["kind"], "deleted": True,
+                                                         "merged_into": dst.id}})
+        hub.broadcast({"type": "identity", "identity": data})
+    else:
+        # Teil-Merge: Quelle bleibt mit restlichen Samples und ihren Events bestehen
+        hub.broadcast({"type": "identity", "identity": data})
+        hub.broadcast({"type": "identity", "identity": identity_json(db, _get(db, iid))})
     return data
+
+
+@router.get("/{iid}/suggestions")
+def identity_suggestions(iid: int, db: Session = Depends(get_db), limit: int = Query(3, ge=1, le=20)):
+    return ident_svc.suggestions(db, _get(db, iid), limit)
 
 
 @router.get("/{iid}/samples")
@@ -91,7 +115,7 @@ def list_samples(iid: int, db: Session = Depends(get_db)):
     rows = db.scalars(select(IdentitySample).where(IdentitySample.identity_id == iid)
                       .order_by(IdentitySample.quality.desc(), IdentitySample.id.desc())).all()
     return [{"id": s.id, "image_url": media_url(s.image_path), "created_at": iso(s.created_at),
-             "quality": s.quality} for s in rows]
+             "quality": s.quality, "manual": bool(s.manual)} for s in rows]
 
 
 @router.delete("/{iid}/samples/{sid}", status_code=204)

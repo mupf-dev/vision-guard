@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import REAL, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import REAL, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,6 +35,13 @@ class Camera(Base):
     pet_recognition: Mapped[bool] = mapped_column(Boolean, default=True)
     zones: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Inventar (Gegenstände) und Raum – Spalten auch in db.ADDITIVE_COLUMNS
+    room: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    inventory_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    inventory_interval_s: Mapped[float] = mapped_column(Float, default=3, server_default=text("3"))
+    inventory_labels: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    inventory_min_score: Mapped[float] = mapped_column(Float, default=0.35, server_default=text("0.35"))
+    inventory_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 
 class Rule(Base):
@@ -66,6 +73,8 @@ class Identity(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Lernsperre: erkennen ja, keine neuen Samples automatisch speichern
+    learning_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
     samples: Mapped[list["IdentitySample"]] = relationship(
         back_populates="identity", cascade="all, delete-orphan", passive_deletes=True
@@ -91,6 +100,8 @@ class IdentitySample(Base):
     image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     quality: Mapped[float] = mapped_column(Float, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # per Merge mit Bildauswahl übernommen – wird beim Kürzen zuletzt verdrängt
+    manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
     identity: Mapped[Identity] = relationship(back_populates="samples")
 
@@ -120,3 +131,53 @@ class Event(Base):
     identity: Mapped[Optional[Identity]] = relationship(lazy="joined")
 
     __table_args__ = (Index("ix_events_cam_track", "camera_id", "track_id"),)
+
+
+class ApiToken(Base):
+    """API-Key für externe Clients (Bearer `vgt_<prefix>_<secret>`); gespeichert wird nur der HMAC-Hash."""
+    __tablename__ = "api_tokens"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    prefix: Mapped[str] = mapped_column(String(16), unique=True, index=True)  # "vgt_ab12cd34"
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)         # HMAC-SHA256 hex
+    scopes: Mapped[list] = mapped_column(JSONB, default=lambda: ["read"])    # ["read"] | ["read","write"]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class InventoryItem(Base):
+    """Gegenstandsgedächtnis: eine Zeile je Gegenstand (Kamera + Label + Ort), wird aktualisiert."""
+    __tablename__ = "inventory_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    label: Mapped[str] = mapped_column(String(64), index=True)
+    worker_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    worker_session: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    prompt: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    bbox: Mapped[list] = mapped_column(JSONB, default=list)        # normiert [x1,y1,x2,y2]
+    zones: Mapped[list] = mapped_column(JSONB, default=list)
+    state: Mapped[str] = mapped_column(String(16), default="present", index=True)  # present|missing|stale
+    relation: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class InventoryHistory(Base):
+    """Verlauf je Gegenstand: bei Zustandswechsel, sonst höchstens alle 5 min."""
+    __tablename__ = "inventory_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), index=True)
+    camera_id: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String(64))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    state: Mapped[str] = mapped_column(String(16), default="present")
+    bbox: Mapped[list] = mapped_column(JSONB, default=list)
+    zones: Mapped[list] = mapped_column(JSONB, default=list)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

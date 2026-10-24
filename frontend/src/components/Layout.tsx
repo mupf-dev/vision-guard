@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Bell, BellOff, History, LogOut, MonitorPlay, Settings2, ShieldCheck, Users } from "lucide-react";
+import { Package } from "lucide-react";
 import { api } from "../lib/api";
 import { useLive, useUi } from "../lib/store";
 import { useLiveSocket } from "../lib/useLiveSocket";
@@ -36,6 +37,7 @@ export function Layout() {
     { to: "/", label: "Live", icon: <MonitorPlay size={17} />, end: true },
     { to: "/ereignisse", label: "Ereignisse", icon: <History size={17} /> },
     { to: "/identitaeten", label: "Identitäten", icon: <Users size={17} /> },
+    { to: "/gegenstaende", label: "Gegenstände", icon: <Package size={17} /> },
     { to: "/statistik", label: "Statistik", icon: <BarChart3 size={17} /> },
     { to: "/admin", label: "Administration", icon: <Settings2 size={17} /> },
   ];

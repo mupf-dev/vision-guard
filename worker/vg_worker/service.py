@@ -29,6 +29,11 @@ class Backend:
             data = data["items"]
         return list(data)
 
+    def settings(self) -> dict:
+        r = self.s.get(f"{settings.BACKEND_URL}/api/internal/settings", timeout=10)
+        r.raise_for_status()
+        return r.json()
+
     def identify(self, body: dict) -> dict | None:
         r = self.s.post(f"{settings.BACKEND_URL}/api/internal/identify", json=body, timeout=15)
         r.raise_for_status()
@@ -98,6 +103,10 @@ class Service:
             log.warning("backend not reachable (%s) – retrying", e)
             return False
         log.info("loaded %d camera(s) from backend", len(cams))
+        try:
+            self.pipeline.set_settings(self.backend.settings())    # Inventar: confirm_n / miss_m
+        except Exception as e:  # noqa: BLE001
+            log.warning("settings not loaded (%s) – keeping previous values", e)
         self.pipeline.apply_config(cams)
         return True
 

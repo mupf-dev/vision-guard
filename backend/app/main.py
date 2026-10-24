@@ -6,12 +6,11 @@ import os
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
 from . import go2rtc, registry, retention, settings_store, state
 from .auth import ws_user
-from .config import DEFAULT_LABELS, VERSION, config
+from .config import DEFAULT_LABELS, VERSION, config, secret_key_problem, weak_admin_password
 from .db import SessionLocal, init_db
 from .events import close_stale_events, processor
 from .models import KV, Camera, Rule
@@ -19,6 +18,10 @@ from .mqtt_bus import bus
 from .routers import auth as auth_router
 from .routers import cameras, events, identities, internal, misc
 from .routers import rules as rules_router
+from .routers import inventory as inventory_router
+from .inventory import memory as inventory_memory
+from .routers import media as media_router
+from .routers import tokens as tokens_router
 from .rules import reload as reload_rules
 from .sync import load_cameras
 from .util import ensure_media_dirs
@@ -60,6 +63,7 @@ async def _ticker() -> None:
     while True:
         await asyncio.sleep(1)
         await asyncio.to_thread(processor.tick)
+        await asyncio.to_thread(inventory_memory.tick)
 
 
 async def _retention_loop() -> None:
@@ -87,6 +91,14 @@ async def _go2rtc_startup_sync() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    problem = secret_key_problem()
+    if problem:
+        log.critical("%s – Start abgebrochen. Bitte in .env SECRET_KEY setzen, z. B. mit `openssl rand -hex 32` "
+                     "(macht bestehende Sitzungen, API-Keys und Medien-Links ungültig).", problem)
+        raise RuntimeError(problem)
+    if weak_admin_password():
+        log.warning("Schwaches Admin-Passwort (ADMIN_PASSWORD): Anmeldung ist nur aus privaten Netzen möglich. "
+                    "Für Zugriff von außen ein starkes Passwort (≥ 8 Zeichen, nicht 'admin') setzen.")
     loop = asyncio.get_running_loop()
     hub.bind(loop)
     processor.loop = loop
@@ -97,6 +109,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(close_stale_events)
     await asyncio.to_thread(registry.reload)
     await asyncio.to_thread(reload_rules)
+    await asyncio.to_thread(inventory_memory.startup)
     bus.start()
     bus.publish_config_changed()
     tasks = [asyncio.create_task(t) for t in (_ticker(), _retention_loop(), _go2rtc_startup_sync())]
@@ -111,11 +124,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="VisionGuard", version=VERSION, lifespan=lifespan,
               docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+app.add_middleware(media_router.SignedUrlsMiddleware)   # ?signed=1 → signierte Medien-URLs
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+
+for r in (tokens_router.router, media_router.router):
+    app.include_router(r)
+
+app.include_router(inventory_router.router)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):
@@ -129,7 +148,7 @@ def health():
 
 @app.websocket("/api/ws")
 async def websocket(ws: WebSocket):
-    if not ws_user(ws):
+    if not await asyncio.to_thread(ws_user, ws):
         await ws.close(code=4401)
         return
     await ws.accept()
@@ -141,4 +160,4 @@ async def websocket(ws: WebSocket):
 
 
 os.makedirs(config.media_dir, exist_ok=True)
-app.mount("/media", StaticFiles(directory=config.media_dir, check_dir=False), name="media")
+# /media/* liefert routers/media.py geschützt aus (Cookie | Bearer | Signatur), kein StaticFiles-Mount mehr

@@ -11,6 +11,7 @@ from typing import Callable
 from . import settings
 from .identify import PETS, VEHICLES, Identifier, Job
 from .ingest import FrameSource
+from .inventory import GpuTurn, InventoryEngine
 from .recorder import RingRecorder
 from .tracking import CameraTracker
 from .util import crop_norm, draw_objects, write_jpeg
@@ -19,7 +20,7 @@ log = logging.getLogger("vg.pipeline")
 
 Publish = Callable[[str, dict, int, bool], None]   # topic, payload, qos, retain
 
-# config keys that require restarting ffmpeg processes
+# config keys that require restarting ffmpeg processes (Inventar-Felder bewusst NICHT – nur update_cfg)
 _STREAM_KEYS = ("detect_url_rtsp", "main_rtsp", "detect_fps")
 
 
@@ -88,6 +89,9 @@ class Pipeline:
         self.batch_hist: deque[tuple[float, int, float]] = deque(maxlen=200)   # (ts, batch size, ms)
         self.frames_total = 0
         self._wake = threading.Event()
+        # Inventar (Gegenstände): eigener Thread, GPU abwechselnd mit _infer_loop
+        self.gpu = GpuTurn()
+        self.inventory = InventoryEngine(publish, self.gpu, lambda cid: self.cams.get(cid))
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
@@ -105,6 +109,7 @@ class Pipeline:
 
     def stop(self):
         self._stop.set()
+        self.inventory.stop()
         with self.lock:
             cams = list(self.cams.values())
             self.cams.clear()
@@ -147,6 +152,14 @@ class Pipeline:
         for c in stopped:
             threading.Thread(target=c.join, daemon=True).start()
         self.identifier.needed(list(wanted.values()))
+        try:
+            self.inventory.configure(list(wanted.values()))
+        except Exception:  # noqa: BLE001
+            log.exception("inventory configuration failed")
+
+    def set_settings(self, s: dict | None):
+        """Globale Settings aus GET /api/internal/settings (Inventar: confirm_n/miss_m)."""
+        self.inventory.set_settings(s)
 
     # ------------------------------------------------------------------ inference
     def _infer_loop(self):
@@ -174,11 +187,14 @@ class Pipeline:
                 time.sleep(0.005)
                 continue
             try:
-                results = self.detector.detect([f.image for _, f in batch])
+                with self.gpu.lock:
+                    results = self.detector.detect([f.image for _, f in batch])
             except Exception:
                 log.exception("detection failed")
                 time.sleep(0.5)
                 continue
+            finally:
+                self.gpu.main_batch_done()
             ms = self.detector.last_ms
             now = time.time()
             self.batch_hist.append((now, len(batch), ms))
@@ -198,6 +214,9 @@ class Pipeline:
             c.done_times.append(time.time())
             c.last_ts = f.ts
             self.publish(f"vg/internal/detections/{c.id}", det_msg, 0, False)
+            if self.inventory.wants_persons(c.id):
+                # rohe Detektionen (unabhängig vom Label-Filter der Kamera) – Personen verdecken Gegenstände
+                self.inventory.note_persons(c.id, f.ts, [d[2] for d in dets if d[0] == "person" and d[1] >= 0.3])
             for m in msgs:
                 self.publish(f"vg/internal/track/{c.id}", m, 1, False)
             self._dispatch_identification(c, f, touched)
@@ -312,14 +331,16 @@ class Pipeline:
     def models_status(self) -> dict:
         d = {"detector": self.detector_status}
         d.update(self.identifier.status())
+        d["inventory"] = self.inventory.status_text()
         return d
 
     def perf(self) -> dict:
         now = time.time()
         h = [x for x in self.batch_hist if now - x[0] <= 10]
         if not h:
-            return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0}
+            return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
-                "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2)}
+                "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
+                "inventory": self.inventory.perf()}

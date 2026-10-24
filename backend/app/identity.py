@@ -7,15 +7,17 @@ import re
 import shutil
 import threading
 import uuid
+from datetime import timedelta
 from typing import Any, Optional
 
 import numpy as np
 from rapidfuzz.distance import Levenshtein
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from . import settings_store
 from .models import KV, Event, Identity, IdentitySample, utcnow
+from .schemas import media_url
 from .serializers import identity_json
 from .util import media_path
 from .ws import hub
@@ -108,12 +110,19 @@ def _remove_media(rel: Optional[str]) -> None:
 
 def _add_sample(s: Session, ident: Identity, emb: Optional[list[float]], plate_text: Optional[str],
                 crop_path: Optional[str], quality: float) -> bool:
-    """Fügt ein Sample hinzu; behält max. MAX_SAMPLES mit bester Qualität. True wenn hinzugefügt."""
+    """Fügt ein Sample hinzu; behält max. MAX_SAMPLES mit bester Qualität. True wenn hinzugefügt.
+
+    Automatisch gelernte Samples verdrängen nur andere automatische (manual=false) – per Merge bewusst
+    übernommene Bilder bleiben erhalten.
+    """
     samples = s.scalars(
         select(IdentitySample).where(IdentitySample.identity_id == ident.id).order_by(IdentitySample.quality.asc())
     ).all()
     if len(samples) >= MAX_SAMPLES:
-        worst = samples[0]
+        auto = [x for x in samples if not x.manual]
+        if not auto:
+            return False
+        worst = auto[0]
         if quality <= (worst.quality or 0):
             return False
         _remove_media(worst.image_path)
@@ -125,9 +134,10 @@ def _add_sample(s: Session, ident: Identity, emb: Optional[list[float]], plate_t
 
 
 def prune_samples(s: Session, identity_id: int) -> None:
+    """Kürzt auf MAX_SAMPLES: zuerst fallen automatische Samples (niedrigste Qualität zuerst), dann manuelle."""
     samples = s.scalars(
         select(IdentitySample).where(IdentitySample.identity_id == identity_id)
-        .order_by(IdentitySample.quality.desc(), IdentitySample.id.desc())
+        .order_by(IdentitySample.manual.desc(), IdentitySample.quality.desc(), IdentitySample.id.desc())
     ).all()
     for smp in samples[MAX_SAMPLES:]:
         _remove_media(smp.image_path)
@@ -156,6 +166,7 @@ def identify(s: Session, req: Any) -> dict[str, Any]:
         ident: Optional[Identity] = None
         score = 0.0
         is_new = False
+        added = False
         emb_list: Optional[list[float]] = None
         plate_disp: Optional[str] = None
 
@@ -203,16 +214,18 @@ def identify(s: Session, req: Any) -> dict[str, Any]:
             s.add(ident)
             s.flush()
             score = 1.0 if kind == "plate" else score
-            _add_sample(s, ident, emb_list, plate_disp, req.crop_path, quality)
+            added = _add_sample(s, ident, emb_list, plate_disp, req.crop_path, quality)
         else:
             ident.last_seen = now
-            _add_sample(s, ident, emb_list, plate_disp, req.crop_path, quality)
+            # Lernsperre: erkennen ja (last_seen, Event-Zuordnung), aber kein neues Sample speichern
+            added = False if ident.learning_locked else _add_sample(s, ident, emb_list, plate_disp,
+                                                                     req.crop_path, quality)
             if kind == "plate" and plate_disp and normalize_plate(plate_disp) == ident.plate_norm:
                 ident.plate_text = plate_disp
 
         ev = _link_event(s, req.camera_id, req.track_id, ident.id)
         s.commit()
-        if kind in ("face", "pet"):
+        if added and kind in ("face", "pet"):
             invalidate(kind)
 
     if is_new:
@@ -231,34 +244,183 @@ def delete_identity_files(identity_id: int) -> None:
         pass
 
 
-def merge(s: Session, src: Identity, dst: Identity) -> Identity:
+class MergeError(ValueError):
+    """Ungültige Merge-Anfrage (→ HTTP 422)."""
+
+
+def _move_sample_file(smp: IdentitySample, dst_id: int) -> None:
+    if not smp.image_path:
+        return
+    try:
+        new_rel = f"identities/{dst_id}/{os.path.basename(smp.image_path)}"
+        dst_abs = media_path(new_rel)
+        os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
+        shutil.move(media_path(smp.image_path), dst_abs)
+        smp.image_path = new_rel
+    except Exception as e:  # noqa: BLE001
+        log.warning("Sample-Datei nicht verschoben: %s", e)
+
+
+def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[int]] = None) -> tuple[Identity, bool]:
+    """Führt src in dst zusammen. Rückgabe: (Ziel, Quelle gelöscht?).
+
+    sample_ids None oder alle Samples der Quelle → klassischer Merge: alle Samples und Events wandern, Quelle
+    wird gelöscht. Echte Teilmenge → nur diese Samples wandern (manual=true), Quelle samt Events bleibt.
+    """
     with _lock:
-        samples = s.scalars(select(IdentitySample).where(IdentitySample.identity_id == src.id)).all()
-        for smp in samples:
-            if smp.image_path:
-                try:
-                    new_rel = f"identities/{dst.id}/{os.path.basename(smp.image_path)}"
-                    dst_abs = media_path(new_rel)
-                    os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
-                    shutil.move(media_path(smp.image_path), dst_abs)
-                    smp.image_path = new_rel
-                except Exception as e:  # noqa: BLE001
-                    log.warning("Sample-Datei nicht verschoben: %s", e)
+        src_samples = s.scalars(select(IdentitySample).where(IdentitySample.identity_id == src.id)).all()
+        if sample_ids is None:
+            moving = list(src_samples)
+            full = True
+            mark_manual = False
+        else:
+            wanted = set(sample_ids)
+            if not wanted:
+                raise MergeError("Keine Bilder ausgewählt")
+            by_id = {smp.id: smp for smp in src_samples}
+            if not wanted.issubset(by_id):
+                raise MergeError("Mindestens ein ausgewähltes Bild gehört nicht zur Quelle")
+            moving = [by_id[sid] for sid in wanted]
+            full = wanted == set(by_id)
+            mark_manual = True
+
+        dst_manual = s.scalar(select(func.count()).select_from(IdentitySample).where(
+            IdentitySample.identity_id == dst.id, IdentitySample.manual.is_(True))) or 0
+        new_manual = sum(1 for smp in moving if mark_manual or smp.manual)
+        if dst_manual + new_manual > MAX_SAMPLES:
+            raise MergeError(f"max. {MAX_SAMPLES} Samples – erst alte löschen")
+
+        for smp in moving:
+            _move_sample_file(smp, dst.id)
             smp.identity_id = dst.id
-        s.execute(update(Event).where(Event.identity_id == src.id).values(identity_id=dst.id))
-        if not dst.name and src.name:
-            dst.name = src.name
-        if src.notes and src.notes not in (dst.notes or ""):
-            dst.notes = ((dst.notes or "") + ("\n" if dst.notes else "") + src.notes).strip()
-        if src.first_seen and (not dst.first_seen or src.first_seen < dst.first_seen):
-            dst.first_seen = src.first_seen
-        if src.last_seen and (not dst.last_seen or src.last_seen > dst.last_seen):
-            dst.last_seen = src.last_seen
+            if mark_manual:
+                smp.manual = True
+
+        if full:
+            s.execute(update(Event).where(Event.identity_id == src.id).values(identity_id=dst.id))
+            if not dst.name and src.name:
+                dst.name = src.name
+            if src.notes and src.notes not in (dst.notes or ""):
+                dst.notes = ((dst.notes or "") + ("\n" if dst.notes else "") + src.notes).strip()
+            if src.first_seen and (not dst.first_seen or src.first_seen < dst.first_seen):
+                dst.first_seen = src.first_seen
+            if src.last_seen and (not dst.last_seen or src.last_seen > dst.last_seen):
+                dst.last_seen = src.last_seen
         s.flush()
         prune_samples(s, dst.id)
-        s.expire(src)
-        s.delete(src)
+        src_id = src.id
+        if full:
+            s.expire(src)
+            s.delete(src)
         s.commit()
-        delete_identity_files(src.id)
+        if full:
+            delete_identity_files(src_id)
         invalidate()
-    return dst
+    return dst, full
+
+
+# ---------------------------------------------------------------- Vorschläge „Ist das vielleicht X?“
+
+
+def _covers(s: Session, ids: list[int]) -> dict[int, str]:
+    out: dict[int, str] = {}
+    if not ids:
+        return out
+    rows = s.execute(
+        select(IdentitySample.identity_id, IdentitySample.image_path)
+        .where(IdentitySample.identity_id.in_(ids), IdentitySample.image_path.is_not(None))
+        .order_by(IdentitySample.identity_id, IdentitySample.quality.desc(), IdentitySample.id.desc())
+    ).all()
+    for iid, path in rows:
+        out.setdefault(iid, path)
+    return out
+
+
+def _suggest_for(s: Session, kind: str, src_ids: list[int], limit: int) -> dict[int, list[dict[str, Any]]]:
+    """Vorschläge je Quell-ID: benannte Identitäten gleicher Art, Score = max. Kosinus-Ähnlichkeit."""
+    result: dict[int, list[dict[str, Any]]] = {sid: [] for sid in src_ids}
+    if kind not in ("face", "pet") or not src_ids:
+        return result
+    settings = settings_store.get()
+    thr = float(settings["face_match_threshold"] if kind == "face" else settings["pet_match_threshold"])
+    named = {i.id: i for i in s.scalars(select(Identity).where(
+        Identity.kind == kind, Identity.name.is_not(None), Identity.name != "")).all()}
+    if not named:
+        return result
+    with _lock:
+        mat, ids = _matrix(s, kind)
+    if not mat.shape[0]:
+        return result
+    tmask = np.isin(ids, np.asarray(list(named), dtype=np.int64))
+    if not tmask.any():
+        return result
+    tmat, tids = mat[tmask], ids[tmask]
+    uniq = np.unique(tids)
+    covers: Optional[dict[int, str]] = None
+    for sid in src_ids:
+        smat = mat[ids == sid]
+        if not smat.shape[0]:
+            continue
+        row_max = (tmat @ smat.T).max(axis=1)          # je Ziel-Sample beste Ähnlichkeit
+        cand = []
+        for tid in uniq:
+            if int(tid) == sid:
+                continue
+            cand.append((float(row_max[tids == tid].max()), int(tid)))
+        cand.sort(reverse=True)
+        cand = cand[:limit]
+        if cand and covers is None:
+            covers = _covers(s, [int(t) for t in uniq])
+        for score, tid in cand:
+            t = named[tid]
+            result[sid].append({
+                "identity_id": tid, "display_name": t.display_name, "name": t.name,
+                "cover_url": media_url((covers or {}).get(tid)), "score": round(score, 4),
+                "likely": score >= thr - 0.10,
+            })
+    return result
+
+
+def suggestions(s: Session, ident: Identity, limit: int = 3) -> list[dict[str, Any]]:
+    return _suggest_for(s, ident.kind, [ident.id], limit).get(ident.id, [])
+
+
+def best_suggestions(s: Session, items: list[Identity]) -> dict[int, Optional[dict[str, Any]]]:
+    """Für Listen: bester Vorschlag mit likely=true je unbenannter face/pet-Identität, sonst None."""
+    out: dict[int, Optional[dict[str, Any]]] = {i.id: None for i in items}
+    for kind in ("face", "pet"):
+        src = [i.id for i in items if i.kind == kind and not i.name]
+        for sid, sugg in _suggest_for(s, kind, src, 1).items():
+            if sugg and sugg[0]["likely"]:
+                out[sid] = sugg[0]
+    return out
+
+
+# ---------------------------------------------------------------- Aufräumen
+
+
+def cleanup_orphans(s: Session, days: int) -> list[tuple[int, str]]:
+    """Löscht unbenannte, nicht gesperrte Identitäten ohne Events, die seit `days` Tagen nicht gesehen wurden.
+
+    Rückgabe: [(id, kind)] der gelöschten Identitäten.
+    """
+    cutoff = utcnow() - timedelta(days=days)
+    has_events = select(Event.id).where(Event.identity_id == Identity.id).exists()
+    with _lock:
+        rows = s.scalars(select(Identity).where(
+            (Identity.name.is_(None)) | (Identity.name == ""),
+            Identity.learning_locked.is_(False),
+            Identity.last_seen < cutoff,
+            ~has_events,
+        )).all()
+        gone = [(i.id, i.kind) for i in rows]
+        for i in rows:
+            s.delete(i)
+        if gone:
+            s.commit()
+            for iid, _ in gone:
+                delete_identity_files(iid)
+            invalidate()
+    for iid, kind in gone:
+        hub.broadcast({"type": "identity", "identity": {"id": iid, "kind": kind, "deleted": True}})
+    return gone

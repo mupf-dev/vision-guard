@@ -8,11 +8,13 @@ import { LivePage } from "./pages/Live";
 import { EventsPage } from "./pages/Events";
 import { IdentitiesPage } from "./pages/Identities";
 import { StatsPage } from "./pages/Stats";
+import { ObjectsPage } from "./pages/Objects";
 import { AdminLayout } from "./pages/admin/AdminLayout";
 import { CamerasPage } from "./pages/admin/Cameras";
 import { RulesPage } from "./pages/admin/Rules";
 import { SettingsPage } from "./pages/admin/Settings";
 import { SystemPage } from "./pages/admin/System";
+import { TokensPage } from "./pages/admin/Tokens";
 import { Loading } from "./components/ui";
 import { Toasts } from "./components/Toasts";
 
@@ -45,6 +47,7 @@ export function App() {
           <Route path="ereignisse" element={<EventsPage />} />
           <Route path="identitaeten" element={<IdentitiesPage />} />
           <Route path="identitaeten/:identityId" element={<IdentitiesPage />} />
+          <Route path="gegenstaende" element={<ObjectsPage />} />
           <Route path="statistik" element={<StatsPage />} />
           <Route path="admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="kameras" replace />} />
@@ -52,6 +55,7 @@ export function App() {
             <Route path="regeln" element={<RulesPage />} />
             <Route path="einstellungen" element={<SettingsPage />} />
             <Route path="system" element={<SystemPage />} />
+            <Route path="zugaenge" element={<TokensPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

@@ -76,6 +76,21 @@ PLATE_INTERVAL_S = _float("VG_PLATE_INTERVAL_S", 0.4)
 PET_MODEL = _env("VG_PET_MODEL", "vit_small_patch14_dinov2.lvd142m")
 PET_DELAY_S = _float("VG_PET_DELAY_S", 1.5)             # identify pets after this track age (or at end)
 
+# --- inventory (Gegenstände, langsame Pipeline auf ausgewählten Kameras) ---------------------
+GO2RTC_URL = _env("VG_GO2RTC_URL", "http://go2rtc:1984").rstrip("/")   # Fallback-Quelle für Keyframes
+INVENTORY_MODEL = _env("VG_INVENTORY_MODEL", "yoloe-11m-seg.pt")      # YOLOE (Text-Prompts) oder COCO-YOLO
+INVENTORY_IMGSZ = _int("VG_INVENTORY_IMGSZ", 1280)                     # Gesamtbild
+INVENTORY_TILES = _env("VG_INVENTORY_TILES", "2x2")                    # Kacheln "SxZ" (Spalten x Zeilen), "0" = aus
+INVENTORY_TILE_IMGSZ = _int("VG_INVENTORY_TILE_IMGSZ", 960)            # Auflösung je Kachel
+INVENTORY_OVERLAP = _float("VG_INVENTORY_OVERLAP", 0.15)               # Überlappung der Kacheln
+INVENTORY_MAX_BUSY = _float("VG_INVENTORY_MAX_BUSY", 0.25)             # max. GPU-Zeitanteil der Inventar-Pipeline
+INVENTORY_HALF = _bool("VG_INVENTORY_HALF", True)
+INVENTORY_MIN_CONF = _float("VG_INVENTORY_MIN_CONF", 0.05)             # Untergrenze für predict(conf=…)
+INVENTORY_SOURCE = _env("VG_INVENTORY_SOURCE", "auto").lower()        # auto | buffer | go2rtc | rtsp
+INVENTORY_CROP_MIN_S = _float("VG_INVENTORY_CROP_MIN_S", 60.0)         # neuer Crop je Gegenstand höchstens alle n s
+INVENTORY_UNLOAD_S = _float("VG_INVENTORY_UNLOAD_S", 600.0)            # Modell entladen, wenn so lange keine Kamera aktiv
+INVENTORY_PERSON_HOLD_S = _float("VG_INVENTORY_PERSON_HOLD_S", 3.0)    # Personen so lange als Verdeckung werten
+
 # --- misc -----------------------------------------------------------------
 STATUS_INTERVAL_S = _float("VG_STATUS_INTERVAL_S", 5.0)
 CONFIG_REFRESH_S = _float("VG_CONFIG_REFRESH_S", 60.0)

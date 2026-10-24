@@ -56,6 +56,8 @@ services:
       VG_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       VG_SECRET_KEY: ${SECRET_KEY:-change-me-please}
       VG_DEMO_CAMERAS: ${DEMO_CAMERAS:-1}
+      # 1 = /media ohne Anmeldung (altes Verhalten); Standard 0 = Cookie | API-Key | signierter Link
+      VG_MEDIA_PUBLIC: ${MEDIA_PUBLIC:-0}
     volumes:
       - media:/data/media
     healthcheck:
@@ -98,6 +100,18 @@ services:
       - go2rtc
     ports:
       - "${HTTP_PORT:-8080}:80"
+
+  # MCP-Server für KI-Agenten (Streamable HTTP, über nginx unter /mcp; Zugriff nur mit API-Key)
+  mcp:
+    build: ./mcp
+    restart: unless-stopped
+    depends_on:
+      backend: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      VG_BACKEND_URL: http://backend:8000
+      VG_MCP_PORT: "8100"
+      VG_MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
 
   # Simulierte Kameras zum Testen (RTSP: rtsp://testcam:8554/cam1, cam2)
   testcam:

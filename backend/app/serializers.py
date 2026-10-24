@@ -24,6 +24,12 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "plate_recognition": c.plate_recognition,
         "pet_recognition": c.pet_recognition,
         "zones": list(c.zones or []),
+        "room": c.room,
+        "inventory_enabled": bool(c.inventory_enabled),
+        "inventory_interval_s": c.inventory_interval_s if c.inventory_interval_s is not None else 3,
+        "inventory_labels": list(c.inventory_labels or []),
+        "inventory_min_score": c.inventory_min_score if c.inventory_min_score is not None else 0.35,
+        "inventory_tiling": True if c.inventory_tiling is None else bool(c.inventory_tiling),
         "status": state.status_for(c.id, c.enabled),
     }
 
@@ -74,6 +80,7 @@ def identity_json(s: Session, i: Identity) -> dict[str, Any]:
         "first_seen": iso(i.first_seen),
         "last_seen": iso(i.last_seen),
         "event_count": event_count,
+        "learning_locked": bool(i.learning_locked),
     }
 
 
@@ -102,6 +109,7 @@ def identities_json(s: Session, items: list[Identity]) -> list[dict[str, Any]]:
             "plate_text": i.plate_text, "notes": i.notes or "", "sample_count": sc.get(i.id, 0),
             "cover_url": media_url(covers.get(i.id)), "first_seen": iso(i.first_seen),
             "last_seen": iso(i.last_seen), "event_count": ec.get(i.id, 0),
+            "learning_locked": bool(i.learning_locked),
         })
     return out
 

@@ -6,6 +6,8 @@ import type { Camera, CameraInput, CameraTestResult } from "../../lib/types";
 import { ALL_LABELS, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, Img, LabelIcon, Loading, Range, Switch } from "../../components/ui";
 import { ZoneEditor } from "../../components/ZoneEditor";
+import { CameraInventoryTab } from "./CameraInventory";
+import { Package } from "lucide-react";
 import { StatusBadge } from "../Live";
 import { toast, useLive } from "../../lib/store";
 import { isMock, mockSnapshot } from "../../lib/mock";
@@ -13,6 +15,8 @@ import { isMock, mockSnapshot } from "../../lib/mock";
 const EMPTY: CameraInput = {
   name: "", url: "", detect_url: null, enabled: true, detect_fps: 5, labels: ["person", "car", "dog", "cat"], min_score: 0.5,
   face_recognition: true, plate_recognition: true, pet_recognition: true, zones: [],
+  room: null, inventory_enabled: false, inventory_interval_s: 3, inventory_labels: [], inventory_min_score: 0.35,
+  inventory_tiling: false,
 };
 
 function strip(c: Camera): CameraInput {
@@ -24,7 +28,7 @@ function strip(c: Camera): CameraInput {
 function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState<CameraInput>(cam ? strip(cam) : EMPTY);
-  const [tab, setTab] = useState<"general" | "zones">("general");
+  const [tab, setTab] = useState<"general" | "zones" | "inventory">("general");
   const [test, setTest] = useState<{ url: string; res?: CameraTestResult; busy?: boolean; err?: string } | null>(null);
   const set = <K extends keyof CameraInput>(k: K, v: CameraInput[K]) => setF((p) => ({ ...p, [k]: v }));
   const valid = f.name.trim() && f.url.trim();
@@ -59,6 +63,7 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
       <div className="tabs" style={{ marginTop: -8 }}>
         <button className={tab === "general" ? "on" : ""} onClick={() => setTab("general")}><Cctv size={15} />Allgemein</button>
         <button className={tab === "zones" ? "on" : ""} onClick={() => setTab("zones")}><MapPin size={15} />Zonen<span className="count">{f.zones.length}</span></button>
+        <button className={tab === "inventory" ? "on" : ""} onClick={() => setTab("inventory")}><Package size={15} />Gegenstände{f.inventory_enabled && <span className="count">an</span>}</button>
       </div>
       {tab === "general" ? (
         <div className="form-grid">
@@ -92,6 +97,8 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
             </div>
           </div>
         </div>
+      ) : tab === "inventory" ? (
+        <CameraInventoryTab f={f} set={set} />
       ) : (
         <ZoneEditor cameraId={cam?.id ?? null} zones={f.zones} onChange={(z) => set("zones", z)} />
       )}
@@ -139,6 +146,8 @@ export function CamerasPage() {
                   {c.face_recognition && <span className="badge info">Gesichter</span>}
                   {c.plate_recognition && <span className="badge warn">Kennzeichen</span>}
                   {c.pet_recognition && <span className="badge ok" style={{ animation: "none" }}>Tiere</span>}
+                  {c.inventory_enabled && <span className="badge accent" title={`alle ${c.inventory_interval_s} s · ${c.inventory_labels.length ? `${c.inventory_labels.length} Gegenstände` : "gesamtes Vokabular"}`}><Package size={11} />Gegenstände</span>}
+                  {c.room && <span className="badge outline">{c.room}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>{c.labels.map(labelName).join(", ")}</span>
                 </div>
               </div>

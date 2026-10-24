@@ -1,6 +1,10 @@
 import type {
   Camera, CameraInput, CameraTestResult, Identity, IdentityKind, Paged, Rule, RuleInput,
-  Sample, Settings, Stats, SystemInfo, VGEvent,
+  Sample, Settings, Stats, SystemInfo, VGEvent, IdentitySuggestion, MergeInput,
+} from "./types";
+import type { ApiToken, ApiTokenCreated, ApiTokenInput, AuthMe, MediaSignResult } from "./types";
+import type {
+  InventoryHistoryEntry, InventoryItem, InventoryLabel, InventorySearchResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -73,10 +77,21 @@ export interface EventQuery extends Query {
   offset?: number;
 }
 
+export interface InventoryQuery extends Query {
+  camera_id?: number | string;
+  room?: string;
+  label?: string;
+  state?: string;
+  visible?: boolean;
+  signed?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export const api = {
   login: (username: string, password: string) => post<{ username: string }>("/auth/login", { username, password }),
   logout: () => post<void>("/auth/logout"),
-  me: () => get<{ username: string }>("/auth/me"),
+  me: () => get<AuthMe>("/auth/me"),
 
   cameras: () => get<Camera[]>("/cameras"),
   camera: (id: number) => get<Camera>(`/cameras/${id}`),
@@ -95,11 +110,14 @@ export const api = {
   event: (id: string) => get<VGEvent>(`/events/${id}`),
   deleteEvent: (id: string) => del(`/events/${id}`),
 
-  identities: (q: { kind?: IdentityKind; named?: boolean }) => get<Identity[]>("/identities", q),
+  identities: (q: { kind?: IdentityKind; named?: boolean; locked?: boolean; with_suggestion?: 1 }) => get<Identity[]>("/identities", q),
   identity: (id: number) => get<Identity>(`/identities/${id}`),
-  updateIdentity: (id: number, b: { name?: string | null; notes?: string }) => patch<Identity>(`/identities/${id}`, b),
+  updateIdentity: (id: number, b: { name?: string | null; notes?: string; learning_locked?: boolean }) => patch<Identity>(`/identities/${id}`, b),
   deleteIdentity: (id: number) => del(`/identities/${id}`),
-  mergeIdentity: (id: number, into_id: number) => post<Identity>(`/identities/${id}/merge`, { into_id }),
+  /** sampleIds null/fehlend = klassischer Merge; echte Teilmenge = nur diese Bilder, Quelle samt Events bleibt */
+  mergeIdentity: (id: number, into_id: number, sampleIds?: number[] | null) =>
+    post<Identity>(`/identities/${id}/merge`, { into_id, sample_ids: sampleIds ?? null } satisfies MergeInput),
+  identitySuggestions: (id: number, limit = 3) => get<IdentitySuggestion[]>(`/identities/${id}/suggestions`, { limit }),
   samples: (id: number) => get<Sample[]>(`/identities/${id}/samples`),
   deleteSample: (id: number, sid: number) => del(`/identities/${id}/samples/${sid}`),
   identityEvents: (id: number, q: EventQuery = {}) => get<Paged<VGEvent>>(`/identities/${id}/events`, q),
@@ -108,6 +126,20 @@ export const api = {
   system: () => get<SystemInfo>("/system"),
   settings: () => get<Settings>("/settings"),
   saveSettings: (s: Settings) => put<Settings>("/settings", s),
+
+  // API-Zugänge (nur mit Browser-Anmeldung) und signierte Medien-Links
+  tokens: () => get<ApiToken[]>("/tokens"),
+  createToken: (b: ApiTokenInput) => post<ApiTokenCreated>("/tokens", b),
+  revokeToken: (id: number) => del(`/tokens/${id}`),
+  signMedia: (paths: string[], ttl_s = 3600) => post<MediaSignResult>("/media/sign", { paths, ttl_s }),
+
+  // Gegenstände (Inventar)
+  inventory: (q: InventoryQuery = {}) => get<Paged<InventoryItem>>("/inventory", q),
+  inventoryItem: (id: number) => get<InventoryItem>(`/inventory/${id}`),
+  deleteInventoryItem: (id: number) => del(`/inventory/${id}`),
+  inventorySearch: (q: string, limit = 20) => get<InventorySearchResult>("/inventory/search", { q, limit }),
+  inventoryLabels: () => get<InventoryLabel[]>("/inventory/labels"),
+  inventoryHistory: (id: number, limit = 50) => get<InventoryHistoryEntry[]>(`/inventory/${id}/history`, { limit }),
 };
 
 /** Antwort von /identities/{id}/events darf laut Vertrag "wie /events" sein – tolerant auch für Arrays. */

@@ -7,7 +7,7 @@ import { ALL_LABELS, DAYS, KIND_NAME, labelColor, labelName } from "../../lib/la
 import { ChipSelect, ConfirmDialog, Dialog, Empty, LabelIcon, Loading, Range, SearchSelect, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
 
-const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}"];
+const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}"];
 
 const EMPTY: RuleInput = {
   name: "", enabled: true, camera_ids: [], zone_ids: [], labels: ["person"], min_score: 0.6,

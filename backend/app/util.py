@@ -47,7 +47,7 @@ def safe_remove(rel: Optional[str]) -> None:
 
 
 def ensure_media_dirs() -> None:
-    for sub in ("snapshots", "crops", "clips", "identities"):
+    for sub in ("snapshots", "crops", "clips", "identities", "inventory"):
         os.makedirs(os.path.join(config.media_dir, sub), exist_ok=True)
 
 

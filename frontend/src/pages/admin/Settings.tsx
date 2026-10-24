@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Fingerprint, Radio, RotateCcw, Save } from "lucide-react";
+import { Archive, Fingerprint, Link2, Radio, RotateCcw, Save } from "lucide-react";
 import { api } from "../../lib/api";
 import type { Settings } from "../../lib/types";
 import { Loading, Range, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
+import { InventorySettingsCard } from "./InventorySettings";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -23,7 +24,7 @@ export function SettingsPage() {
   return (
     <>
       <div className="page-header">
-        <div><h1>Einstellungen</h1><div className="sub">Aufbewahrung, Wiedererkennung und MQTT</div></div>
+        <div><h1>Einstellungen</h1><div className="sub">Aufbewahrung, Wiedererkennung, MQTT und externer Zugriff</div></div>
         <div className="row">
           {dirty && <button className="btn btn-ghost" onClick={() => setF(q.data!)}><RotateCcw size={16} />Verwerfen</button>}
           <button className="btn btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
@@ -57,6 +58,7 @@ export function SettingsPage() {
             </div>
           </div>
         </div>
+        <InventorySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <div className="card">
           <div className="card-head"><Radio size={18} color="var(--accent)" /><h3>MQTT</h3></div>
           <div className="card-body form-grid">
@@ -65,6 +67,21 @@ export function SettingsPage() {
             </div>
             <div className="field"><label>Alle Ereignisse veröffentlichen</label>
               <div style={{ height: 38, display: "flex", alignItems: "center" }}><Switch checked={f.publish_all_events} onChange={(v) => set("publish_all_events", v)} label={<code>{f.mqtt_prefix}/events</code>} /></div>
+            </div>
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-head"><Link2 size={18} color="var(--accent)" /><h3>Externer Zugriff &amp; Medien-Links</h3></div>
+          <div className="card-body form-grid">
+            <div className="field"><label>Öffentliche Adresse</label>
+              <input className="input mono" value={f.public_base_url ?? ""} placeholder="https://vg.example.org"
+                onChange={(e) => set("public_base_url", e.target.value)} />
+              <span className="hint">Ohne „/“ am Ende. Wenn gesetzt, enthalten Webhooks, MQTT und MCP absolute Links auf Bilder und Clips.</span>
+            </div>
+            <div className="field"><label>Gültigkeit signierter Links</label>
+              <div className="row"><input type="number" min={1} max={720} className="input" value={f.media_link_ttl_h}
+                onChange={(e) => set("media_link_ttl_h", Number(e.target.value))} /><span className="muted">Stunden</span></div>
+              <span className="hint">Bilder/Clips in Webhooks, MQTT und API-Antworten mit <code>signed=1</code> sind nur so lange ohne Anmeldung abrufbar.</span>
             </div>
           </div>
         </div>

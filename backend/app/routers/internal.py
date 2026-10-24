@@ -1,4 +1,6 @@
 """Interne Endpunkte für den Worker (von nginx gesperrt)."""
+import logging
+
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
@@ -10,6 +12,27 @@ from ..models import Camera
 from ..schemas import IdentifyIn, IdentifyOut
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
+log = logging.getLogger("vg.internal")
+
+
+def resolve_inventory_vocab(labels: list[str] | None, camera_id: int | None = None) -> list[dict]:
+    """Vokabular einer Kamera: inventory_labels gefiltert (Reihenfolge der Settings), [] = alles.
+
+    Sind *alle* gewählten Labels inzwischen aus dem Vokabular entfernt, gilt wie bei [] das ganze Vokabular
+    (sonst würde der Worker still nichts erkennen, während die Oberfläche die Kamera als aktiv zeigt)."""
+    vocab = settings_store.get().get("inventory_vocabulary") or []
+    wanted = set(labels or [])
+
+    def entry(e: dict) -> dict:
+        return {"label": e["label"], "name_de": e["name_de"], "prompts": list(e.get("prompts") or []),
+                "min_score": e.get("min_score")}
+
+    out = [entry(e) for e in vocab if not wanted or e["label"] in wanted]
+    if wanted and not out:
+        log.warning("Kamera %s: keines der gewählten Inventar-Labels (%s) steht noch im Vokabular – "
+                    "verwende das ganze Vokabular", camera_id, ", ".join(sorted(wanted)))
+        out = [entry(e) for e in vocab]
+    return out
 
 
 @router.get("/cameras")
@@ -24,6 +47,12 @@ def internal_cameras(db: Session = Depends(get_db)):
             "labels": list(c.labels or []), "min_score": c.min_score,
             "face_recognition": c.face_recognition, "plate_recognition": c.plate_recognition,
             "pet_recognition": c.pet_recognition, "zones": list(c.zones or []),
+            "room": c.room,
+            "inventory_enabled": bool(c.inventory_enabled),
+            "inventory_interval_s": c.inventory_interval_s if c.inventory_interval_s is not None else 3,
+            "inventory_min_score": c.inventory_min_score if c.inventory_min_score is not None else 0.35,
+            "inventory_tiling": True if c.inventory_tiling is None else bool(c.inventory_tiling),
+            "inventory_vocab": resolve_inventory_vocab(c.inventory_labels, c.id),
         })
     return out
 

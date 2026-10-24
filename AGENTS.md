@@ -30,7 +30,7 @@ arbeiten. Projektüberblick: [README.md](README.md). Verbindliche Schnittstellen
 ## Stack starten und testen
 
 ```bash
-cp .env.example .env && ./testcam/download-videos.sh
+cp .env.example .env && ./testcam/download-videos.sh   # SECRET_KEY setzen (openssl rand -hex 32), sonst startet das Backend nicht
 docker compose up -d --build                     # alles
 docker compose up -d --build --no-deps backend   # einzelnen Dienst neu bauen
 docker compose logs -f worker
@@ -65,7 +65,8 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Thema | Datei(en) |
 |---|---|
 | Compose, Volumes, GPU | `docker-compose.yml`, `.env.example` |
-| Auth (Cookie/JWT) | `backend/app/auth.py`, `backend/app/routers/auth.py` |
+| Auth (Cookie/JWT, API-Keys) | `backend/app/auth.py`, `backend/app/routers/auth.py`, `backend/app/routers/tokens.py` |
+| Medien-Auslieferung, signierte Links | `backend/app/routers/media.py`, `backend/app/media_sign.py` |
 | YouTube-Quellen (yt-dlp) | `backend/app/youtube.py`, Template `youtube` in `go2rtc/go2rtc.yaml` |
 | Kameras, go2rtc-Sync | `backend/app/routers/cameras.py`, `backend/app/go2rtc.py`, `backend/app/sync.py` |
 | Track → Event, Aktionen | `backend/app/events.py` |
@@ -83,6 +84,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Zonen-Editor | `frontend/src/components/ZoneEditor.tsx` |
 | Admin-Seiten | `frontend/src/pages/admin/` |
 | nginx-Routen | `frontend/nginx.conf` |
+| MCP-Server (Tools für KI-Agenten) | `mcp/server.py`, Selbsttest `mcp/selftest.py` |
 
 Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](worker/README.md),
 [frontend/README.md](frontend/README.md).
@@ -94,7 +96,12 @@ Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](wo
 - Kennzeichen- und Tier-Identifikation sind implementiert, aber noch nicht mit echten Szenen validiert.
 - Clips werden auf ganze 2-s-Segmente gerundet (etwas länger als eingestellt).
 - `buffalo_l` (InsightFace) nur nicht-kommerziell; YOLO11 unter AGPL-3.0.
-- Medien unter `/media/*` sind ohne Login abrufbar (zufällige UUID-Pfade) – vor Produktivbetrieb absichern.
+- Medien unter `/media/*` liefert das Backend nur mit Cookie, API-Key (Bearer) oder signiertem Link (`?exp=&sig=`)
+  aus (`backend/app/routers/media.py`, `media_sign.py`). Signierte Links sind bis zum Ablauf für jeden nutzbar, der
+  sie kennt (TTL `media_link_ttl_h`). `VG_MEDIA_PUBLIC=1` schaltet auf das alte, ungeschützte Verhalten zurück.
+- `VG_SECRET_KEY` ist zugleich Pepper der API-Key-Hashes und Schlüssel der Medien-Signaturen: ein Wechsel macht
+  alle Sitzungen, API-Keys und signierten Links ungültig.
+- API-Keys (Admin → „API-Zugänge“) öffnen kein go2rtc-Live-Video und können keine Keys verwalten.
 
 ## Commits
 

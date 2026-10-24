@@ -10,6 +10,16 @@ function wsUrl(): string {
   return `${proto}//${location.host}/api/ws`;
 }
 
+// Gegenstände: Listen/Suche gedrosselt neu laden (mehrere WS-Nachrichten pro Durchlauf möglich)
+let invTimer: number | undefined;
+function refreshInventory(qc: QueryClient) {
+  if (invTimer !== undefined) return;
+  invTimer = window.setTimeout(() => {
+    invTimer = undefined;
+    qc.invalidateQueries({ queryKey: ["inventory"] });
+  }, 800);
+}
+
 function handle(msg: WsMessage, qc: QueryClient) {
   const s = useLive.getState();
   switch (msg.type) {
@@ -38,6 +48,10 @@ function handle(msg: WsMessage, qc: QueryClient) {
       }
       break;
     }
+    case "inventory":
+      s.applyInventory(msg);
+      refreshInventory(qc);
+      break;
     case "identity":
       qc.invalidateQueries({ queryKey: ["identities"] });
       qc.setQueryData(["identity", msg.identity.id], msg.identity);
@@ -66,6 +80,7 @@ export function useLiveSocket(enabled: boolean) {
         // nach Reconnect evtl. verpasste Daten nachladen
         qc.invalidateQueries({ queryKey: ["events"] });
         qc.invalidateQueries({ queryKey: ["cameras"] });
+        qc.invalidateQueries({ queryKey: ["inventory"] });
       };
       ws.onmessage = (ev) => {
         try {

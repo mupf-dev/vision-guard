@@ -13,7 +13,7 @@ from typing import Any, Optional
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from . import go2rtc, registry, rules, settings_store, state
+from . import go2rtc, media_sign, registry, rules, settings_store, state
 from .db import SessionLocal
 from .models import Event, Identity, utcnow
 from .rules import TrackState
@@ -59,7 +59,8 @@ class Processor:
         hub.broadcast(msg)
         st = settings_store.get()
         if st.get("publish_all_events"):
-            self._pub(f"{st['mqtt_prefix']}/events", {"action": action, "event": data}, qos=1)
+            # extern: Medien-Links signiert (TTL media_link_ttl_h)
+            self._pub(f"{st['mqtt_prefix']}/events", {"action": action, "event": media_sign.sign_urls(data)}, qos=1)
         return data
 
     @staticmethod
@@ -321,13 +322,23 @@ class Processor:
         cam = registry.get(tr.camera_id) or {"name": ev.camera_name, "zones": {}}
         zone_names = [cam["zones"].get(z, z) for z in zones]
         ident = event_data.get("identity") or {}
+        date = local_date_str()
+        ttl = media_sign.default_ttl_s()
+        act_types = {a.get("type") for a in rule.get("actions") or []}
+        # Snapshot/Clip dieser Regel entstehen erst nach der Auslösung – Pfad ist aber schon bekannt
+        snap_path = ev.snapshot_path or (f"snapshots/{date}/{ev.id}_{rule['id']}.jpg"
+                                         if "snapshot" in act_types else None)
+        clip_path = ev.clip_path or (f"clips/{date}/{ev.id}.mp4" if "clip" in act_types else None)
         ctx = {
             "camera": cam["name"], "camera_id": tr.camera_id, "label": tr.label,
             "score": f"{max(tr.best_score, tr.score):.2f}", "identity": ident.get("display_name") or "",
             "zone": ", ".join(zone_names), "event_id": ev.id, "rule": rule["name"],
             "time": datetime.now(timezone.utc).astimezone(rules.config.tz).isoformat(timespec="seconds"),
+            "thumb_url": media_sign.sign_media_path(ev.thumb_path, ttl) if ev.thumb_path else "",
+            "snapshot_url": media_sign.sign_media_path(snap_path, ttl) if snap_path else "",
+            "clip_url": media_sign.sign_media_path(clip_path, ttl) if clip_path else "",
         }
-        date = local_date_str()
+        event_data = media_sign.sign_urls(event_data, ttl)   # Webhook-/MQTT-Payloads gehen nach außen
         for action in rule.get("actions") or []:
             try:
                 self._run_action(action, rule, tr, ev, event_data, ctx, date)

@@ -34,6 +34,15 @@ def run_once() -> dict:
             s.execute(delete(Event).where(Event.id.in_([r[0] for r in rows])))
             s.commit()
         removed_events = len(rows)
+        # Unbenannte, ungesperrte Identitäten ohne Events (z. B. nach Event-Aufräumen) entfernen
+        try:
+            from .identity import cleanup_orphans  # zyklischen Import vermeiden
+            gone = cleanup_orphans(s, ev_days)
+            if gone:
+                log.info("Aufräumen: %d unbenannte Identitäten ohne Events entfernt", len(gone))
+        except Exception as e:  # noqa: BLE001
+            s.rollback()
+            log.warning("Aufräumen der Identitäten fehlgeschlagen: %s", e)
 
     removed_files = 0
     limit = time.time() - media_days * 86400
@@ -59,7 +68,64 @@ def run_once() -> dict:
         _clear_missing_media(now - timedelta(days=media_days - 1))
     if removed_events or removed_files:
         log.info("Aufräumen: %d Events, %d Dateien entfernt", removed_events, removed_files)
-    return {"events": removed_events, "files": removed_files}
+    try:
+        inv = _inventory_retention(now, int(st.get("retention_days_inventory") or 30))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Aufräumen der Gegenstände fehlgeschlagen: %s", e)
+        inv = {}
+    return {"events": removed_events, "files": removed_files, "inventory": inv}
+
+
+def _inventory_retention(now: datetime, days: int) -> dict:
+    """Gegenstände: Historie und nicht sichtbare Gegenstände älter als `retention_days_inventory` löschen,
+    Dateien unter inventory/ ebenso – außer solchen, auf die ein Gegenstand oder die Historie noch zeigt."""
+    from .models import InventoryHistory, InventoryItem
+
+    from .inventory import memory
+
+    cutoff = now - timedelta(days=days)
+    # unter memory.lock: der MQTT-Thread (InventoryMemory._handle) ändert sonst evtl. gerade dieselben Zeilen
+    with memory.lock, SessionLocal() as s:
+        h = s.execute(delete(InventoryHistory).where(InventoryHistory.ts < cutoff)).rowcount or 0
+        old_items = list(s.scalars(select(InventoryItem.id).where(InventoryItem.state != "present",
+                                                                  InventoryItem.last_seen < cutoff)).all())
+        if old_items:
+            s.execute(delete(InventoryHistory).where(InventoryHistory.item_id.in_(old_items)))
+            s.execute(delete(InventoryItem).where(InventoryItem.id.in_(old_items)))
+        s.commit()
+    with SessionLocal() as s:
+        keep: set[str] = set()
+        for crop, snap in s.execute(select(InventoryItem.crop_path, InventoryItem.snapshot_path)).all():
+            keep.update(p for p in (crop, snap) if p)
+        keep.update(p for p in s.scalars(select(InventoryHistory.crop_path).distinct()).all() if p)
+    keep_abs = {os.path.realpath(os.path.join(config.media_dir, p.lstrip("/"))) for p in keep}
+    root = os.path.join(config.media_dir, "inventory")
+    limit = time.time() - days * 86400
+    files = 0
+    if os.path.isdir(root):
+        for dirpath, _dirnames, filenames in os.walk(root, topdown=False):
+            for fn in filenames:
+                fp = os.path.join(dirpath, fn)
+                try:
+                    if os.path.getmtime(fp) < limit and os.path.realpath(fp) not in keep_abs:
+                        os.remove(fp)
+                        files += 1
+                except OSError:
+                    pass
+            if dirpath != root:
+                try:
+                    os.rmdir(dirpath)  # nur wenn leer
+                except OSError:
+                    pass
+    if h or old_items or files:
+        log.info("Aufräumen Gegenstände: %d Verlaufseinträge, %d Gegenstände, %d Dateien entfernt",
+                 h, len(old_items), files)
+    if old_items:
+        with memory.lock:
+            for i in old_items:
+                memory.last_history.pop(i, None)
+                memory.last_ws.pop(i, None)
+    return {"history": h, "items": len(old_items), "files": files}
 
 
 def _clear_missing_media(before: datetime) -> None:

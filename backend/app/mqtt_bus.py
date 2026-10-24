@@ -132,6 +132,9 @@ class Bus:
                 self._enqueue(("track", cam_id, msg))
             elif kind == "cmd_result":
                 self._enqueue(("cmd_result", None, msg))
+            elif kind == "inventory":
+                cam_id = int(parts[3]) if len(parts) > 3 else int(msg.get("camera_id"))
+                self._enqueue(("inventory", cam_id, msg))
         except Exception as e:  # noqa: BLE001
             log.warning("MQTT-Nachricht auf %s nicht verarbeitbar: %s", topic, e)
 
@@ -149,6 +152,9 @@ class Bus:
                     processor.handle_track(cam_id, msg)
                 elif kind == "cmd_result":
                     processor.handle_cmd_result(msg)
+                elif kind == "inventory":
+                    from .inventory import memory as inventory_memory
+                    inventory_memory.handle(cam_id, msg)
                 elif kind == "reset_counts":
                     processor.reset_counts()
                 elif kind == "call":

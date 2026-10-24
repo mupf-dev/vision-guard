@@ -15,7 +15,8 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 | `pipeline.py` | zentrale Inferenzschleife (sammelt neueste Frames aller Kameras, Round-Robin, max. 16 pro Batch, verwirft statt zu queuen), Nachverarbeitung je Kamera in eigenem Thread, Ablauf von Tracks, Kommandos `snapshot`/`clip` |
 | `tracking.py` | `supervision.ByteTrack` je Kamera, Lebenszyklus laut Contract, Zonen (Fußpunkt = bbox unten-mitte, normiert), bester Crop (score·Fläche) → `crops/YYYY-MM-DD/<uuid>.jpg` |
 | `identify.py` | lazy geladene Modelle in eigenen Threads mit begrenzten Queues (Jobs werden verworfen, wenn voll); Fehler eines Modells stoppen die Detektion nicht |
-| `selftest.py` | Standalone-Test ohne Backend/MQTT |
+| `inventory.py` | Inventar (Gegenstände) auf ausgewählten Kameras: Keyframe in voller Auflösung, YOLOE mit Text-Prompts, Kachelung, Stabilisierung, `vg/internal/inventory/{id}` (siehe unten) |
+| `selftest.py` | Standalone-Test ohne Backend/MQTT (`--inventory` für die Gegenstands-Pipeline) |
 
 ### Identifikation
 
@@ -28,6 +29,47 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 * **Tier** (`pet_recognition`, dog/cat/horse/bird): DINOv2 ViT-S/14 (timm `vit_small_patch14_dinov2.lvd142m`, 224 px, fp16), L2-normiertes 384-d Embedding des besten Crops, einmal pro Track (nach 1,5 s).
 
 Die Identität aus der Antwort (`{id, display_name, name, kind}`) fließt in alle folgenden `detections`/`track`-Nachrichten (`update` sofort).
+
+## Inventar (Gegenstände)
+
+Langsame zweite Pipeline nur für Kameras mit `inventory_enabled` (Schnittstelle: CONTRACT.md, Nachtrag G).
+Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`), sie gehen nur an die Engine.
+
+* **Bildquelle** (`KeyframeGrabber`): erstes Bild des letzten *fertigen* Ringpuffer-Segments des Hauptstreams
+  (`ffmpeg -frames:v 1`, volle Auflösung, keine weitere RTSP-Verbindung, Bild 2–4 s alt). Ist der Ringpuffer aus oder
+  hängt, Fallback auf go2rtc `/api/frame.jpeg?src=cam_N`, danach ein einmaliges `ffmpeg -skip_frame nokey` auf `main_rtsp`.
+  Dasselbe Segment wird nie zweimal analysiert.
+* **Modell** (`InventoryModel`): lazy erst, wenn eine Kamera Inventar aktiviert; nach 10 min ohne Inventar-Kamera
+  wieder entladen. Standard `yoloe-11m-seg.pt` mit Text-Prompts: das Vokabular aller Inventar-Kameras (Prompts aus
+  `inventory_vocab`) wird per `set_classes` gesetzt; die Text-Embeddings werden unter `/models/yoloe/pe_*.pt` gecacht,
+  der Textencoder (MobileCLIP `mobileclip_blt.ts`, liegt in `/models/yoloe`) wird nur beim ersten Mal bzw. bei
+  geändertem Vokabular gebraucht und läuft dann immer auf der **CPU** (kommt nie in den VRAM). Downloads gehen per
+  absolutem Pfad nach `/models/yoloe` (kein `chdir`). Nach dem Laden bzw. einem Vokabularwechsel wärmt eine
+  Dummy-Inferenz das Modell ohne GPU-Lock auf; das Vollbild wird vor dem Lock auf `imgsz` verkleinert. Ein Modell mit festen Klassennamen (z. B. `yolo11s.pt` oder YOLOE `-pf`) geht auch:
+  Vokabular-Einträge werden dann über `label`/`prompts` den Klassennamen zugeordnet (COCO: book, remote, cup …).
+  Personen und Fahrzeuge werden nie als Gegenstand gemeldet.
+* **Kachelung** (`inventory_tiling`, Standard **aus** – in der Machbarkeitsprüfung kein Gewinn bei 2–3× GPU-Zeit):
+  Gesamtbild mit `VG_INVENTORY_IMGSZ` plus Kacheln (`VG_INVENTORY_TILES`, Standard
+  2×2, 15 % Überlappung) mit `VG_INVENTORY_TILE_IMGSZ`. Treffer, die eine *innere* Kachelkante berühren, werden
+  verworfen (das Gesamtbild/die Nachbarkachel hat sie ganz); danach NMS je Label, Entfernen enthaltener Duplikate und labelübergreifend: fast dieselbe Box (IoU ≥ 0,7) mit
+  mehreren Labels (Handy als tablet/book/plate) → nur das Label mit dem höchsten Score.
+* **GPU-Wechsel:** jeder `predict` (Gesamtbild, jede Kachel) läuft erst nach dem Ende eines Sicherheits-Batches und
+  unter demselben Lock wie `detect` – beide wechseln sich ab. **Rechenbudget:** effektives Intervall je Kamera
+  = max(`inventory_interval_s`, GPU-Zeit × Anzahl Inventar-Kameras / `VG_INVENTORY_MAX_BUSY`). Je Kamera höchstens ein
+  Durchlauf; verpasste Takte verfallen (`perf.inventory.skipped`), nichts wird angestaut. Fehler (Modell, Bildquelle)
+  bleiben im Inventar-Thread; `models.inventory` zeigt `off|loading|ready|error: …`.
+* **Stabilisierung** (`InventoryState`): Zuordnung über Label + IoU ≥ 0,3 bzw. Mittelpunktabstand < 0,05, bbox/Score
+  geglättet. `present` ab `inventory_confirm_n` Treffern in 2·n Durchläufen, `missing` nach `inventory_miss_m`
+  Fehlschlägen in Folge (aus `GET /api/internal/settings`). Ein Fehlschlag zählt nicht, wenn eine Person (rohe
+  YOLO-Detektionen ±3 s um die Aufnahmezeit) > 30 % des Gegenstands überdeckt (`occluded`). Detektionen, die zu ≥ 60 %
+  in einer Personenbox liegen (getragene Dinge), werden ignoriert. Nie bestätigte Kandidaten verfallen still,
+  `missing` wird noch 10 Durchläufe mitgeführt. `moved` bei > 0,1 Verschiebung.
+* **Medien:** Crop je Gegenstand beim Erscheinen/Verschieben, sonst bei besserem Score höchstens 1×/min →
+  `inventory/YYYY-MM-DD/<item_id>_<ts>.jpg`; bei Änderungen ein Übersichtsbild (max. 1920 px breit) →
+  `inventory/YYYY-MM-DD/cam<id>_<ts>.jpg`.
+* **MQTT:** nach jedem Durchlauf voller Zustand auf `vg/internal/inventory/{id}` (QoS 1, retain). Beim Abschalten der
+  Kamera/des Inventars und beim Beenden des Workers einmal `stopped: true` mit `items: []`. `session` ist je
+  Worker-Start neu.
 
 ## Track-Lebenszyklus
 
@@ -52,6 +94,14 @@ Die Identität aus der Antwort (`{id, display_name, name, kind}`) fließt in all
 | `VG_PLATE_DETECTOR` / `VG_PLATE_OCR` | `yolo-v9-t-384-license-plate-end2end` / `cct-xs-v2-global-model` | |
 | `VG_PET_MODEL` | `vit_small_patch14_dinov2.lvd142m` | beliebiges timm-Modell |
 | `VG_TRACK_CONFIRM_HITS` / `VG_TRACK_END_S` | `3` / `2` | |
+| `VG_INVENTORY_MODEL` | `yoloe-11m-seg.pt` | Inventar-Modell (`yoloe-11s-seg.pt`, `yoloe-11s-seg-pf.pt` oder COCO `yolo11s.pt`) |
+| `VG_INVENTORY_IMGSZ` / `VG_INVENTORY_TILE_IMGSZ` | `1280` / `960` | Auflösung Gesamtbild / je Kachel |
+| `VG_INVENTORY_TILES` / `VG_INVENTORY_OVERLAP` | `2x2` / `0.15` | Kacheln (Spalten×Zeilen, `0` = aus) |
+| `VG_INVENTORY_MAX_BUSY` | `0.25` | max. GPU-Zeitanteil des Inventars (sonst wird das Intervall gestreckt) |
+| `VG_INVENTORY_HALF` / `VG_INVENTORY_MIN_CONF` | `1` / `0.05` | fp16; Untergrenze für `predict(conf)` |
+| `VG_INVENTORY_SOURCE` | `auto` | `auto` (Ringpuffer → go2rtc → RTSP), `buffer`, `go2rtc`, `rtsp` |
+| `VG_INVENTORY_CROP_MIN_S` / `VG_INVENTORY_UNLOAD_S` / `VG_INVENTORY_PERSON_HOLD_S` | `60` / `600` / `3` | Crop-Abstand, Entladen ohne Inventar-Kamera, Zeitfenster für Verdeckung |
+| `VG_GO2RTC_URL` | `http://go2rtc:1984` | nur für den Keyframe-Fallback |
 | `VG_LOG_LEVEL` | `INFO` | |
 
 ## Test
@@ -64,8 +114,12 @@ docker compose run --rm --no-deps worker python -m vg_worker.selftest \
 # Lasttest 16 Kameras (jede URL 8×):
 docker compose run --rm --no-deps worker python -m vg_worker.selftest \
     rtsp://testcam:8554/cam1 rtsp://testcam:8554/cam2 --replicate 8 --seconds 60
+# Inventar (Gegenstände) auf der Wohnzimmer-Kamera (2880×1616, Tischchen mit Lampe/Buch/Fernbedienung):
+docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 \
+    --no-face --no-plate --no-pet --inventory --inventory-interval 3 --seconds 60
 # Im Betrieb:
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -C 20 -v
+docker compose exec mosquitto mosquitto_sub -t 'vg/internal/inventory/#' -C 2 -v
 ```
 
 ## Gemessene Leistung (RTX 4080 Laptop, 768×432 h264 @ 12 fps, detect_fps 5)
@@ -75,6 +129,7 @@ docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -C 20 -v
 | 2 Kameras, alle Modelle | 2 × 5,0 fps, GPU-Speicher ≈ 1,0–1,5 GB, Worker-RAM ≈ 2 GB |
 | 16 Kameras, alle Modelle | **80 fps** gesamt (16 × 5,0 fps), Ø Batch 5,6 Frames in ≈ 22–26 ms (≈ 4,5 ms/Frame), GPU-Util ≈ 20–35 %, GPU-Speicher 1,9 GB, Host-RAM gesamt ≈ 4,3 GB |
 | YOLO11s fp16 isoliert | bs1 ≈ 8 ms, bs16 ≈ 31 ms (≈ 2 ms/Frame) |
+| Inventar, COCO-Fallback `yolo11s.pt` auf **CPU**, 2880×1616 + 2×2 Kacheln | ≈ 850–930 ms je Durchlauf (Funktionstest; GPU/YOLOE noch zu messen) |
 
 `inference_ms` im Status ist die Latenz des Batches, in dem das Kamerabild lief (geglättet). Bei CPU-Last durch
 ffmpeg-Decoder steigt die Kernel-Launch-Latenz von PyTorch (bs1 8 ms → ≈ 30–40 ms); der Durchsatz skaliert über das Batching trotzdem.
@@ -85,4 +140,6 @@ TensorRT wurde getestet (Export ≈ 4 min, +4,6 GB Aktivierungs-Speicher bei dyn
 * Basis-Image `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` (Host-Treiber unterstützt max. CUDA 12.4). onnxruntime-gpu nutzt cuDNN/cuBLAS aus den Torch-Wheels (`LD_LIBRARY_PATH`).
 * ffmpeg 4.4 (Ubuntu 22.04): RTSP-Timeout heißt dort `-stimeout` (wird automatisch gewählt).
 * Erster Start lädt ca. 400 MB Modelle nach `/models` (yolo11s 19 MB, buffalo_l 280 MB, DINOv2-S 88 MB, ALPR ≈ 10 MB).
+* Inventar lädt beim ersten Aktivieren YOLOE (`/models/yoloe`, ≈ 30 MB für `-s`) und einmalig den Textencoder
+  MobileCLIP (`mobileclip_blt.ts`, ≈ 600 MB). YOLOE steht wie YOLO11 unter AGPL-3.0, MobileCLIP unter Apple-Lizenz.
 * Retained Kommandos auf `vg/internal/cmd/+` werden ignoriert. Kein Last-Will (Backend erkennt Worker-Ausfall über das Ausbleiben von `vg/internal/system`, 15 s).

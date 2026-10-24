@@ -199,3 +199,320 @@ Ergänzungen, die bei der Umsetzung hinzukamen. Sie sind abwärtskompatibel und 
   der 30-s-Sync laufende Streams nicht neu aufbaut.
 - Nicht erreichbare/beendete Streams: `/cameras/test` liefert einen Fehler; beim Sync bleibt der Stream
   unverändert und wird nach 60 s erneut aufgelöst.
+
+## Nachträge: Gesichter-Lernsperre, API-Keys, Gegenstände (Inventar), MCP
+
+Verbindlich wie der Rest. Wo dieser Abschnitt älteren Aussagen widerspricht (insbesondere „`/media/*` ohne Cookie“
+im Abschnitt Auth), gilt dieser Abschnitt. Begriff überall **`inventory`** (Anzeige deutsch: „Gegenstände“);
+`objects` bleibt den Detektionen (`Obj`) vorbehalten. Nutzung ist privat; REST und MCP dürfen von außen erreichbar
+sein und sind dann ausschließlich über API-Keys (oder Cookie) zugänglich.
+
+### A. Datenbank (additiv, `backend/app/models.py` + `db.py::init_db`)
+
+`init_db()` führt nach `create_all` die Liste `ADDITIVE_COLUMNS` als `ALTER TABLE … ADD COLUMN IF NOT EXISTS …`
+aus. Neue Spalten werden **nur dort** und im Modell (mit identischem Default) eingetragen.
+
+| Tabelle | Spalte | Typ / Default |
+|---|---|---|
+| `identities` | `learning_locked` | boolean NOT NULL DEFAULT false |
+| `identity_samples` | `manual` | boolean NOT NULL DEFAULT false |
+| `cameras` | `inventory_enabled` | boolean NOT NULL DEFAULT false |
+| `cameras` | `inventory_interval_s` | double precision NOT NULL DEFAULT 3 |
+| `cameras` | `inventory_labels` | jsonb NOT NULL DEFAULT '[]' |
+| `cameras` | `inventory_min_score` | double precision NOT NULL DEFAULT 0.35 |
+| `cameras` | `inventory_tiling` | boolean NOT NULL DEFAULT false |
+| `cameras` | `room` | varchar(100) NULL |
+
+Neue Tabellen (über `create_all`): `api_tokens` (Modell `ApiToken`), `inventory_items` (`InventoryItem`),
+`inventory_history` (`InventoryHistory`). Spalten siehe `models.py`; die JSON-Formen unten sind maßgeblich für die API.
+
+### B. Auth: API-Keys (Bearer) und Scopes
+
+- **Key-Format:** `vgt_<prefix>_<secret>`; `<prefix>` = 8 Zeichen `[a-z0-9]`, `<secret>` = 32 Zufallsbytes
+  base64url ohne Padding (43 Zeichen). Beispiel-Länge: 56 Zeichen. Gespeichert werden nur
+  `prefix` = `"vgt_<prefix>"` (12 Zeichen, eindeutig, zum Nachschlagen/Anzeigen) und
+  `token_hash` = `HMAC-SHA256(key=VG_SECRET_KEY, msg=<kompletter Key>)` als Hex (64 Zeichen). Vergleich mit
+  `hmac.compare_digest`. Der Klartext wird **genau einmal** in der Antwort auf `POST /api/tokens` geliefert, nie
+  geloggt (auch nicht der Header `Authorization`).
+- **Übertragung:** nur Header `Authorization: Bearer <key>` (kein Query-Parameter).
+- **Scopes:** `read`, `write`. Gespeichert als Liste; `write` impliziert `read` (Backend normalisiert
+  `["write"]` → `["read","write"]`). `GET`/`HEAD`/`OPTIONS` verlangen `read`, alle anderen Methoden `write`.
+  Fehlender Scope → **403** `{"detail":"Keine Berechtigung (Scope write erforderlich)"}`.
+- **Prüfreihenfolge** in `require_user` (Name bleibt, alle Router nutzen ihn weiter): 1. Cookie `vg_session`
+  (volle Rechte), 2. Bearer-Key. Unbekannt/widerrufen/abgelaufen/fehlend → **401**
+  mit Header `WWW-Authenticate: Bearer`. `last_used_at` wird höchstens 1×/min geschrieben; Key-Cache max. 30 s,
+  wird beim Widerruf sofort geleert.
+- **Nur mit Session-Cookie** (Bearer → 403 `"Nur mit Anmeldung im Browser"`): `/api/tokens*`, `/api/auth/check`
+  (nginx `auth_request`, go2rtc bleibt für Keys gesperrt), `/api/auth/logout`.
+- **WebSocket `/api/ws`:** Cookie oder Header `Authorization: Bearer` (Scope `read`).
+- `GET /api/auth/me` → `{username, auth:"session"|"token", scopes:["read","write"], token_name:str|null}`
+  (bei Token: `username` = Admin-Benutzer, `token_name` = Name des Keys).
+- **Absicherung (API/MCP sind von außen erreichbar):** Das Backend startet nicht, wenn `VG_SECRET_KEY` der
+  Standardwert oder kürzer als 32 Zeichen ist. `POST /api/auth/login`: höchstens 5 Fehlversuche je IP pro Minute
+  (danach **429** mit `Retry-After`, zusätzlich `limit_req` in nginx). Ist das Admin-Passwort schwach (`admin`,
+  < 8 Zeichen, = Benutzername), ist die Anmeldung nur aus privaten Netzen möglich (nginx-`X-Real-IP` privat und
+  kein öffentlicher Eintrag in `X-Forwarded-For`), sonst **403**; API-Keys sind davon nicht betroffen.
+  nginx übernimmt ein vorhandenes `X-Forwarded-Proto` (externer TLS-Proxy) → Cookie mit `Secure`.
+
+```jsonc
+// ApiToken (GET /api/tokens → ApiToken[], neueste zuerst; widerrufene bleiben sichtbar)
+{ "id": 3, "name": "Claude-MCP", "prefix": "vgt_ab12cd34", "scopes": ["read"],
+  "created_at": "...", "last_used_at": "..." | null, "expires_at": "..." | null,
+  "revoked_at": "..." | null, "revoked": false, "expired": false }
+// POST /api/tokens  {name: str 1..100, scopes: ["read"] | ["read","write"] (Default ["read"]),
+//                    expires_days: int 1..3650 | null (Default null = unbegrenzt)}
+// → 201 ApiTokenCreated = ApiToken + { "token": "vgt_ab12cd34_<43 Zeichen>" }   // Klartext nur hier
+// DELETE /api/tokens/{id} → 204; setzt revoked_at (idempotent), Eintrag bleibt; 404 wenn unbekannt.
+```
+
+### C. Medien `/media/*` und signierte URLs
+
+- `/media/<path>` wird vom Backend-Router `routers/media.py` ausgeliefert (kein ungeschützter StaticFiles-Mount,
+  Range-Anfragen → 206, Pfad-Traversal → 404). Zugriff, in dieser Reihenfolge: Cookie | Bearer (`read`) |
+  Signatur `?exp=&sig=`. Nichts davon → **401**; Signatur falsch oder abgelaufen → **403**.
+  Übergangsschalter Env `VG_MEDIA_PUBLIC=1` (Backend) = altes Verhalten ohne Prüfung; Standard `0`.
+- **Signatur:** `path` = relativer Medienpfad wie in der DB (ohne führendes `/` und ohne `media/`, z. B.
+  `crops/2026-10-24/abc.jpg`), `exp` = Unix-Sekunden (int).
+  `sig = base64url_ohne_padding( HMAC-SHA256(key=VG_SECRET_KEY (utf-8), msg="media:" + path + ":" + str(exp))[:16] )`
+  (22 Zeichen). URL: `/media/<path>?exp=<exp>&sig=<sig>`; absolut (`<public_base_url>/media/…`), wenn das Setting
+  `public_base_url` gesetzt ist. Hilfsfunktionen in `backend/app/media_sign.py`:
+  `sign_media_path(path, ttl_s) -> str` und `verify_media_sig(path, exp, sig) -> bool`.
+- `POST /api/media/sign` (Scope `read` genügt) `{paths: str[] (1..200, mit oder ohne Präfix "/media/"),
+  ttl_s: int 60..604800 = 3600}` → `{urls: {<path wie gesendet>: <signierte URL>}, expires_at: iso}`.
+- Query `signed=1` an `GET /events`, `/events/{id}`, `/identities/{id}/events`, `/identities*` (cover_url),
+  `/identities/{id}/samples`, `/inventory*`: alle `*_url`-Felder signiert (TTL = `media_link_ttl_h`).
+- Externe Payloads (`{prefix}/events`, Webhooks mit `body: null`) enthalten signierte URLs (TTL `media_link_ttl_h`).
+  Neue Template-Platzhalter: `{thumb_url}` `{snapshot_url}` `{clip_url}` (signiert, leer wenn nicht vorhanden).
+  Umsetzung: auch MQTT-Regelaktionen mit `payload: null` enthalten signierte URLs. `{snapshot_url}`/`{clip_url}`
+  sind bereits beim Auslösen gesetzt, wenn die Regel selbst eine `snapshot`-/`clip`-Aktion hat (Pfad steht vorab
+  fest, die Datei erscheint wenige Sekunden später).
+- `signed=1` wirkt zentral (Middleware `routers/media.py::SignedUrlsMiddleware`) auf **alle** JSON-Antworten unter
+  `/api/` (außer `/api/internal/`): jedes Feld `*_url` mit Wert `/media/…` wird signiert. Router brauchen dafür
+  keinen eigenen Parameter (dürfen ihn aber für die OpenAPI-Doku deklarieren).
+- `/media/*` antwortet mit `Cache-Control: private, max-age=600`; `HEAD` wird unterstützt.
+- Neuer Medien-Unterordner `inventory/YYYY-MM-DD/` (Crops und Übersichtsbilder der Gegenstände), Aufbewahrung nach
+  `retention_days_inventory`; Dateien, auf die ein bestehendes `inventory_items.crop_path` zeigt, werden nicht gelöscht.
+
+### D. Identitäten: Lernsperre, Merge mit Bildauswahl, Vorschläge
+
+```jsonc
+// Identity (zusätzlich)
+{ ..., "learning_locked": false }
+// nur bei GET /identities?with_suggestion=1 zusätzlich: "suggestion": IdentitySuggestion | null
+// Sample (GET /identities/{id}/samples)
+{ "id": 101, "image_url": "/media/identities/12/x.jpg", "created_at": "...", "quality": 0.83, "manual": false }
+// IdentitySuggestion
+{ "identity_id": 5, "display_name": "Anna", "name": "Anna", "cover_url": "/media/…" | null,
+  "score": 0.41, "likely": true }
+```
+
+- **Lernsperre:** `learning_locked=true` → `/api/internal/identify` erkennt die Identität weiter (Matching
+  unverändert, Event bekommt die Identität, `last_seen` wird aktualisiert), speichert aber **kein neues Sample**.
+  Antwort von `identify` unverändert. Gilt technisch für alle Arten; UI-Schalter nur bei `face` und `pet`.
+- `PATCH /identities/{id}` `{name?: str|null (≤200, ""→null), notes?: str, learning_locked?: bool}` → Identity;
+  WS `identity`.
+- `GET /identities?kind=&named=&locked=&with_suggestion=1`: `locked` filtert nach `learning_locked`;
+  `with_suggestion=1` liefert je Identität `suggestion` = bester Vorschlag mit `likely=true`, sonst `null`
+  (nur für unbenannte `face`/`pet`, sonst immer `null`). Antwort bleibt ein Array.
+- **Merge** `POST /identities/{src}/merge {into_id: int, sample_ids?: int[] | null}` → Identity des Ziels:
+  - Prüfungen: `into_id == src` → 422; unterschiedliche `kind` → 422; unbekannt → 404; `sample_ids` leer → 422
+    („Keine Bilder ausgewählt“); ein Sample gehört nicht zur Quelle → 422.
+  - **Klassischer Merge** – `sample_ids` fehlt/`null` **oder** enthält *alle* Samples der Quelle:
+    alle Samples wandern zum Ziel (bei expliziter Auswahl mit `manual=true`, bei `null` bleibt `manual` wie es ist),
+    **alle Events der Quelle wandern zum Ziel**, Name/Notizen/`first_seen`/`last_seen` werden wie bisher
+    zusammengeführt, die Quelle wird gelöscht. WS: `{"type":"identity","identity":{"id":src,"kind":…,"deleted":true,"merged_into":dst}}`
+    und danach die Ziel-Identity.
+  - **Teil-Merge** – `sample_ids` ist eine echte Teilmenge: **nur** diese Samples wandern (Datei nach
+    `identities/<dst>/`), bekommen `manual=true`. Die Quelle bleibt mit den restlichen Samples, ihren Events,
+    Name und Notizen unverändert bestehen. Keine Events wandern. WS: Ziel-Identity und aktualisierte Quell-Identity.
+  - Die Lernsperre des Ziels verhindert keinen Merge (er ist eine bewusste Nutzeraktion).
+  - Limit: Hätte das Ziel danach mehr als 20 (`MAX_SAMPLES`) Samples mit `manual=true` → 422
+    („max. 20 Samples – erst alte löschen“), nichts wird geändert. `prune_samples` kürzt zuerst Samples mit
+    `manual=false` (niedrigste Qualität zuerst), danach `manual=true`.
+- **Vorschläge** `GET /identities/{id}/suggestions?limit=3` (1..20) → `IdentitySuggestion[]`, absteigend nach
+  `score`. Nur `face`/`pet` (sonst `[]`); Ziele = benannte Identitäten gleicher Art ohne die Quelle;
+  `score` = maximale Kosinus-Ähnlichkeit zwischen den Samples der Quelle und denen des Ziels;
+  `likely = score >= (face_match_threshold | pet_match_threshold) − 0.10`. Ohne Embeddings → `[]`.
+- **Automatisches Lernen und `manual`:** Ein automatisch gelerntes Sample verdrängt nur Samples mit `manual=false`;
+  sind alle 20 Samples manuell, wird nichts automatisch hinzugefügt.
+- **Aufräumen:** Die tägliche Aufbewahrung löscht unbenannte, nicht gesperrte Identitäten ohne Events, deren
+  `last_seen` älter als `retention_days_events` ist (samt Bildern). WS: `{"type":"identity","identity":{"id","kind","deleted":true}}`.
+
+### E. Kamera-Erweiterungen
+
+```jsonc
+// Camera (REST, zusätzlich; CameraIn: alle Felder optional mit diesen Defaults)
+{ ..., "room": "Wohnzimmer" | null,         // ≤100 Zeichen, ""→null; frei wählbar, gruppiert Gegenstände
+  "inventory_enabled": false,
+  "inventory_interval_s": 3,                // float, 1..60 (Sekunden zwischen zwei Durchläufen)
+  "inventory_labels": [],                   // Vokabular-Schlüssel (label); [] = gesamtes Vokabular aus Settings;
+                                            // unbekannter Schlüssel → 422 „Unbekannter Gegenstand: <x>“
+  "inventory_min_score": 0.35,              // 0.05..0.95
+  "inventory_tiling": false }               // Bild zusätzlich in Kacheln analysieren (kleine Gegenstände);
+                                            // Default aus: kostet 2–3× GPU-Zeit (docs/plan/03-machbarkeit-ergebnis.md)
+```
+Änderungen dieser Felder lösen wie üblich `vg/internal/config` aus; sie dürfen im Worker **kein** ffmpeg neu
+starten.
+`PUT /api/cameras/{id}`: Die Felder `room` und `inventory_*` werden nur geändert, wenn sie im Body stehen
+(nicht gesendet = unverändert); alle übrigen Felder ersetzt PUT wie bisher vollständig.
+Stehen alle `inventory_labels` einer Kamera nicht mehr im Vokabular, liefert `inventory_vocab` das ganze Vokabular
+(wie bei `[]`) und das Backend loggt eine Warnung.
+
+`GET /api/internal/cameras` liefert je Kamera zusätzlich:
+```jsonc
+{ ..., "room": "Wohnzimmer" | null, "inventory_enabled": true, "inventory_interval_s": 3,
+  "inventory_min_score": 0.35, "inventory_tiling": false,
+  "inventory_vocab": [ { "label": "remote", "name_de": "Fernbedienung", "prompts": ["remote control"],
+                         "min_score": null } ] }   // aufgelöst: inventory_labels gefiltert (Reihenfolge des
+                                                   // Settings-Vokabulars) bzw. ganzes Vokabular; min_score null
+                                                   // = inventory_min_score der Kamera
+```
+`main_rtsp` ist der Hauptstream in voller Auflösung (Quelle des Ringpuffers, z. B. 2880×1616 bei `cam_3`).
+
+### F. Settings-Erweiterungen (`GET/PUT /settings`, `GET /api/internal/settings`)
+
+```jsonc
+{ ...,
+  "inventory_vocabulary": [ { "label": "keys", "name_de": "Schlüssel", "group": "Persönliches",
+                              "prompts": ["keys", "key ring"], "min_score": null }, … ],  // Default: 50 Einträge
+  "inventory_synonyms": { "keys": ["Schlüsselbund", "Haustürschlüssel"] },  // zusätzliche deutsche Suchwörter je label; Default {}
+  "inventory_confirm_n": 2,          // 1..10  Treffer bis „present“
+  "inventory_miss_m": 3,             // 1..20  Fehlschläge in Folge bis „missing“
+  "retention_days_inventory": 30,    // 1..3650
+  "media_link_ttl_h": 24,            // 1..720 Gültigkeit signierter Links in externen Payloads
+  "public_base_url": null }          // z. B. "https://vg.example.org" (ohne / am Ende) oder null;
+                                     // PUT mit "" setzt auf null zurück (PUT ignoriert null-Werte)
+```
+Vokabular-Eintrag: `label` = stabiler englischer Schlüssel `^[a-z0-9_]{1,40}$`, eindeutig; `name_de` 1..60 Zeichen;
+`group` (Anzeige-Gruppe, optional, Default `""`); `prompts` 1..8 englische Texte für das Modell (je ≤ 60 Zeichen);
+`min_score` 0.05..0.95 oder `null`. Das Default-Vokabular steht in `backend/app/config.py::DEFAULT_INVENTORY_VOCABULARY`
+(Quelle `docs/plan/vokabular-50.md`). Personen und Fahrzeuge gehören nie ins Vokabular.
+
+### G. MQTT intern: Inventar
+
+**Worker → `vg/internal/inventory/{camera_id}`** (QoS 1, **retain**, nach jedem Durchlauf, **voller Zustand**, keine Deltas):
+```jsonc
+{ "camera_id": 3,
+  "ts": 1761300000.12,          // Unix-s, Sendezeit
+  "frame_ts": 1761299998.0,     // Unix-s, Aufnahmezeit des analysierten Keyframes
+  "session": "uuid",            // neu bei jedem Worker-Start
+  "interval_s": 3.0,            // effektives Intervall (kann wegen Rechenbudget größer sein als eingestellt)
+  "model": "yoloe-11m-seg",     // tatsächlich genutztes Modell (Standard yoloe-11m-seg)
+  "width": 2880, "height": 1616,// Pixel des analysierten Bildes
+  "snapshot_path": "inventory/2026-10-24/cam3_1761299998.jpg" | null,  // Übersichtsbild, nur bei Änderungen
+  "stopped": false,             // true: Inventar für diese Kamera beendet (deaktiviert/entfernt), dann items: []
+  "items": [ {
+      "item_id": "uuid",        // vom Worker, stabil innerhalb der session
+      "label": "remote",        // Vokabular-Schlüssel
+      "prompt": "remote control",
+      "score": 0.62,            // geglätteter Score
+      "bbox": [0.41, 0.55, 0.47, 0.60],   // normiert x1,y1,x2,y2 (EMA-geglättet)
+      "zones": ["z1"],
+      "state": "candidate|present|missing",
+      "occluded": false,        // aktuell von Person verdeckt (Fehlschläge zählen dann nicht)
+      "first_seen": 1761290000.0, "last_seen": 1761299998.0,   // Unix-s; last_seen = letzter echter Treffer
+      "hits": 5, "misses": 0,
+      "crop_path": "inventory/2026-10-24/<item_id>_1761299998.jpg" | null } ],   // letzter Crop (≤ 1×/min neu)
+  "changes": [ { "item_id": "uuid", "type": "appeared|moved|disappeared" } ] }   // seit dem letzten Durchlauf
+```
+- `candidate` = noch nicht bestätigt (Backend speichert nichts); `present` ab `inventory_confirm_n` Treffern;
+  `missing` nach `inventory_miss_m` Fehlschlägen in Folge (Verdeckung durch Personen zählt nicht). Der Worker führt
+  `missing`-Einträge noch höchstens 10 Durchläufe mit und lässt sie dann weg. `moved` = Mittelpunkt > 0,1 verschoben.
+- Zuordnung im Worker: gleiches `label` und IoU ≥ 0,3 oder Mittelpunktabstand < 0,05.
+- `vg/internal/system` zusätzlich: `models.inventory` (`"off"|"loading"|"ready"|"error: …"`) und
+  `perf.inventory: {runs_per_min, ms, skipped, cameras}`.
+  Bedeutung (Worker): `runs_per_min` = Durchläufe der letzten 60 s (alle Kameras), `ms` = mittlere GPU-Zeit je
+  Durchlauf (Gesamtbild + Kacheln), `skipped` = in den letzten 60 s verfallene Takte (Budget/laufender Durchlauf),
+  `cameras` = Kameras mit aktivem Inventar. Der Worker liest `inventory_confirm_n`/`inventory_miss_m` aus
+  `GET /api/internal/settings` (bei jedem Laden der Kameras).
+
+**Backend-Verarbeitung:** übernimmt den `state` des Workers (keine zweite Hysterese). Gleiche `session` →
+Abgleich über `item_id`; Einträge eines nicht-`stopped` Durchlaufs, die fehlen, gelten als `missing`. Neue `session`
+→ Abgleich mit gespeicherten Gegenständen derselben Kamera über `label` + IoU ≥ 0,3; in den ersten
+`inventory_miss_m` Nachrichten einer neuen Session wird nichts wegen Fehlens auf `missing` gesetzt. `stopped: true`
+oder keine Nachricht seit > 3 × `interval_s` → sichtbare Gegenstände der Kamera werden `stale`.
+
+### H. Gegenstände: REST und WebSocket (Backend, Präfix `/api`)
+
+```jsonc
+// InventoryItem
+{ "id": 17, "camera_id": 3, "camera_name": "Wohnzimmer", "room": "Wohnzimmer" | null,
+  "label": "remote", "name_de": "Fernbedienung", "score": 0.62,
+  "bbox": [0.41, 0.55, 0.47, 0.60], "zones": ["z1"], "zone_names": ["Tischchen"],
+  "state": "present|missing|stale", "visible": true,          // visible == (state == "present")
+  "relation": { "type": "on|near", "item_id": 9, "label": "table", "name_de": "Tisch",
+                "text": "vermutlich auf dem Tisch" } | null,
+  "first_seen": "...", "last_seen": "...", "updated_at": "...",
+  "crop_url": "/media/inventory/…jpg" | null, "snapshot_url": "/media/inventory/…jpg" | null }
+```
+- `GET /inventory?camera_id=&room=&label=&state=&visible=&signed=&limit=200&offset=0` → `{items, total}`;
+  `label`/`state` kommagetrennt; Sortierung `room`, `name_de`, `camera_id`.
+- `GET /inventory/{id}` → InventoryItem; `DELETE /inventory/{id}` → 204 (Fehlerkennung entfernen, inkl. Historie).
+- `GET /inventory/search?q=&limit=10&signed=` → `{query, answer, items: [InventoryItem + {"match": {score: 0..100,
+  via: "label|name|synonym|prompt|fuzzy"}}]}`. Normalisierung: Kleinschreibung, ä→ae/ö→oe/ü→ue/ß→ss, Füllwörter
+  („wo ist/sind“, Artikel, „mein/meine …“, „?“) entfernen, deutsche Pluralendungen. Abgleich gegen `label`,
+  `name_de`, `prompts`, eingebaute Synonyme (`backend/app/inventory_names.py`) und `inventory_synonyms`;
+  `rapidfuzz` (Schwelle 80) als Fallback. Sortierung: sichtbar zuerst, dann `last_seen` absteigend, dann
+  `match.score`. `answer` = deutscher Satz, z. B. „Fernbedienung: aktuell sichtbar in Wohnzimmer (Kamera
+  Wohnzimmer), vermutlich auf dem Tisch, seit 14:02.“ bzw. „Fernbedienung: zuletzt gesehen vor 2 h in …“ bzw.
+  „Kein Gegenstand „…“ bekannt.“
+- `GET /inventory/labels` → `[{label, name_de, group, prompts, synonyms, count_present, count_total}]`
+  (Reihenfolge des Vokabulars; Labels in der DB, die nicht mehr im Vokabular stehen, am Ende).
+- `GET /inventory/{id}/history?limit=50` (1..500) → `[{ts, state, camera_id, bbox, zones, score, crop_url}]`,
+  neueste zuerst. Historie: bei jedem Zustandswechsel und bei `present` höchstens 1 Eintrag je 5 min.
+- **Lagebeziehung** (nur für `present`, 2D-Heuristik, Text immer „vermutlich …“): Flächen-Labels
+  `table, sofa, bed, chair, rug` derselben Kamera im Zustand `present`. `on`: unterer Mittelpunkt der Item-Box liegt
+  in der Flächen-Box und ≥ 60 % der Item-Fläche überlappen, **oder** der untere Mittelpunkt liegt horizontal in der
+  Fläche und vertikal zwischen 0,03 über der Oberkante und dem oberen Drittel der Flächen-Box (hohe Dinge wie Lampen,
+  die über die Fläche hinausragen) – kleinste passende Fläche gewinnt; sonst `near`: nächste
+  Fläche mit Abstand < 0,10 (normiert); sonst `null`. Flächen selbst haben `relation: null`.
+- **WS:** `{"type":"inventory","camera_id":3,"action":"appear|update|gone|delete","items":[InventoryItem]}` – nur bei
+  Änderung. `appear` = wird `present`; `gone` = `present` → `missing|stale`; `update` = verschoben, neuer Crop,
+  Relation geändert (je Gegenstand höchstens 1×/10 s); `delete` nach `DELETE /inventory/{id}`.
+- Aufbewahrung: `inventory_history` älter als `retention_days_inventory` wird gelöscht, ebenso Gegenstände mit
+  `state != present`, deren `last_seen` älter ist.
+- Ergänzungen (Implementierung Backend): `InventoryItem` hat zusätzlich `status_text` (z. B. „aktuell sichtbar“,
+  „zuletzt gesehen vor 2 h“, bei `stale` „Stand unklar …“) für Menschen/KI-Agenten. Bei `missing`/`stale` bleibt
+  `relation` die zuletzt berechnete Lage (nicht neu berechnet). Historie zusätzlich bei Verschiebung (Mittelpunkt
+  > 0,1, höchstens 1×/min). Veraltete Nachrichten (`ts` älter als 3 × `interval_s`, z. B. retained nach
+  Worker-Ausfall) werden nicht übernommen, sichtbare Gegenstände werden `stale`. `DELETE /inventory/{id}` merkt sich
+  den Worker-Gegenstand (`session`+`item_id`), damit er nicht sofort neu angelegt wird. Wird eine Kamera gelöscht,
+  werden ihre Gegenstände samt Historie entfernt. `PUT /cameras/{id}` verwirft stillschweigend bereits gespeicherte
+  `inventory_labels`, die nicht mehr im Vokabular stehen (422 nur für neu hinzugefügte unbekannte Schlüssel).
+
+### I. MCP-Dienst `mcp`
+
+- Eigener Dienst `mcp` (Verzeichnis `mcp/`, Python, eigene gepinnte `requirements.txt`, unabhängig von den
+  Backend-Versionen), intern `mcp:8100`. Env: `VG_BACKEND_URL` (Default `http://backend:8000`),
+  `VG_MCP_PORT` (8100), `VG_MCP_ALLOWED_HOSTS` (kommagetrennt; leer = keine Host-Prüfung).
+- Transport **Streamable HTTP** unter Pfad **`/mcp`** (zustandslos genügt). nginx: `location /mcp` →
+  `http://mcp:8100/mcp` mit `proxy_buffering off`, `proxy_read_timeout 3600s`, `Authorization` durchreichen,
+  **ohne** `auth_request`.
+- **Auth:** Header `Authorization: Bearer vgt_…` ist Pflicht; fehlt er → 401 (`WWW-Authenticate: Bearer`), bevor
+  MCP verarbeitet wird. Der Dienst prüft den Key per `GET /api/auth/me` am Backend (Ergebnis max. 30 s gecacht,
+  Schlüssel = SHA-256 des Keys) und reicht **denselben Header** bei jedem Backend-Aufruf durch. Der Dienst hat
+  keinen eigenen Key und loggt keine Keys. Alle Tools lesen nur (Scope `read` genügt).
+- Medien gehen als signierte URLs hinaus (Backend-Parameter `signed=1` bzw. `POST /api/media/sign`, TTL 3600 s),
+  absolut sofern `public_base_url` gesetzt ist.
+
+| Tool | Parameter | Rückgabe (`structuredContent`; zusätzlich deutscher Text als `TextContent`) |
+|---|---|---|
+| `find_object` | `query: str`, `limit: int = 5` | `{query, answer, items:[{id, name_de, label, camera_id, camera_name, room, state, visible, relation_text, last_seen, crop_url}]}` aus `GET /inventory/search?signed=1` |
+| `list_visible_objects` | `camera_id: int?`, `room: str?` | `{total, items:[wie oben]}` aus `GET /inventory?state=present&signed=1` |
+| `get_object_history` | `item_id: int`, `limit: int = 20` | `{item_id, entries:[{ts, state, camera_id, zones, crop_url}]}` |
+| `list_cameras` | – | `{cameras:[{id, name, room, state, inventory_enabled}]}` aus `GET /cameras` |
+| `get_camera_snapshot` | `camera_id: int?`, `camera_name: str?` (eins von beiden) | `ImageContent` (image/jpeg aus `GET /cameras/{id}/snapshot.jpg`) + Text „Kamera …, Aufnahme <Zeit>“ |
+| `who_is_where` | – | `{people:[{display_name, identity_id, kind, label, camera_id, camera_name, room, since, zones, thumb_url}]}` aus `GET /events?active=true&signed=1` (Labels `person`, `dog`, `cat`) |
+
+Fehler (Kamera unbekannt, Backend 4xx/5xx) als Tool-Ergebnis mit `isError: true` und deutscher Meldung;
+Backend-401/403 werden als „API-Key ungültig oder ohne Berechtigung“ gemeldet.
+
+Ergänzungen der Umsetzung (MCP, additiv):
+- `list_visible_objects` nimmt zusätzlich `camera_name: str?` (wird über `GET /cameras` aufgelöst; Name oder Raum,
+  ohne Groß-/Kleinschreibung). `get_camera_snapshot` löst `camera_name` genauso auf.
+- `get_camera_snapshot` verkleinert das Bild auf max. 1600 px Breite (JPEG), damit es für Modelle handlich bleibt.
+- `GET /health` (ohne Key, nur intern) → `{"status":"ok"}` für den Docker-Healthcheck. Alle anderen Pfade verlangen
+  den Bearer-Key; ist das Backend bei der Key-Prüfung nicht erreichbar → 503.
+- Server: MCP-SDK `mcp==2.3.0`, `stateless_http=True`, `json_response=True`; versteht auch ältere
+  Protokollversionen (z. B. `2025-03-26`). Compose-Variable `MCP_ALLOWED_HOSTS` → `VG_MCP_ALLOWED_HOSTS`; gesetzt
+  aktiviert sie die Host-/Origin-Prüfung des SDK (nginx reicht `Host` ohne Port durch).

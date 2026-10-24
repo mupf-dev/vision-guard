@@ -22,6 +22,7 @@ def reload() -> None:
                 "slug": slugify(c.name),
                 "enabled": c.enabled,
                 "labels": list(c.labels or []),
+                "room": c.room,
                 "zones": {z.get("id"): z.get("name") or z.get("id") for z in (c.zones or []) if isinstance(z, dict)},
             }
             for c in rows

@@ -29,6 +29,12 @@ export interface Camera {
   plate_recognition: boolean;
   pet_recognition: boolean;
   zones: Zone[];
+  room: string | null;
+  inventory_enabled: boolean;
+  inventory_interval_s: number;
+  inventory_labels: string[];
+  inventory_min_score: number;
+  inventory_tiling: boolean;
   status?: CameraStatus | null;
 }
 
@@ -81,6 +87,24 @@ export interface Identity {
   first_seen: string | null;
   last_seen: string | null;
   event_count: number;
+  learning_locked: boolean;
+  /** nur bei GET /identities?with_suggestion=1 */
+  suggestion?: IdentitySuggestion | null;
+}
+
+export interface IdentitySuggestion {
+  identity_id: number;
+  display_name: string;
+  name: string | null;
+  cover_url: string | null;
+  score: number;
+  likely: boolean;
+}
+
+export interface MergeInput {
+  into_id: number;
+  /** null/fehlend = klassischer Merge (alle Samples + Events, Quelle wird gelöscht) */
+  sample_ids?: number[] | null;
 }
 
 export interface IdentityRef {
@@ -94,6 +118,8 @@ export interface Sample {
   id: number;
   image_url: string;
   created_at: string;
+  quality: number;
+  manual: boolean;
 }
 
 export interface VGEvent {
@@ -150,6 +176,21 @@ export interface Settings {
   plate_max_distance: number;
   mqtt_prefix: string;
   publish_all_events: boolean;
+  inventory_vocabulary: InventoryVocabEntry[];
+  inventory_synonyms: Record<string, string[]>;
+  inventory_confirm_n: number;
+  inventory_miss_m: number;
+  retention_days_inventory: number;
+  media_link_ttl_h: number;
+  public_base_url: string | null;
+}
+
+export interface InventoryVocabEntry {
+  label: string;
+  name_de: string;
+  group: string;
+  prompts: string[];
+  min_score: number | null;
 }
 
 export interface DetObject {
@@ -175,7 +216,17 @@ export type WsMessage =
   | DetectionsMsg
   | { type: "event"; action: "new" | "update" | "end"; event: VGEvent }
   | { type: "camera_status"; camera_id: number; status: CameraStatus }
-  | { type: "identity"; identity: Identity };
+  | { type: "event"; action: "delete"; event: VGEvent }
+  | { type: "identity"; identity: Identity }
+  | { type: "identity"; identity: IdentityDeleted }
+  | InventoryMsg;
+
+export interface IdentityDeleted {
+  id: number;
+  kind: IdentityKind;
+  deleted: true;
+  merged_into?: number;
+}
 
 export interface CameraTestResult {
   ok: boolean;
@@ -183,4 +234,116 @@ export interface CameraTestResult {
   height?: number | null;
   codec?: string | null;
   error?: string | null;
+}
+
+// ---------------------------------------------------------------- API-Zugänge (Bearer-Keys)
+
+export type TokenScope = "read" | "write";
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  prefix: string;
+  scopes: TokenScope[];
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revoked: boolean;
+  expired: boolean;
+}
+
+/** Antwort auf POST /api/tokens – `token` (Klartext) gibt es nur hier, genau einmal. */
+export interface ApiTokenCreated extends ApiToken {
+  token: string;
+}
+
+export interface ApiTokenInput {
+  name: string;
+  scopes: TokenScope[];
+  expires_days: number | null;
+}
+
+export interface AuthMe {
+  username: string;
+  auth?: "session" | "token";
+  scopes?: TokenScope[];
+  token_name?: string | null;
+}
+
+export interface MediaSignResult {
+  urls: Record<string, string>;
+  expires_at: string;
+}
+
+// ---------------------------------------------------------------- Gegenstände (Inventar)
+
+export type InventoryState = "present" | "missing" | "stale";
+
+export interface InventoryRelation {
+  type: "on" | "near";
+  item_id: number;
+  label: string;
+  name_de: string;
+  text: string;
+}
+
+export interface InventoryItem {
+  id: number;
+  camera_id: number;
+  camera_name: string;
+  room: string | null;
+  label: string;
+  name_de: string;
+  score: number;
+  bbox: [number, number, number, number];
+  zones: string[];
+  zone_names: string[];
+  state: InventoryState;
+  visible: boolean;
+  relation: InventoryRelation | null;
+  first_seen: string;
+  last_seen: string;
+  updated_at: string;
+  crop_url: string | null;
+  snapshot_url: string | null;
+  /** z. B. „aktuell sichtbar“, „zuletzt gesehen vor 2 h“ (vom Backend) */
+  status_text?: string;
+}
+
+export interface InventorySearchHit extends InventoryItem {
+  match: { score: number; via: "label" | "name" | "synonym" | "prompt" | "fuzzy" };
+}
+
+export interface InventorySearchResult {
+  query: string;
+  answer: string;
+  items: InventorySearchHit[];
+}
+
+export interface InventoryLabel {
+  label: string;
+  name_de: string;
+  group: string;
+  prompts: string[];
+  synonyms: string[];
+  count_present: number;
+  count_total: number;
+}
+
+export interface InventoryHistoryEntry {
+  ts: string;
+  state: InventoryState;
+  camera_id: number;
+  bbox: [number, number, number, number];
+  zones: string[];
+  score: number;
+  crop_url: string | null;
+}
+
+export interface InventoryMsg {
+  type: "inventory";
+  camera_id: number;
+  action: "appear" | "update" | "gone" | "delete";
+  items: InventoryItem[];
 }

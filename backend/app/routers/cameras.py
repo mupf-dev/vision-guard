@@ -1,10 +1,11 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import go2rtc
+from .. import go2rtc, settings_store
 from ..auth import require_user
 from ..db import get_db
 from ..events import processor
@@ -25,12 +26,41 @@ def _get(db: Session, cam_id: int) -> Camera:
     return c
 
 
-def _apply(c: Camera, body: CameraIn) -> None:
+def _check_inventory_labels(labels: list[str], previous: list[str] | None = None) -> list[str]:
+    """Nur Schlüssel aus dem Settings-Vokabular (Reihenfolge wie gesendet, ohne Dubletten). Schlüssel, die
+    schon gespeichert waren und inzwischen aus dem Vokabular entfernt wurden, fallen still weg."""
+    known = {e.get("label") for e in (settings_store.get().get("inventory_vocabulary") or [])}
+    out: list[str] = []
+    for lb in labels:
+        lb = (lb or "").strip()
+        if lb not in known:
+            if lb in (previous or []):
+                continue
+            raise HTTPException(422, f"Unbekannter Gegenstand: {lb}")
+        if lb not in out:
+            out.append(lb)
+    return out
+
+
+# Später hinzugekommene Felder: bei PUT nur übernehmen, wenn der Client sie mitschickt (ältere/externe API-Clients
+# setzen sonst Raum und Inventar still auf die Defaults zurück).
+OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "inventory_labels",
+                          "inventory_min_score", "inventory_tiling")
+
+
+def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:
     data = body.model_dump()
+    if update:
+        for k in OPTIONAL_UPDATE_FIELDS:
+            if k not in body.model_fields_set:
+                data.pop(k, None)
     data["zones"] = [z.model_dump() for z in body.zones]
     # maskierte Passwörter aus der Oberfläche durch die gespeicherten ersetzen
     data["url"] = unmask_url(data["url"], [c.url, c.detect_url])
     data["detect_url"] = unmask_url(data["detect_url"], [c.detect_url, c.url])
+    if "inventory_labels" in data:
+        data["inventory_labels"] = _check_inventory_labels(data.get("inventory_labels") or [],
+                                                           list(c.inventory_labels or []))
     for k, v in data.items():
         setattr(c, k, v)
 
@@ -65,7 +95,7 @@ def get_camera(cam_id: int, db: Session = Depends(get_db)):
 @router.put("/{cam_id}")
 async def update_camera(cam_id: int, body: CameraIn, db: Session = Depends(get_db)):
     c = _get(db, cam_id)
-    _apply(c, body)
+    _apply(c, body, update=True)
     db.commit()
     db.refresh(c)
     await cameras_changed()
@@ -78,6 +108,8 @@ async def delete_camera(cam_id: int, db: Session = Depends(get_db)):
     db.delete(c)
     db.commit()
     processor.drop_camera(cam_id)
+    from ..inventory import memory as inventory_memory
+    await run_in_threadpool(inventory_memory.drop_camera, cam_id)
     await cameras_changed()
     return Response(status_code=204)
 

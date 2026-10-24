@@ -53,7 +53,7 @@ Alle Schnittstellen zwischen den Diensten sind in **[CONTRACT.md](CONTRACT.md)**
 ## Schnellstart
 
 ```bash
-cp .env.example .env            # Admin-Passwort und SECRET_KEY anpassen!
+cp .env.example .env            # Admin-Passwort und SECRET_KEY anpassen (Pflicht: SECRET_KEY=$(openssl rand -hex 32))!
 ./testcam/download-videos.sh    # nur für die Demo-Kameras
 docker compose up -d --build
 ```
@@ -84,16 +84,67 @@ Administration → Kameras → „Kamera hinzufügen“:
 | Variable | Standard | Bedeutung |
 |---|---|---|
 | `HTTP_PORT` | `8080` | Port der Oberfläche |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `admin` | Login |
-| `SECRET_KEY` | `change-me-please` | Signatur der Session-Cookies |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `admin` | Login (schwaches Passwort → Anmeldung nur aus privaten Netzen; max. 5 Fehlversuche/min je IP) |
+| `SECRET_KEY` | `change-me-please` | Signatur der Session-Cookies, API-Key-Hashes, Medien-Links. **Pflicht:** ≥ 32 Zeichen, sonst startet das Backend nicht |
 | `POSTGRES_PASSWORD` | `vg` | Datenbank |
 | `DEMO_CAMERAS` | `1` | Demo-Kameras beim ersten Start anlegen |
 | `COMPOSE_PROFILES` | `demo` | startet den `testcam`-Dienst |
 | `MQTT_PORT` | `1883` | externer MQTT-Port |
 | `BUFFER_SIZE` | `1g` | RAM (tmpfs) für den Clip-Ringpuffer |
 | `TZ` | `Europe/Berlin` | Zeitzone für Zeitpläne |
+| `MCP_ALLOWED_HOSTS` | leer | erlaubte Host-Namen für `/mcp` (kommagetrennt, z. B. `vg.example.org,localhost`); leer = keine Prüfung |
 
 Weitere Worker-Variablen (Modelle, Batchgröße, NVDEC): siehe [worker/README.md](worker/README.md).
+
+## MCP-Server für KI-Agenten
+
+Der Dienst `mcp` stellt VisionGuard als [MCP](https://modelcontextprotocol.io)-Server bereit (Streamable HTTP),
+damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten können.
+
+- **URL:** `http://<host>:8080/mcp` (über nginx; intern `http://mcp:8100/mcp`).
+- **API-Key:** unter **Administration → API-Zugänge** erzeugen (Scope `read` genügt). Der Key wird nur einmal
+  angezeigt und kann dort jederzeit widerrufen werden. Ohne gültigen Key antwortet `/mcp` mit 401.
+- **Tools** (alle nur lesend, Antworten auf Deutsch):
+
+| Tool | Zweck |
+|---|---|
+| `find_object(query)` | Gegenstand suchen: „Fernbedienung: aktuell sichtbar in Kamera Wohnzimmer (Raum Wohnzimmer), vermutlich auf dem Tisch, seit 14:02“ |
+| `list_visible_objects(camera_id?, room?, camera_name?)` | alle gerade sichtbaren Gegenstände |
+| `get_object_history(item_id)` | Verlauf eines Gegenstands |
+| `list_cameras()` | Kameras mit Raum und Zustand |
+| `get_camera_snapshot(camera_id? \| camera_name?)` | aktuelles Kamerabild (JPEG, max. 1600 px breit) |
+| `who_is_where()` | welche Personen/Tiere gerade wo zu sehen sind |
+
+Beispiel Claude Code:
+
+```bash
+claude mcp add --transport http visionguard http://localhost:8080/mcp \
+  --header "Authorization: Bearer $VG_API_KEY"
+```
+
+Beispiel für Clients mit JSON-Konfiguration (`mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "visionguard": {
+      "type": "http",
+      "url": "https://vg.example.org/mcp",
+      "headers": { "Authorization": "Bearer vgt_…" }
+    }
+  }
+}
+```
+
+Selbsttest im Container: `docker compose exec -e VG_API_KEY=vgt_… mcp python selftest.py`
+(prüft 401 ohne Key, `list_tools`, `list_cameras`, `find_object`, `list_visible_objects`, `who_is_where`).
+
+**Zugriff von außen:** Port 8080 nicht direkt ins Internet freigeben, sondern einen Reverse-Proxy mit TLS
+(z. B. Caddy, Traefik, nginx mit Let's Encrypt) oder einen Tunnel (z. B. Cloudflare Tunnel, Tailscale Funnel)
+davorsetzen. Dann `MCP_ALLOWED_HOSTS` auf den öffentlichen Host-Namen setzen und unter Einstellungen
+`public_base_url` (z. B. `https://vg.example.org`) eintragen, damit Bild-Links in den Antworten absolut sind.
+API-Keys nur über HTTPS verwenden, für Agenten eigene Keys mit Scope `read` anlegen und nicht mehr benötigte
+widerrufen. Hinweis: Kamerabilder und Gegenstands-Crops gehen dabei an den Anbieter des KI-Modells.
 
 ## Leistung (gemessen, RTX 4080 Laptop)
 

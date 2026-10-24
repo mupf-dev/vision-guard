@@ -2,6 +2,10 @@
 
     python -m vg_worker.selftest rtsp://testcam:8554/cam1 [rtsp://testcam:8554/cam2 ...]
         [--seconds 20] [--fps 5] [--no-face] [--no-plate] [--no-pet] [--clip] [--replicate N]
+        [--inventory] [--inventory-interval 3] [--vocab datei.json]
+
+--inventory schaltet die Inventar-Pipeline (Gegenstände) für die erste Kamera ein, z. B.
+    python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 --inventory --seconds 60
 
 Identification calls are answered by an in-memory fake (cosine matching), messages are counted.
 """
@@ -30,6 +34,10 @@ def main():
     ap.add_argument("--no-pet", action="store_true")
     ap.add_argument("--clip", action="store_true", help="also test snapshot + clip export")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--inventory", action="store_true", help="inventory pipeline on the first camera")
+    ap.add_argument("--inventory-interval", type=float, default=3.0)
+    ap.add_argument("--no-tiling", action="store_true")
+    ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -47,6 +55,8 @@ def main():
     labels_started: Counter = Counter()
     cmd_results: list[dict] = []
     max_objects = Counter()
+    inventory_last: dict[int, dict] = {}
+    inventory_changes: Counter = Counter()
     lock = threading.Lock()
 
     def publish(topic: str, payload: dict, qos: int = 0, retain: bool = False):
@@ -63,6 +73,15 @@ def main():
                 max_objects[payload["camera_id"]] = max(max_objects[payload["camera_id"]], len(payload["objects"]))
             elif kind == "cmd_result":
                 cmd_results.append(payload)
+            elif kind == "inventory":
+                if payload.get("stopped"):
+                    counts["inventory_stopped"] += 1
+                    return
+                if not payload.get("snapshot_path") and payload["camera_id"] in inventory_last:
+                    payload = dict(payload, snapshot_path=inventory_last[payload["camera_id"]].get("snapshot_path"))
+                inventory_last[payload["camera_id"]] = payload
+                for ch in payload.get("changes") or []:
+                    inventory_changes[ch["type"]] += 1
 
     # fake backend identify: cosine matching, new identity if below threshold
     db: dict[str, list[tuple[int, np.ndarray | str]]] = {"face": [], "pet": [], "plate": []}
@@ -109,6 +128,20 @@ def main():
                          "face_recognition": not a.no_face, "plate_recognition": not a.no_plate,
                          "pet_recognition": not a.no_pet,
                          "zones": [{"id": "left", "name": "links", "polygon": [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]}]})
+    if a.inventory:
+        if a.vocab:
+            import json
+            with open(a.vocab, encoding="utf-8") as fh:
+                vocab = json.load(fh)
+        else:
+            vocab = [{"label": lab, "name_de": de, "prompts": pr, "min_score": None} for lab, de, pr in (
+                ("lamp", "Lampe", ["lamp"]), ("book", "Buch", ["book"]), ("remote", "Fernbedienung", ["remote control"]),
+                ("table", "Tisch", ["table", "dining table"]), ("mug", "Tasse", ["mug", "cup"]),
+                ("phone", "Handy", ["cell phone", "smartphone"]), ("keys", "Schlüssel", ["keys", "key ring"]),
+                ("eyeglasses", "Brille", ["eyeglasses"]), ("bottle", "Flasche", ["bottle"]),
+                ("plant", "Pflanze", ["potted plant"]))]
+        cams[0].update({"inventory_enabled": True, "inventory_interval_s": a.inventory_interval,
+                        "inventory_min_score": 0.35, "inventory_tiling": not a.no_tiling, "inventory_vocab": vocab})
     p.apply_config(cams)
     p.start()
     # give identification models time to load (they load lazily in background)
@@ -123,6 +156,13 @@ def main():
         print(f"[{time.time() - t_start:5.1f}s] perf={p.perf()} gpu={g} cams={{{cam_s}}}")
         print(f"         models={p.models_status()}")
         print(f"         msgs={dict(counts)} id_calls={dict(id_calls)} id_stats={p.identifier.stats}")
+        if a.inventory:
+            with lock:
+                inv = dict(inventory_last)
+            for cid_, m in inv.items():
+                its = ", ".join(f"{i['label']}:{i['state'][0]}{i['score']:.2f}" for i in m["items"])
+                print(f"         inventory cam {cid_}: {m['width']}x{m['height']} every {m['interval_s']}s "
+                      f"model={m['model']} [{its}] changes={dict(inventory_changes)}")
 
     if a.clip:
         first = cams[0]["id"]
@@ -159,6 +199,13 @@ def main():
     print(f"faces found       : {p.identifier.stats['face_found']}, identify calls {dict(id_calls)}, identities {[(k, len(v)) for k, v in db.items()]}")
     print(f"identify stats    : {p.identifier.stats}")
     print(f"models            : {p.models_status()}")
+    if a.inventory:
+        print(f"inventory perf    : {p.inventory.perf()}  changes {dict(inventory_changes)}")
+        for cid_, m in inventory_last.items():
+            for i in m["items"]:
+                print(f"  cam {cid_} {i['state']:9s} {i['label']:12s} {i['score']:.2f} bbox={i['bbox']} hits={i['hits']} "
+                      f"crop={i['crop_path']}")
+            print(f"  snapshot (letzte Änderung): {m.get('snapshot_path')}")
     os._exit(0)
 
 
