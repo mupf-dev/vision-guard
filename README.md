@@ -63,6 +63,13 @@ Oberfläche: **http://localhost:8080** (Login aus `.env`, Standard `admin` / `ad
 Beim ersten Start legt das Backend zwei Demo-Kameras und zwei Beispielregeln an (`DEMO_CAMERAS=1`). Ohne Demo:
 in `.env` `DEMO_CAMERAS=0` und `COMPOSE_PROFILES=` setzen.
 
+### YouTube-Livestreams
+
+Als URL kann auch ein YouTube-Live-Link eingetragen werden (z. B. öffentliche Stadt- oder Verkehrs-Webcams).
+Das Backend ermittelt per `yt-dlp` nur die aktuelle Stream-Adresse; das Video wird live analysiert und **nicht
+gespeichert** (Clips nur bei Regel-Auslösung, wie bei allen Kameras). Für öffentliche Webcams Gesichts- und
+Kennzeichenerkennung in der Kamera abschalten (DSGVO).
+
 ### Eigene Kamera hinzufügen
 
 Administration → Kameras → „Kamera hinzufügen“:

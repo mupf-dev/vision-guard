@@ -60,6 +60,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 |---|---|
 | Compose, Volumes, GPU | `docker-compose.yml`, `.env.example` |
 | Auth (Cookie/JWT) | `backend/app/auth.py`, `backend/app/routers/auth.py` |
+| YouTube-Quellen (yt-dlp) | `backend/app/youtube.py`, Template `youtube` in `go2rtc/go2rtc.yaml` |
 | Kameras, go2rtc-Sync | `backend/app/routers/cameras.py`, `backend/app/go2rtc.py`, `backend/app/sync.py` |
 | Track → Event, Aktionen | `backend/app/events.py` |
 | Regel-Bedingungen, Templates, Webhooks | `backend/app/rules.py` |

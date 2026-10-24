@@ -8,6 +8,9 @@ webrtc:
   listen: ":8555"
   candidates:
     - stun:8555
+ffmpeg:
+  # YouTube/HLS: in Echtzeit lesen (-re), sonst kommen Segmente schubweise und Zeitstempel springen
+  youtube: "-re -fflags nobuffer+genpts -i {input}"
 log:
   level: info
 streams: {}

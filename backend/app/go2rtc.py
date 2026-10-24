@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import httpx
 
+from . import youtube
 from .config import config
 
 log = logging.getLogger("vg.go2rtc")
@@ -76,6 +77,13 @@ async def delete_stream(client: httpx.AsyncClient, name: str) -> None:
         r.raise_for_status()
 
 
+async def source_for(url: str, height: int = youtube.MAIN_HEIGHT) -> Optional[str]:
+    """Quelle für go2rtc; YouTube-Links werden zur aktuellen HLS-Adresse aufgelöst (None = derzeit nicht verfügbar)."""
+    if youtube.is_youtube(url):
+        return await youtube.resolve(url, height)
+    return url
+
+
 async def sync(cameras: list[Any]) -> bool:
     """Bringt go2rtc auf den Soll-Zustand. Gibt True bei Erfolg zurück."""
     want = desired_streams(cameras)
@@ -86,7 +94,11 @@ async def sync(cameras: list[Any]) -> bool:
                 if _is_managed(name) and name not in want:
                     log.info("go2rtc: entferne Stream %s", name)
                     await delete_stream(client, name)
-            for name, src in want.items():
+            for name, url in want.items():
+                height = youtube.DETECT_HEIGHT if name.endswith("_detect") else youtube.MAIN_HEIGHT
+                src = await source_for(url, height)
+                if src is None:
+                    continue  # YouTube gerade nicht erreichbar: bestehenden Stream behalten, später erneut
                 if name in have and src in _stream_srcs(have[name]):
                     continue
                 if name in have:
@@ -165,6 +177,11 @@ async def probe(url: str, timeout: float = 20) -> dict[str, Any]:
     """Prüft eine Kamera-URL über einen temporären go2rtc-Stream."""
     name = f"probe_{secrets.token_hex(6)}"
     result: dict[str, Any] = {"ok": False, "width": None, "height": None, "codec": None, "error": None}
+    src = await source_for(url)
+    if src is None:
+        result["error"] = "YouTube-Livestream nicht verfügbar (offline oder kein Livestream)"
+        return result
+    url = src
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5)) as client:
             await put_stream(client, name, url)

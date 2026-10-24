@@ -180,3 +180,13 @@ Ergänzungen, die bei der Umsetzung hinzukamen. Sie sind abwärtskompatibel und 
 - Embeddings: `face` 512-d (InsightFace), `pet` 384-d (DINOv2 ViT-S/14), jeweils L2-normiert.
 - Retained Nachrichten auf `vg/internal/cmd/+` ignoriert der Worker. Kein Last-Will für den Worker; das Backend
   erkennt den Ausfall am Ausbleiben von `vg/internal/system`.
+
+**YouTube-Livestreams als Kameraquelle**
+- `url`/`detect_url` dürfen YouTube-Links sein (`youtube.com/watch?v=…`, `youtube.com/live/…`, `youtu.be/…`).
+  Das Backend (`app/youtube.py`) ermittelt per `yt-dlp -g` nur die aktuelle HLS-Adresse (nur echte Livestreams,
+  Hauptstream ≤ 1080p, Detect ≤ 720p, H.264) und registriert sie in go2rtc als
+  `ffmpeg:<hls>#input=youtube#video=copy`. Die Adresse wird gecacht und vor Ablauf (≈ 30 min vorher) erneuert.
+- Es wird **nichts heruntergeladen oder gespeichert**: ffmpeg liest den Stream live in den Speicher (go2rtc-Template
+  `youtube` mit `-re`), Clips nur wie bei allen Kameras aus dem RAM-Ringpuffer bei Regel-Auslösung.
+- Nicht erreichbare/beendete Streams: `/cameras/test` liefert einen Fehler; beim Sync bleibt der Stream
+  unverändert und wird nach 60 s erneut aufgelöst.

@@ -64,9 +64,9 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
         <div className="form-grid">
           <div className="field"><label>Name *</label><input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="z. B. Einfahrt" autoFocus /></div>
           <div className="field"><label>Aktiv</label><div style={{ height: 38, display: "flex", alignItems: "center" }}><Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? "Kamera wird analysiert" : "deaktiviert"} /></div></div>
-          <div className="field span-2"><label>Stream-URL (RTSP/HTTP) *</label>
+          <div className="field span-2"><label>Stream-URL (RTSP/HTTP/YouTube) *</label>
             <div className="row">
-              <input className="input mono" value={f.url} onChange={(e) => set("url", e.target.value)} placeholder="rtsp://user:pass@192.168.1.10:554/stream1" />
+              <input className="input mono" value={f.url} onChange={(e) => set("url", e.target.value)} placeholder="rtsp://user:pass@192.168.1.10:554/stream1 oder YouTube-Live-Link" />
               <button type="button" className="btn" onClick={() => runTest(f.url)} disabled={!f.url.trim()}><Plug size={16} />Verbindung testen</button>
             </div>
             <TestRes url={f.url} />

@@ -191,6 +191,7 @@ class FrameSource:
         threading.Thread(target=_watch, daemon=True, name=f"ffmpeg-wd-{self.name}").start()
 
         got = 0
+        tokens, t_prev = 1.0, time.time()
         try:
             while not self._stop.is_set():
                 buf = proc.stdout.read(n)
@@ -198,6 +199,13 @@ class FrameSource:
                     break
                 now = time.time()
                 last[0] = now
+                # Quellen mit unzuverlässigen Zeitstempeln (z. B. HLS/YouTube) liefern Frames schubweise und mehr
+                # als detect_fps: per Token-Bucket nach Wanduhr drosseln (toleriert Jitter, verhindert Schübe)
+                tokens = min(1.5, tokens + (now - t_prev) * self.fps)
+                t_prev = now
+                if tokens < 0.8:
+                    continue
+                tokens -= 1.0
                 img = np.frombuffer(buf, dtype=np.uint8).reshape(self.out_h, self.out_w, 3)
                 got += 1
                 with self._cond:
