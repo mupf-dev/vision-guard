@@ -8,7 +8,7 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 
 | Modul | Aufgabe |
 |---|---|
-| `service.py` | Einstieg (`python -m vg_worker`): MQTT (paho 2.x), Laden von `GET /api/internal/cameras` (Retry/Backoff, Reload bei `vg/internal/config` + alle 60 s), Status/System alle 5 s (retain), Kommandos |
+| `service.py` | Einstieg (`python -m vg_worker`): MQTT (paho 2.x, setzt `worker_id` in jede Nachricht), Laden von `GET /api/internal/cameras` (Retry/Backoff, Reload bei `vg/internal/config` + alle 60 s), Status/System alle 5 s (retain), Kommandos |
 | `ingest.py` | je Kamera ein ffmpeg-Prozess (`-rtsp_transport tcp`, `fps=detect_fps`, `scale` auf max. 1920 px Breite, `rawvideo bgr24` → Pipe). Hält nur das **neueste** Frame; Watchdog + Reconnect mit Backoff; Zustand `starting/online/offline` |
 | `recorder.py` | Ringpuffer: je Kamera ein ffmpeg `-c copy -f segment` (2-s-MPEG-TS-Segmente, Name = Unix-Startzeit) in `VG_BUFFER_DIR` (tmpfs), älter als 30 s wird gelöscht. Clip = Concat-Demuxer `-c copy -movflags +faststart` → mp4 |
 | `detector.py` | Ultralytics YOLO11 (`yolo11s.pt`), PyTorch CUDA fp16, ein Batch über alle Kameras. COCO → Labels (person, bicycle, car, motorcycle, bus, truck, bird, cat, dog, horse, sheep, cow, …) |
@@ -16,6 +16,7 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 | `tracking.py` | `supervision.ByteTrack` je Kamera, Lebenszyklus laut Contract, Zonen (Fußpunkt = bbox unten-mitte, normiert), bester Crop (score·Fläche) → `crops/YYYY-MM-DD/<uuid>.jpg` |
 | `identify.py` | lazy geladene Modelle in eigenen Threads mit begrenzten Queues (Jobs werden verworfen, wenn voll); Fehler eines Modells stoppen die Detektion nicht |
 | `inventory.py` | Inventar (Gegenstände) auf ausgewählten Kameras: Keyframe in voller Auflösung, YOLOE mit Text-Prompts, Kachelung, Stabilisierung, `vg/internal/inventory/{id}` (siehe unten) |
+| `util.py` | Hilfsfunktionen; **einzige Schreibstelle für Medien**: `store_media(rel_path, bytes)` / `write_jpeg` und `media_target(rel_path, suffix)` für ffmpeg-Ausgaben (Clips), jeweils atomar. Andere Module schreiben nie direkt nach `VG_MEDIA_DIR` (Vorbereitung Medien-Upload, D3) |
 | `selftest.py` | Standalone-Test ohne Backend/MQTT (`--inventory` für die Gegenstands-Pipeline) |
 
 ### Identifikation
@@ -82,6 +83,7 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 
 | Variable | Standard | |
 |---|---|---|
+| `VG_WORKER_ID` | `local` | Kennung des Workers (`[A-Za-z0-9_-]`, ≤ 64 Zeichen): Feld `worker_id` in allen MQTT-Nachrichten und Teil der MQTT-`client_id` (Vorbereitung verteilter Worker, D3) |
 | `VG_BACKEND_URL` | `http://backend:8000` | |
 | `VG_MQTT_HOST` / `VG_MQTT_PORT` | `mosquitto` / `1883` | |
 | `VG_MEDIA_DIR` / `VG_MODELS_DIR` / `VG_BUFFER_DIR` | `/data/media` / `/models` / `/buffer` | alle Modell-Downloads (Ultralytics, InsightFace, fast-alpr, HF/timm) landen in `/models` |

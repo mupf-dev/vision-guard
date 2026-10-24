@@ -126,7 +126,8 @@ class Bus:
                 hub.broadcast({"type": "camera_status", "camera_id": cam_id,
                                "status": state.status_for(cam_id, cam["enabled"] if cam else True)})
             elif kind == "system":
-                state.set_worker_system(msg)
+                # vg/internal/system (heute) bzw. vg/internal/system/{worker_id} (D3) – je worker_id gespeichert
+                state.set_worker_system(msg, parts[3] if len(parts) > 3 and parts[3] else None)
             elif kind == "track":
                 cam_id = int(parts[3]) if len(parts) > 3 else int(msg.get("camera_id"))
                 self._enqueue(("track", cam_id, msg))

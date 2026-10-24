@@ -308,3 +308,16 @@ def ws_user(ws: WebSocket) -> Optional[str]:
     if p is None or not p.has("read"):
         return None
     return p.username
+
+
+INTERNAL_LOCAL_WORKER = "local"
+
+
+def require_internal(request: Request) -> str:
+    """Dependency für ALLE Router unter /api/internal (D3-Vorbereitung).
+
+    Heute ohne Wirkung: der Schutz ist allein nginx (`/api/internal/` → 403), Aufrufer ist der lokale Worker
+    im Docker-Netz. Später (D3) prüft sie hier den Worker-Key (`Authorization: Bearer vgw_…`) bzw. lässt den
+    lokalen Worker nur mit `VG_INTERNAL_TRUST_LOCAL=1` ohne Key zu. Liefert die worker_id des Aufrufers."""
+    request.state.worker_id = INTERNAL_LOCAL_WORKER
+    return INTERNAL_LOCAL_WORKER
