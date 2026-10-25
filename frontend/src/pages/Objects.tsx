@@ -13,7 +13,7 @@ import { ObjectChanges } from "./ObjectChanges";
 import { MyItems } from "./MyItems";
 import { ItemTeachDialog } from "../components/ItemTeachDialog";
 
-const STATE_NAME: Record<InventoryState, string> = { present: "sichtbar", missing: "nicht mehr gesehen", stale: "unbestätigt" };
+const STATE_NAME: Record<InventoryState, string> = { present: "sichtbar", missing: "nicht mehr gesehen", stale: "Stand unklar" };
 const STATE_HINT: Record<InventoryState, string> = {
   present: "Gegenstand ist im aktuellen Kamerabild erkannt",
   missing: "Gegenstand wurde zuletzt mehrfach nicht mehr gefunden",
@@ -326,8 +326,8 @@ export function ObjectsPage() {
             <option value="">Alle</option>
             <option value="present">Aktuell sichtbar</option>
             <option value="missing">Nicht mehr gesehen</option>
-            <option value="stale">Unbestätigt</option>
-            <option value="missing,stale">Nicht sichtbar</option>
+            <option value="stale">Stand unklar (Kamera liefert nichts)</option>
+            <option value="missing,stale">Nicht sichtbar (alle)</option>
           </select>
         </div>
         {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => { setQInput(""); setSp(new URLSearchParams(), { replace: true }); }}><RotateCcw size={14} />Zurücksetzen</button>}

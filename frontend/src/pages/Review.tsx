@@ -34,12 +34,15 @@ function Overview({ url, bbox }: { url: string; bbox: [number, number, number, n
   );
 }
 
+// R1: Vergleich zweier Bilder (Exemplar/Person) = Ähnlichkeit, Erkennung eines Labels = Sicherheit des Modells
+const SIMILARITY_KINDS = new Set(["inventory_identity", "identity_match"]);
+
 function Pictures({ r }: { r: ReviewRequest }) {
-  const box = { width: 200, height: 150, borderRadius: 8, overflow: "hidden", background: "var(--bg-4)", flex: "none" } as const;
+  const box = { width: "min(200px, 100%)", height: 150, borderRadius: 8, overflow: "hidden", background: "var(--bg-4)", flex: "none" } as const;
   if (r.kind === "identity_match") {
     const d = r.data as { source_name?: string; target_name?: string };
     return (
-      <div className="row" style={{ gap: 8, alignItems: "center", flex: "none" }}>
+      <div className="row" style={{ gap: 8, alignItems: "center", flex: "1 1 auto", minWidth: 0, flexWrap: "wrap" }}>
         <div style={{ textAlign: "center" }}><div style={{ ...box, width: 130, height: 130 }}><Img src={r.crop_url} className="contain-img" /></div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{d.source_name ?? "unbekannt"}</div></div>
         <ArrowRight size={18} color="var(--text-3)" />
@@ -49,9 +52,9 @@ function Pictures({ r }: { r: ReviewRequest }) {
     );
   }
   return (
-    <div className="row" style={{ gap: 8, alignItems: "flex-start", flex: "none", flexWrap: "wrap" }}>
+    <div className="row" style={{ gap: 8, alignItems: "flex-start", flex: "0 1 auto", minWidth: 0, maxWidth: "100%", flexWrap: "wrap" }}>
       <div style={box}><Img src={r.crop_url} className="contain-img" /></div>
-      {r.snapshot_url && <div style={{ width: 200 }}><Overview url={r.snapshot_url} bbox={r.bbox} /></div>}
+      {r.snapshot_url && <div style={{ width: "min(200px, 100%)" }}><Overview url={r.snapshot_url} bbox={r.bbox} /></div>}
     </div>
   );
 }
@@ -89,7 +92,7 @@ function ReviewCard({ r, first, busy, labels, onAnswer }: {
     <div className="card" style={first ? { borderColor: "color-mix(in srgb, var(--accent) 45%, var(--line))" } : undefined}>
       <div className="card-body" style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
         <Pictures r={r} />
-        <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ flex: 1, minWidth: "min(220px, 100%)" }}>
           <div className="row" style={{ gap: 6, marginBottom: 4 }}>
             <span className="badge outline">{KIND_DE[r.kind] ?? r.kind}</span>
             {reason && <span className="muted" style={{ fontSize: 12 }}>{REASON_DE[reason] ?? reason}</span>}
@@ -97,8 +100,8 @@ function ReviewCard({ r, first, busy, labels, onAnswer }: {
           <div style={{ fontSize: 16, fontWeight: 600 }}>{r.question}</div>
           <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
             {r.camera_name ? `${r.camera_name} · ` : ""}{fmtAgo(r.created_at)}
-            {r.score !== null ? ` · Ähnlichkeit/Konfidenz ${Math.round(r.score * 100)} %` : ""}
-            {r.threshold !== null ? ` (Schwelle ${Math.round(r.threshold * 100)} %)` : ""}
+            {r.score !== null ? ` · ${SIMILARITY_KINDS.has(r.kind) ? "Ähnlichkeit" : "Sicherheit"} ${Math.round(r.score * 100)} %` : ""}
+            {r.threshold !== null ? ` (nötig ${Math.round(r.threshold * 100)} %)` : ""}
           </div>
           {small && <div className="row" style={{ gap: 6, fontSize: 12, color: "#fbbf24", marginTop: 4 }}><AlertTriangle size={13} />Gegenstand erscheint im Bild sehr klein</div>}
           {noMode && (
@@ -174,7 +177,7 @@ export function ReviewPage() {
         <div><h1>Bitte bestätigen</h1>
           <div className="sub">{d ? `${d.open_count} offen · heute ${d.asked_today}/${d.max_per_day} gefragt` : "Rückfragen der Erkennung"}</div>
         </div>
-        <span className="muted row" style={{ gap: 6, fontSize: 12 }}><Keyboard size={14} />J = Ja · N = Nein · S = Überspringen</span>
+        <span className="muted row kbd-hint" style={{ gap: 6, fontSize: 12 }}><Keyboard size={14} />J = Ja · N = Nein · S = Überspringen</span>
       </div>
       <div className="tabs">
         <button className={tab === "open" ? "on" : ""} onClick={() => setTab("open")}><CircleHelp size={15} />Offen<span className="count">{d?.open_count ?? 0}</span></button>

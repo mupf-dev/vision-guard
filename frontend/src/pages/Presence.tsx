@@ -111,7 +111,7 @@ export function PresencePage() {
       )}
       {!items.length ? (
         <Empty icon={<Footprints size={44} />} title="Niemand gesehen"
-          text={`In den letzten ${minutes >= 60 ? `${minutes / 60} h` : `${minutes} min`} wurde keine Person und kein Tier erfasst. Die Anwesenheit beginnt nach einem Neustart leer (nur im Arbeitsspeicher).`} />
+          text={`${minutes === 60 ? "In der letzten Stunde" : minutes > 60 ? `In den letzten ${minutes / 60} Stunden` : `In den letzten ${minutes} Minuten`} wurde keine Person und kein Tier erfasst. Die Anwesenheit beginnt nach einem Neustart leer (nur im Arbeitsspeicher).`} />
       ) : (
         <>
           <h3 className="section-title">Jetzt sichtbar <span className="muted">({now.length})</span></h3>

@@ -26,6 +26,21 @@ function Gauge({ value, max, label, display, sub, warn = 0.7, bad = 0.9 }: { val
   );
 }
 
+// R1: Modellnamen und Zustände deutsch (Rohwerte vom Worker/vlm-Dienst)
+const MODEL_DE: Record<string, string> = {
+  detector: "Detektor", face: "Gesicht", plate: "Kennzeichen", pet: "Tier", inventory: "Gegenstände",
+  embed: "Exemplar-Abgleich", pose: "Haltung & Gesten", history: "Zeitmaschine", reid: "Wiedererkennung über Kameras",
+  vlm: "Frag die Kamera",
+};
+const STATE_DE: [RegExp, string][] = [
+  [/^ready\b/, "bereit"], [/^idle\b/, "im Leerlauf"], [/^off\b/, "aus"], [/^loading\b/, "lädt"], [/^error\b/, "Fehler"],
+  [/^paused\b/, "pausiert"], [/^disabled\b/, "aus"],
+];
+function modelState(v: string): string {
+  for (const [re, de] of STATE_DE) if (re.test(v)) return v.replace(re, de);
+  return v;
+}
+
 export function SystemPage() {
   const q = useQuery({ queryKey: ["system"], queryFn: api.system, refetchInterval: 5000 });
   const live = useLive((s) => s.status);
@@ -63,8 +78,8 @@ export function SystemPage() {
           <div className="card-head"><Boxes size={18} color="var(--accent)" /><h3>Modelle</h3></div>
           <div className="card-body">
             {models.length === 0 ? <div className="muted">Keine Modellinformationen.</div> : (
-              <dl className="kv">{models.map(([k, v]) => <Fragment key={k}><dt>{{ detector: "Detektor", face: "Gesicht", plate: "Kennzeichen", pet: "Tier" }[k] ?? k}</dt>
-                <dd className="mono">{typeof v === "object" ? JSON.stringify(v) : String(v)}</dd></Fragment>)}</dl>
+              <dl className="kv">{models.map(([k, v]) => <Fragment key={k}><dt>{MODEL_DE[k] ?? k}</dt>
+                <dd className="mono">{typeof v === "object" ? JSON.stringify(v) : modelState(String(v))}</dd></Fragment>)}</dl>
             )}
           </div>
         </div>

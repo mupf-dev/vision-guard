@@ -17,6 +17,15 @@ import { VlmSettingsCard } from "./VlmSettings";
 import { SensorSettingsCard } from "./SensorSettings";
 import { HistorySettingsCard } from "./HistorySettings";
 
+// R1: Sprungmarken der langen Einstellungsseite (Reihenfolge wie die Karten)
+const SECTIONS: [string, string][] = [
+  ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gegenstaende", "Gegenstände"],
+  ["s-benachrichtigungen", "Benachrichtigungen"], ["s-rueckfragen", "Rückfragen"], ["s-haltung", "Haltung & Gesten"],
+  ["s-reid", "Über Kameras"], ["s-tiere", "Tiere"], ["s-bericht", "Tagesbericht"], ["s-ki", "KI-Sprachmodell"],
+  ["s-frag", "Frag die Kamera"], ["s-sensoren", "Sensoren"], ["s-zeitmaschine", "Zeitmaschine"], ["s-mqtt", "MQTT"],
+  ["s-zugriff", "Externer Zugriff"],
+];
+
 export function SettingsPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
@@ -28,22 +37,32 @@ export function SettingsPage() {
     onSuccess: (r) => { toast.success("Einstellungen gespeichert"); qc.setQueryData(["settings"], r ?? f); },
     onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
   });
+  const dirty = !!f && JSON.stringify(f) !== JSON.stringify(q.data);
+  // R1: Warnung beim Schließen/Neuladen mit ungespeicherten Änderungen (BrowserRouter: kein useBlocker)
+  useEffect(() => {
+    if (!dirty) return;
+    const onBefore = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", onBefore);
+    return () => window.removeEventListener("beforeunload", onBefore);
+  }, [dirty]);
   if (q.isLoading || !f) return <Loading />;
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setF({ ...f, [k]: v });
-  const dirty = JSON.stringify(f) !== JSON.stringify(q.data);
   const invalid = (f.push_targets ?? []).some((t) => targetProblem(t) !== null);
 
   return (
     <>
-      <div className="page-header">
-        <div><h1>Einstellungen</h1><div className="sub">Aufbewahrung, Wiedererkennung, Benachrichtigungen, MQTT und externer Zugriff</div></div>
+      <div className={`page-header settings-head${dirty ? " dirty" : ""}`}>
+        <div><h1>Einstellungen</h1><div className="sub">{dirty ? "Ungespeicherte Änderungen" : "Erkennung, Benachrichtigungen, KI, Zugriff – Speichern gilt für alle Bereiche"}</div></div>
         <div className="row">
           {dirty && <button className="btn btn-ghost" onClick={() => setF(q.data!)}><RotateCcw size={16} />Verwerfen</button>}
           <button className="btn btn-primary" disabled={!dirty || invalid || save.isPending} title={invalid ? "Push-Ziel unvollständig" : undefined} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
         </div>
       </div>
+      <nav className="settings-toc" aria-label="Bereiche">
+        {SECTIONS.map(([id, label]) => <a key={id} href={`#${id}`} onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{label}</a>)}
+      </nav>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div className="card">
+        <div className="card" id="s-aufbewahrung">
           <div className="card-head"><Archive size={18} color="var(--accent)" /><h3>Aufbewahrung</h3></div>
           <div className="card-body form-grid">
             <div className="field"><label>Ereignisse aufbewahren</label>
@@ -54,8 +73,8 @@ export function SettingsPage() {
             </div>
           </div>
         </div>
-        <div className="card">
-          <div className="card-head"><Fingerprint size={18} color="var(--accent)" /><h3>Wiedererkennung</h3></div>
+        <div className="card" id="s-wiedererkennung">
+          <div className="card-head"><Fingerprint size={18} color="var(--accent)" /><h3>Wiedererkennung (Gesicht, Kennzeichen, Tier)</h3></div>
           <div className="card-body form-grid">
             <div className="field"><label>Gesichts-Schwelle (Kosinus-Ähnlichkeit)</label>
               <Range value={f.face_match_threshold} min={0.2} max={0.9} step={0.01} onChange={(v) => set("face_match_threshold", v)} format={(v) => v.toFixed(2)} />
@@ -70,19 +89,41 @@ export function SettingsPage() {
             </div>
           </div>
         </div>
-        <InventorySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <NotificationSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <div id="s-gegenstaende" className="settings-anchor">
+          <InventorySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-benachrichtigungen" className="settings-anchor">
+          <NotificationSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
         {/* W2: je Thema eine Karte (Fach-Agenten ändern nur ihre Datei) */}
-        <ReviewSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <PersonSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <ReidSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <PetSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <ReportSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <AiSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <VlmSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <SensorSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <HistorySettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
-        <div className="card">
+        <div id="s-rueckfragen" className="settings-anchor">
+          <ReviewSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-haltung" className="settings-anchor">
+          <PersonSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-reid" className="settings-anchor">
+          <ReidSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-tiere" className="settings-anchor">
+          <PetSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-bericht" className="settings-anchor">
+          <ReportSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-ki" className="settings-anchor">
+          <AiSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-frag" className="settings-anchor">
+          <VlmSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-sensoren" className="settings-anchor">
+          <SensorSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-zeitmaschine" className="settings-anchor">
+          <HistorySettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div className="card" id="s-mqtt">
           <div className="card-head"><Radio size={18} color="var(--accent)" /><h3>MQTT</h3></div>
           <div className="card-body form-grid">
             <div className="field"><label>Topic-Präfix</label><input className="input mono" value={f.mqtt_prefix} onChange={(e) => set("mqtt_prefix", e.target.value)} />
@@ -93,7 +134,7 @@ export function SettingsPage() {
             </div>
           </div>
         </div>
-        <div className="card">
+        <div className="card" id="s-zugriff">
           <div className="card-head"><Link2 size={18} color="var(--accent)" /><h3>Externer Zugriff &amp; Medien-Links</h3></div>
           <div className="card-body form-grid">
             <div className="field"><label>Öffentliche Adresse</label>

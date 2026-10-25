@@ -57,7 +57,7 @@ export function StatsPage() {
   }, [stats.data]);
 
   const camRows = useMemo(() => Object.entries(stats.data?.by_camera ?? {})
-    .map(([id, n]) => ({ name: cams.data?.find((c) => String(c.id) === id)?.name ?? `Kamera ${id}`, count: n }))
+    .map(([id, n]) => ({ name: cams.data?.find((c) => String(c.id) === id)?.name ?? `Gelöschte Kamera (ID ${id})`, count: n }))
     .sort((a, b) => b.count - a.count), [stats.data, cams.data]);
 
   const total = Object.values(stats.data?.by_label ?? {}).reduce((a, b) => a + b, 0);

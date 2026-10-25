@@ -1,7 +1,8 @@
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Bell, BellOff, BellRing, History, LogOut, MonitorPlay, Settings2, ShieldCheck, Users } from "lucide-react";
-import { CircleHelp, Clock, FileText, Footprints, Package, PawPrint, ShoppingCart } from "lucide-react";
+import { ChevronDown, CircleHelp, Clock, FileText, Footprints, Menu, Package, PawPrint, ShoppingCart } from "lucide-react";
 import { api } from "../lib/api";
 import { useLive, useUi } from "../lib/store";
 import { useLiveSocket } from "../lib/useLiveSocket";
@@ -35,6 +36,84 @@ function WsIndicator() {
   return <span className={`ws-ind ${ws}`} title="WebSocket-Verbindung"><span className="dot" /><span className="nav-hide-sm">{text}</span></span>;
 }
 
+type NavItem = { to: string; label: string; icon: ReactNode; end?: boolean };
+
+// R1: Hauptpunkte immer sichtbar (mit Beschriftung), seltene Seiten unter „Mehr“; mobil ein Menü mit allen Punkten
+const PRIMARY: NavItem[] = [
+  { to: "/", label: "Live", icon: <MonitorPlay size={17} />, end: true },
+  { to: "/ereignisse", label: "Ereignisse", icon: <History size={17} /> },
+  { to: "/identitaeten", label: "Identitäten", icon: <Users size={17} /> },
+  { to: "/gegenstaende", label: "Gegenstände", icon: <Package size={17} /> },
+  { to: "/hinweise", label: "Hinweise", icon: <BellRing size={17} /> },
+];
+const MORE: NavItem[] = [
+  { to: "/anwesenheit", label: "Anwesenheit", icon: <Footprints size={17} /> },
+  { to: "/tiere", label: "Tiere", icon: <PawPrint size={17} /> },
+  { to: "/vorraete", label: "Vorräte", icon: <ShoppingCart size={17} /> },
+  { to: "/berichte", label: "Berichte", icon: <FileText size={17} /> },
+  { to: "/zeitmaschine", label: "Zeitmaschine", icon: <Clock size={17} /> },
+  { to: "/statistik", label: "Statistik", icon: <BarChart3 size={17} /> },
+];
+const ADMIN: NavItem = { to: "/admin", label: "Administration", icon: <Settings2 size={17} /> };
+const ALL = [...PRIMARY, ...MORE, ADMIN];
+
+function isActive(item: NavItem, path: string): boolean {
+  if (item.to === "/") return path === "/" || path.startsWith("/live");
+  return path === item.to || path.startsWith(item.to + "/");
+}
+
+/** Klappmenü, das sich bei Klick außerhalb, Escape und Seitenwechsel schließt. */
+function useDropdown() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const loc = useLocation();
+  useEffect(() => setOpen(false), [loc.pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return { open, setOpen, ref };
+}
+
+function MainNav() {
+  const path = useLocation().pathname;
+  const more = useDropdown();
+  const mobile = useDropdown();
+  const moreActive = MORE.find((m) => isActive(m, path));
+  const current = ALL.find((m) => isActive(m, path));
+  const link = (l: NavItem) => (
+    <NavLink key={l.to} to={l.to} end={l.end} title={l.label} className={isActive(l, path) ? "active" : ""}>
+      {l.icon}<span>{l.label}</span>
+    </NavLink>
+  );
+  return (
+    <>
+      <nav className="navlinks" aria-label="Hauptnavigation">
+        {PRIMARY.map(link)}
+        <div className="nav-more" ref={more.ref}>
+          <button type="button" className={`nav-more-btn${moreActive ? " active" : ""}`} aria-expanded={more.open}
+            aria-haspopup="menu" onClick={() => more.setOpen(!more.open)} title="Weitere Seiten">
+            {moreActive ? moreActive.icon : null}<span>{moreActive ? moreActive.label : "Mehr"}</span><ChevronDown size={15} />
+          </button>
+          {more.open && <div className="nav-menu" role="menu">{MORE.map(link)}</div>}
+        </div>
+        {link(ADMIN)}
+      </nav>
+      <div className="nav-mobile" ref={mobile.ref}>
+        <button type="button" className="nav-more-btn active" aria-expanded={mobile.open} aria-haspopup="menu"
+          onClick={() => mobile.setOpen(!mobile.open)} title="Menü">
+          <Menu size={18} /><span>{current?.label ?? (path.startsWith("/bestaetigen") ? "Bitte bestätigen" : "Menü")}</span><ChevronDown size={15} />
+        </button>
+        {mobile.open && <div className="nav-menu nav-menu-mobile" role="menu">{ALL.map(link)}</div>}
+      </div>
+    </>
+  );
+}
+
 export function Layout() {
   useLiveSocket(true);
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
@@ -46,32 +125,11 @@ export function Layout() {
     qc.clear();
     nav("/login", { replace: true });
   };
-  const links = [
-    { to: "/", label: "Live", icon: <MonitorPlay size={17} />, end: true },
-    { to: "/ereignisse", label: "Ereignisse", icon: <History size={17} /> },
-    { to: "/identitaeten", label: "Identitäten", icon: <Users size={17} /> },
-    { to: "/anwesenheit", label: "Anwesenheit", icon: <Footprints size={17} /> },
-    { to: "/gegenstaende", label: "Gegenstände", icon: <Package size={17} /> },
-    { to: "/hinweise", label: "Hinweise", icon: <BellRing size={17} /> },
-    { to: "/tiere", label: "Tiere", icon: <PawPrint size={17} /> },
-    { to: "/berichte", label: "Berichte", icon: <FileText size={17} /> },
-    { to: "/zeitmaschine", label: "Zeitmaschine", icon: <Clock size={17} /> },
-    { to: "/vorraete", label: "Vorräte", icon: <ShoppingCart size={17} /> },
-    { to: "/statistik", label: "Statistik", icon: <BarChart3 size={17} /> },
-    { to: "/admin", label: "Administration", icon: <Settings2 size={17} /> },
-  ];
   return (
     <div className="app">
       <header className="topnav">
         <NavLink to="/" className="brand-link" style={{ textDecoration: "none" }}><Brand /></NavLink>
-        <nav className="navlinks">
-          {links.map((l) => (
-            <NavLink key={l.to} to={l.to} end={l.end} title={l.label}
-              className={({ isActive }) => (isActive || (l.to === "/" && location.pathname.startsWith("/live")) ? "active" : "")}>
-              {l.icon}<span>{l.label}</span>
-            </NavLink>
-          ))}
-        </nav>
+        <MainNav />
         <div className="nav-right">
           {isMock && <span className="badge warn">Mock</span>}
           <WsIndicator />
