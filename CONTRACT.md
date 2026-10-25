@@ -1915,6 +1915,9 @@ Beide Endpunkte stehen im Router `routers/identities.py` **vor** den Routen `/{i
   `undone_at`. Fehler: unbekannt → 404; schon zurückgesetzt → **409**; Ziel existiert nicht mehr (gelöscht oder
   selbst weiter zusammengeführt) → **409** „Ziel existiert nicht mehr – zuerst die spätere Zusammenführung
   zurücksetzen“. `undoable` = nicht zurückgesetzt und Ziel existiert. WS: `identity` für beide.
+  Grenzen (Umsetzung Paket A): beim Merge gekürzte Galerie-Bilder kommen nicht zurück; Haustier-Besuche und
+  Gegenstands-Zuordnungen bleiben beim Ziel; eine Notiz „früher: <Quellname>“ wird aus dem Ziel entfernt.
+  `actor` im Listenfilter darf kommagetrennt sein.
 
 ### ID.D Felder in REST-Antworten
 

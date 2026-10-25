@@ -134,15 +134,28 @@ def _add_sample(s: Session, ident: Identity, emb: Optional[list[float]], plate_t
     return True
 
 
-def prune_samples(s: Session, identity_id: int) -> None:
-    """Kürzt auf MAX_SAMPLES: zuerst fallen automatische Samples (niedrigste Qualität zuerst), dann manuelle."""
+def prune_samples(s: Session, identity_id: int, limit: Optional[int] = None,
+                  defer_remove: Optional[list[str]] = None) -> list[int]:
+    """Kürzt auf `limit` (Standard MAX_SAMPLES): zuerst fallen automatische Samples (niedrigste Qualität zuerst),
+    dann manuelle. Rückgabe: IDs der entfernten Samples.
+
+    `defer_remove`: Bilddateien nicht sofort löschen, sondern ihre Pfade anhängen (Identitäten 07: Dateioperationen
+    erst nach dem Commit).
+    """
     samples = s.scalars(
         select(IdentitySample).where(IdentitySample.identity_id == identity_id)
         .order_by(IdentitySample.manual.desc(), IdentitySample.quality.desc(), IdentitySample.id.desc())
     ).all()
-    for smp in samples[MAX_SAMPLES:]:
-        _remove_media(smp.image_path)
+    gone: list[int] = []
+    for smp in samples[(MAX_SAMPLES if limit is None else int(limit)):]:
+        if defer_remove is not None:
+            if smp.image_path:
+                defer_remove.append(smp.image_path)
+        else:
+            _remove_media(smp.image_path)
+        gone.append(smp.id)
         s.delete(smp)
+    return gone
 
 
 def _link_event(s: Session, camera_id: Optional[int], track_id: Optional[int], identity_id: int) -> Optional[Event]:
@@ -265,12 +278,15 @@ def _move_sample_file(smp: IdentitySample, dst_id: int) -> None:
         log.warning("Sample-Datei nicht verschoben: %s", e)
 
 
-def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[int]] = None) -> tuple[Identity, bool]:
+def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[int]] = None,
+          actor: str = "user") -> tuple[Identity, bool]:
     """Führt src in dst zusammen. Rückgabe: (Ziel, Quelle gelöscht?).
 
     sample_ids None oder alle Samples der Quelle → klassischer Merge: alle Samples und Events wandern, Quelle
     wird gelöscht. Echte Teilmenge → nur diese Samples wandern (manual=true), Quelle samt Events bleibt.
+    Identitäten 07 (ID.B): ein vollständiger Merge wird in `identity_merges` protokolliert (`actor` user|review).
     """
+    from .face_match import sample_limit
     with _lock:
         src_samples = s.scalars(select(IdentitySample).where(IdentitySample.identity_id == src.id)).all()
         if sample_ids is None:
@@ -291,8 +307,14 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
         dst_manual = s.scalar(select(func.count()).select_from(IdentitySample).where(
             IdentitySample.identity_id == dst.id, IdentitySample.manual.is_(True))) or 0
         new_manual = sum(1 for smp in moving if mark_manual or smp.manual)
-        if dst_manual + new_manual > MAX_SAMPLES:
-            raise MergeError(f"max. {MAX_SAMPLES} Samples – erst alte löschen")
+        limit = sample_limit(dst, settings_store.get())
+        if dst_manual + new_manual > limit:
+            raise MergeError(f"max. {limit} Samples – erst alte löschen")
+
+        if full:   # Verlauf zum Zurücksetzen (vor dem Umhängen erfassen)
+            from .identity_bulk import log_merge
+            ev_ids = list(s.scalars(select(Event.id).where(Event.identity_id == src.id)).all())
+            log_merge(s, src, dst, actor=actor, sample_ids=[smp.id for smp in moving], event_ids=ev_ids)
 
         for smp in moving:
             _move_sample_file(smp, dst.id)
@@ -314,7 +336,7 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
             if src.last_seen and (not dst.last_seen or src.last_seen > dst.last_seen):
                 dst.last_seen = src.last_seen
         s.flush()
-        prune_samples(s, dst.id)
+        prune_samples(s, dst.id, sample_limit(dst, settings_store.get()))   # Name kann neu sein
         src_id = src.id
         if full:
             s.expire(src)
