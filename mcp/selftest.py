@@ -22,7 +22,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 
 EXPECTED = {"find_object", "list_visible_objects", "get_object_history", "list_cameras",
             "get_camera_snapshot", "who_is_where"}
-EXPECTED |= {"what_changed"}   # W1 B2
+EXPECTED |= {"what_changed", "list_notifications", "get_camera_health"}   # Welle 1 (B2, A1, C5)
 
 
 def _text(result) -> str:
