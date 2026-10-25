@@ -24,3 +24,6 @@ Thumbs.db
 # Zusatz-Testvideos (testcam/download-extra-videos.sh), Lizenz nur privat/Forschung
 testcam/videos/raw/
 testcam/videos/tmp.*/
+
+# Rückfall-Override (scripts/db-rollback-pgvector.sh)
+docker-compose.override.yml
