@@ -642,3 +642,27 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .ht-axis { display: flex; justify-content: space-between; margin-left: 98px; font-size: 11px; color: var(--text-3); }
 .ht-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 @media (max-width: 640px) { .health-images { grid-template-columns: 1fr 1fr; } }
+
+/* ---------------- W2 (C3): Haustier-Tagebuch ---------------- */
+.pet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+.pet-card.sel { border-color: var(--accent); }
+.pet-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 640px) { .pet-tiles { grid-template-columns: 1fr; } }
+.pet-tile { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg-1); min-width: 0; }
+.pet-tile.st-low, .pet-tile.st-gap { border-color: rgba(245, 158, 11, 0.45); }
+.pet-tile.st-high { border-color: rgba(239, 68, 68, 0.45); }
+.pet-tile-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.pet-count { font-size: 28px; font-weight: 700; line-height: 1; }
+.pet-tile.st-low .pet-count, .pet-tile.st-gap .pet-count { color: #fbbf24; }
+.pet-tile.st-high .pet-count { color: #f87171; }
+.pet-bars { position: relative; display: flex; align-items: flex-end; gap: 2px; margin-top: 4px; }
+.pet-band { position: absolute; left: 0; right: 0; background: var(--accent-soft); border-top: 1px dashed rgba(45, 212, 191, 0.4); border-bottom: 1px dashed rgba(45, 212, 191, 0.4); pointer-events: none; }
+.pet-bar { flex: 1; display: flex; align-items: flex-end; height: 100%; position: relative; }
+.pet-bar > div { width: 100%; border-radius: 2px 2px 0 0; background: #3a4b66; }
+.pet-bar.today > div { background: var(--accent); }
+.pet-tile.st-low .pet-bar.today > div, .pet-tile.st-gap .pet-bar.today > div { background: #fbbf24; }
+.pet-tile.st-high .pet-bar.today > div { background: #f87171; }
+.pet-visit { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.pet-visit:last-child { border-bottom: 0; }
+.pet-thumb { width: 56px; height: 42px; border-radius: 6px; object-fit: cover; flex: none; background: var(--bg-4); }
+.pet-thumb.ph { display: grid; place-items: center; color: var(--text-3); }

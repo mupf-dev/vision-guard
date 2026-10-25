@@ -98,7 +98,9 @@ export interface ReviewQuery extends Query {
 }
 
 export interface PetVisitQuery extends Query {
+  /** 0 = unbekannte Tiere (ohne Identität) */
   identity_id?: number;
+  label?: string;
   purpose?: ZonePurpose;
   camera_id?: number;
   since?: string;
