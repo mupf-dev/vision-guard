@@ -453,6 +453,16 @@ def compute_changes(db: Session, since: datetime, until: Optional[datetime] = No
         if dist <= MOVED_MIN and same_zones:
             continue  # derselbe Gegenstand an derselben Stelle (z. B. nach Worker-Neustart neu angelegt)
         changes.append(_Change("moved", a.at, a.item, d.before, a.after, extra={"paired": d.item.id}))
+    # verschwunden, aber an derselben Stelle steht eine neuere Zeile mit unklarem Stand → derselbe Gegenstand,
+    # nur „Stand unklar“ melden
+    unclear = [(c.item.camera_id, c.item.label, _bbox(c.before.bbox)) for c in changes
+               if c.type == "uncertain" and c.before is not None and _bbox(c.before.bbox)]
+    for i, d in enumerate(disappeared):
+        b = _bbox(d.before.bbox) if d.before else None
+        if i not in used_d and b is not None and any(
+                cid == d.item.camera_id and lb == d.item.label and _center_dist(ub, b) <= MOVED_MIN
+                for cid, lb, ub in unclear):
+            used_d.add(i)
     changes += [d for i, d in enumerate(disappeared) if i not in used_d]
     changes += [a for i, a in enumerate(appeared) if i not in used_a]
     # „kurz sichtbar“, das nur die alte bzw. neue Zeile desselben Gegenstands ist (Worker-Neustart: neue Zeile an
