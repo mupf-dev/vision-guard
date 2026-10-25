@@ -302,6 +302,9 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
 
         if full:
             s.execute(update(Event).where(Event.identity_id == src.id).values(identity_id=dst.id))
+            if src.kind == "pet":   # W2 (C3): Besuche im Haustier-Tagebuch wandern mit
+                from .pet_diary import on_identity_merged
+                on_identity_merged(s, src.id, dst.id)
             if not dst.name and src.name:
                 dst.name = src.name
             if src.notes and src.notes not in (dst.notes or ""):

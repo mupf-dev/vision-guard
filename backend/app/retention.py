@@ -78,7 +78,15 @@ def run_once() -> dict:
     except Exception as e:  # noqa: BLE001
         log.warning("Aufräumen der Hinweise/Gesundheits-Zeitleiste fehlgeschlagen: %s", e)
         w1 = {}
-    return {"events": removed_events, "files": removed_files, "inventory": inv, **w1}
+    try:
+        from .pet_diary import cleanup as pet_cleanup   # W2 (C3): Tagebuch wie Events
+        pets = pet_cleanup(now, ev_days)
+        if pets:
+            log.info("Aufräumen: %d Tierbesuche entfernt", pets)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Aufräumen des Haustier-Tagebuchs fehlgeschlagen: %s", e)
+        pets = 0
+    return {"events": removed_events, "files": removed_files, "inventory": inv, "pet_visits": pets, **w1}
 
 
 def _w1_retention(now: datetime, notif_days: int, health_days: int) -> dict:

@@ -71,6 +71,9 @@ def patch_identity(iid: int, body: IdentityPatch, db: Session = Depends(get_db))
 def delete_identity(iid: int, db: Session = Depends(get_db)):
     i = _get(db, iid)
     kind = i.kind
+    if kind == "pet":   # W2 (C3): Tagebuch-Besuche bleiben als „unbekanntes Tier“
+        from ..pet_diary import on_identity_deleted
+        on_identity_deleted(db, iid)
     db.delete(i)
     db.commit()
     ident_svc.delete_identity_files(iid)
