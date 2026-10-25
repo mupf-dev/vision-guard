@@ -30,6 +30,9 @@ PENDING_TTL_S = 900.0
 WORKER_GONE_S = 60.0
 TIME_CHECK_EVERY_S = 20.0          # Zeit-Regeln: Prüftakt (fällig ab `at`, 15 min Nachholfenster)
 WEATHER_PREFETCH_EVERY_S = 300.0   # Wetter-Cache warm halten, solange Regeln mit Wetter-Bedingung existieren
+REPEATS_KEY = "rule_repeats"          # R1: KV – offene Wiederholungen (C1)
+COND_DELAYED_KEY = "rule_cond_delayed"  # R1: KV – geplante verzögerte Bedingungsprüfungen
+RESUME_WINDOW_S = 120.0                 # R1: so lange nach dem Start werden alte Tracks fortgesetzt
 TIME_RUNS_KEY = "rule_time_runs"   # KV: {rule_id: "YYYY-MM-DD HH:MM"} – letzter Lauf je Zeit-Regel
 
 # Bedingungsprüfungen (A1) laufen außerhalb des Track-Threads (DB-Abfragen, ggf. Wetter-Abruf)
@@ -101,6 +104,11 @@ class Processor:
         self._time_runs: Optional[dict[str, str]] = None
         # C1: Wiederholungen (repeat_s/repeat_max) je (Regel, Event) bis quittiert/beendet
         self.repeats: dict[tuple[int, str], dict[str, Any]] = {}
+        # R1: Zustand über Backend-Neustarts – beim Start aktive Events (zum Fortsetzen statt neu anlegen),
+        # gesicherte Wiederholungen (KV) und offene verzögerte Bedingungsprüfungen (KV, nur protokolliert)
+        self.resumable: dict[tuple[int, int], str] = {}    # (camera_id, track_id) -> event_id
+        self._resume_until = 0.0
+        self.cond_delayed: dict[str, dict[str, Any]] = {}
 
     # ---------------------------------------------------------- Hilfen
 
@@ -214,6 +222,12 @@ class Processor:
             self._end_track(s, tr, msg, now)
             return
 
+        if tr is None and typ != "start" and key in self.resumable and now < self._resume_until:
+            tr = self._resume_track(s, camera_id, track_id, self.resumable.pop(key), msg, now)
+            if tr is not None:
+                _run_track_hooks("start", tr, msg)
+                return
+
         if tr is None:
             tr = self._start_track(s, camera_id, track_id, msg, now)
             if tr is None:
@@ -228,6 +242,37 @@ class Processor:
             self._emit(s, ev, "update")
         self._evaluate(s, tr, msg, now, phase="update")
         _run_track_hooks("update", tr, msg)
+
+    def _resume_track(self, s: Session, camera_id: int, track_id: int, event_id: str, msg: dict[str, Any],
+                      now: float) -> Optional[TrackState]:
+        """R1: Track lief schon vor dem Backend-Neustart → dasselbe Event fortsetzen (statt eines neuen) und
+        bereits ausgelöste Regeln nicht noch einmal auslösen (Quittierung/Wiederholungen bleiben gültig)."""
+        ev = s.get(Event, event_id)
+        if ev is None or ev.camera_id != camera_id:
+            return None
+        ev.active = True
+        ev.end_ts = None
+        s.commit()
+        fired = set(ev.rules or [])
+        rule_ids = {int(r["id"]) for r in rules.all_rules() if r.get("name") in fired}
+        tr = TrackState(camera_id=camera_id, track_id=track_id, event_id=ev.id,
+                        first_seen=ev.start_ts.timestamp() if ev.start_ts else now, label=ev.label,
+                        score=float(msg.get("score") or ev.score or 0), best_score=float(ev.score or 0),
+                        identity=msg.get("identity"), attributes=dict(ev.attributes or {}),
+                        started_rx=ev.start_ts.timestamp() if ev.start_ts else now, last_rx=now)
+        tr.set_zones([str(z) for z in (msg.get("zones") or ev.zones or [])], tr.started_rx)
+        tr.fired_enter |= rule_ids
+        tr.fired_dwell |= rule_ids
+        for rid in rule_ids:     # Evaluator-Trigger (posture/gesture): als bereits ausgelöst markieren
+            tr.trigger_state.setdefault(rid, {})["fired"] = True
+        self.tracks[(camera_id, track_id)] = tr
+        self._apply_msg(s, tr, msg, now)
+        s.commit()
+        log.info("Track %s/%s nach Neustart fortgesetzt (Event %s, %d Regel(n) bereits ausgelöst)", camera_id,
+                 track_id, ev.id, len(rule_ids))
+        self._emit(s, ev, "update")
+        self._publish_counts(camera_id)
+        return tr
 
     def _start_track(self, s: Session, camera_id: int, track_id: int, msg: dict[str, Any],
                      now: float) -> Optional[TrackState]:
@@ -432,9 +477,17 @@ class Processor:
                      rule["name"], tr.camera_id, tr.track_id, delay)
             rid, zs = int(rule["id"]), list(zones)
 
+            dkey = f"{rid}:{tr.camera_id}:{tr.track_id}"
+
             def job() -> None:
+                with self.lock:
+                    if self.cond_delayed.pop(dkey, None) is not None:
+                        self._save_kv(COND_DELAYED_KEY, list(self.cond_delayed.values()))
                 _cond_pool.submit(self._conditional_fire, rid, tr, zs, now, extra)
             if delay > 0:
+                self.cond_delayed[dkey] = {"rule_id": rid, "rule": rule.get("name"), "camera_id": tr.camera_id,
+                                           "track_id": tr.track_id, "event_id": tr.event_id, "due": now + delay}
+                self._save_kv(COND_DELAYED_KEY, list(self.cond_delayed.values()))
                 t = threading.Timer(delay, job)
                 t.daemon = True
                 t.start()
@@ -542,6 +595,7 @@ class Processor:
             self.repeats[(int(rule["id"]), ev.id)] = {
                 "rule_id": int(rule["id"]), "event_id": ev.id, "camera_id": tr.camera_id, "track_id": tr.track_id,
                 "count": 0, "next": now + repeat_s, "zones": list(zones), "extra": dict(extra or {})}
+            self._save_repeats()
         if cond is not None and "push" not in act_types:
             # Regeln mit Bedingungen, aber ohne Push: Hinweis nur anzeigen (CONTRACT W1.B)
             notifications.create(
@@ -736,6 +790,9 @@ class Processor:
                 rule = by_id.get(rep["rule_id"])
                 tr = self.tracks.get((rep["camera_id"], rep["track_id"]))
                 reason = None
+                if tr is None and now < self._resume_until and (rep["camera_id"], rep["track_id"]) in self.resumable:
+                    rep["next"] = now + 5.0      # R1: Track nach Neustart noch nicht wieder gemeldet – warten
+                    continue
                 if rule is None or not rule.get("enabled") or float(rule.get("repeat_s") or 0) <= 0:
                     reason = "Regel geändert"
                 elif tr is None or tr.event_id != rep["event_id"]:
@@ -752,6 +809,7 @@ class Processor:
                     log.info("Regel %s, Event %s: keine weiteren Wiederholungen (%s)", rep["rule_id"],
                              rep["event_id"], reason)
                     self.repeats.pop(key, None)
+                    self._save_repeats()
                     continue
                 rep["count"] += 1
                 rep["next"] = now + float(rule["repeat_s"])
@@ -759,6 +817,62 @@ class Processor:
                     self._do_fire(s, rule, tr, list(rep["zones"]), now, extra=rep["extra"], repeat=rep["count"])
                 except Exception:
                     log.exception("Regel '%s': Wiederholung fehlgeschlagen", rule.get("name"))
+                self._save_repeats()
+
+    # ---------------------------------------------------------- R1: Zustand über Neustarts (KV)
+
+    def _save_kv(self, key: str, value: Any) -> None:
+        try:
+            with SessionLocal() as s:
+                row = s.get(KV, key)
+                if row is None:
+                    s.add(KV(key=key, value=value))
+                else:
+                    row.value = value
+                s.commit()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Zustand %s nicht gesichert: %s", key, e)
+
+    def _save_repeats(self) -> None:
+        self._save_kv(REPEATS_KEY, [dict(r) for r in self.repeats.values()])
+
+    def startup(self, active: list[tuple[int, int, str]]) -> None:
+        """Beim Start (nach close_stale_events): fortsetzbare Tracks merken, Wiederholungen laden, verlorene
+        verzögerte Prüfungen melden."""
+        now = time.time()
+        with self.lock:
+            self.resumable = {(cid, tid): eid for cid, tid, eid in active}
+            self._resume_until = now + RESUME_WINDOW_S
+            with SessionLocal() as s:
+                rep = s.get(KV, REPEATS_KEY)
+                cond = s.get(KV, COND_DELAYED_KEY)
+                reps = list(rep.value) if rep and isinstance(rep.value, list) else []
+                lost = list(cond.value) if cond and isinstance(cond.value, list) else []
+            for r in reps:
+                try:
+                    if (int(r["camera_id"]), int(r["track_id"])) in self.resumable:
+                        self.repeats[(int(r["rule_id"]), str(r["event_id"]))] = {
+                            **r, "zones": list(r.get("zones") or []), "extra": dict(r.get("extra") or {}),
+                            "next": max(float(r.get("next") or now), now + 5.0)}
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self._save_repeats()
+            if lost:
+                self._save_kv(COND_DELAYED_KEY, [])
+        if self.repeats:
+            log.info("%d Wiederholung(en) aus der Zeit vor dem Neustart übernommen", len(self.repeats))
+        for c in lost:
+            log.warning("Verzögerte Prüfung von Regel '%s' (Kamera %s, fällig %s) durch Neustart entfallen",
+                        c.get("rule"), c.get("camera_id"),
+                        datetime.fromtimestamp(float(c.get("due") or 0), timezone.utc).isoformat())
+            try:
+                notifications.create(
+                    source="rule", level="warning", title=f"Regel „{c.get('rule')}“: Prüfung entfallen",
+                    message="Die verzögerte Bedingungsprüfung fiel in einen Neustart des Systems und wurde nicht "
+                            "ausgeführt.", rule_id=c.get("rule_id"), rule_name=c.get("rule"),
+                    camera_id=c.get("camera_id"), push_enabled=False)
+            except Exception:  # noqa: BLE001
+                log.exception("Hinweis zu entfallener Prüfung nicht angelegt")
 
     # ---------------------------------------------------------- Zeit-Regeln (A1, trigger=time)
 
@@ -960,11 +1074,28 @@ class Processor:
                     self._end_track(s, tr, {"ts": tr.last_rx}, now)
 
     def drop_camera(self, camera_id: int) -> None:
+        """Kamera gelöscht (vor registry.reload aufrufen): Tracks/Zähler vergessen und die gespeicherten
+        (retained) MQTT-Nachrichten der Kamera räumen – sonst sehen Abnehmer (Home Assistant) dauerhaft Objekte
+        in einer Kamera, die es nicht mehr gibt (Refinement 1)."""
+        cam = registry.get(camera_id)
         with self.lock:
             for key in [k for k in self.tracks if k[0] == camera_id]:
                 self.tracks.pop(key, None)
+            labels = {k[1] for k in self.counts if k[0] == camera_id}
             for key in [k for k in self.counts if k[0] == camera_id]:
                 self.counts.pop(key, None)
+        if cam:
+            prefix = settings_store.get()["mqtt_prefix"]
+            for lbl in labels | set(cam.get("labels") or []):
+                self._pub(f"{prefix}/{cam['slug']}/{lbl}", "", retain=True)
+
+        def _clear_internal() -> None:
+            # nach dem einmaligen „offline“ des Workers (CONTRACT: retain) – leere retained Nachricht löscht sie
+            for kind in ("status", "health", "inventory"):
+                self._pub(f"vg/internal/{kind}/{camera_id}", "", retain=True)
+        t = threading.Timer(10.0, _clear_internal)
+        t.daemon = True
+        t.start()
 
 
 def _posture_de(p: Optional[str]) -> str:
@@ -998,7 +1129,12 @@ def notify_event_changed(event_id: str) -> None:
 
 
 def close_stale_events() -> None:
-    """Beim Start: noch aktive Events aus früheren Läufen beenden."""
+    """Beim Start: noch aktive Events aus früheren Läufen beenden. R1: Meldet der Worker einen dieser Tracks in
+    den ersten 2 min wieder, wird das Event fortgesetzt (Processor.startup/_resume_track)."""
     with SessionLocal() as s:
+        active = [(int(c), int(t), str(e)) for c, t, e in s.execute(
+            select(Event.camera_id, Event.track_id, Event.id).where(Event.active.is_(True))).all()
+            if t is not None]
         s.execute(update(Event).where(Event.active.is_(True)).values(active=False, end_ts=Event.last_seen))
         s.commit()
+    processor.startup(active)

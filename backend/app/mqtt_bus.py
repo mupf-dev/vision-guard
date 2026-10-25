@@ -129,6 +129,14 @@ class Bus:
                 return  # eigene Nachrichten
             if not message.payload:
                 return
+            if message.retain and kind in ("status", "health", "inventory") and len(parts) > 3 \
+                    and parts[3].isdigit():
+                from . import registry
+                if registry.get(int(parts[3])) is None:
+                    # Refinement 1: Reste gelöschter Kameras (retained) beim Verbinden räumen
+                    log.info("Gespeicherte Nachricht %s einer gelöschten Kamera entfernt", topic)
+                    client.publish(topic, b"", qos=1, retain=True)
+                    return
             msg = json.loads(message.payload)
             if not isinstance(msg, dict):
                 return
