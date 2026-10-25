@@ -89,6 +89,10 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Admin-Seiten | `frontend/src/pages/admin/` |
 | nginx-Routen | `frontend/nginx.conf` |
 | MCP-Server (Tools für KI-Agenten) | `mcp/server.py`, Tools je Thema `mcp/tools/<thema>.py`, Selbsttest `mcp/selftest.py` |
+| Embedding-Dienst (geteiltes DINOv2, W2) | Worker `worker/vg_worker/embed.py`, Backend `backend/app/embed_client.py` |
+| Rückfragen „Bitte bestätigen“ (W2) | `backend/app/review.py`, `backend/app/routers/review.py`, `frontend/src/pages/Review.tsx` |
+| LLM-Client (optional, Standard aus) | `backend/app/llm_client.py`, Test-Server ohne Kosten `scripts/llm_mock.py` |
+| Track-Trigger mit Evaluator (posture/gesture) | `backend/app/rules.py` (`register_trigger(..., evaluate=…)`), `backend/app/events.py` |
 
 Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](worker/README.md),
 [frontend/README.md](frontend/README.md).

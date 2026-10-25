@@ -806,3 +806,314 @@ werden geloggt.
   `CameraHealth`, `CameraHealthStatus`, `CameraHealthLogEntry`, `HealthProblemType`; API in `lib/api.ts`:
   `notifications`, `notification`, `deleteNotification`, `pushTest`, `inventoryChanges`, `cameraHealth`,
   `setHealthReference`; Mock-Routen in `lib/mock.ts`.
+
+## Nachträge: Welle 2 – Lernen & Personen (Exemplare, Rückfragen, Pose/Gesten, Tiere, Tagesbericht)
+
+Verbindlich wie der Rest, rein additiv. Grundlage: `docs/plan/roadmap/00-wellenplan.md` (Abschnitt 2, W2), die
+Entwürfe `b4-d2-…`, `c1-d1-c2-…`, `c3-c4-c5-…` (C3), `b2-b3-…` (B3) und `messungen.md`. Angelegt im Kickoff K2;
+Fach-Agenten (B4+D2, C1+D1, C3, B3) ändern diesen Abschnitt, `db.py`, `models.py` und die Settings-Defaults nicht
+selbst. Wo dieser Abschnitt einem Entwurf widerspricht, gilt dieser Abschnitt.
+
+### W2.A Datenbank
+
+| Tabelle | Spalte | Typ / Default | Thema |
+|---|---|---|---|
+| `rules` | `repeat_s` | double precision NOT NULL DEFAULT 0 | C1 |
+| `rules` | `repeat_max` | integer NOT NULL DEFAULT 0 | C1 |
+| `events` | `acknowledged_at` | timestamptz NULL | C1 |
+| `cameras` | `pose_enabled` | boolean NOT NULL DEFAULT false | C1 |
+| `cameras` | `gesture_enabled` | boolean NOT NULL DEFAULT false | D1 |
+| `cameras` | `inventory_label_min_scores` | jsonb NOT NULL DEFAULT '{}' | D2 |
+| `cameras` | `inventory_suppress` | jsonb NOT NULL DEFAULT '[]' | D2 |
+| `identities` | `item_label` | varchar(40) NULL | B4 |
+| `identity_samples` | `negative` | boolean NOT NULL DEFAULT false | B4/D2 |
+| `identity_samples` | `source` | varchar(16) NOT NULL DEFAULT 'auto' (`auto\|merge\|upload\|review`) | B4/D2 |
+| `inventory_items` | `identity_id` | integer NULL | B4 |
+| `inventory_items` | `identity_score` | double precision NULL | B4 |
+
+Neue Tabellen (`create_all`, Spalten siehe `models.py`):
+- `review_requests` (Modell `ReviewRequest`): id, kind, status, dedup_key, priority, question, camera_id, label,
+  inventory_item_id, identity_id, source_identity_id, score, threshold, bbox jsonb, crop_path, snapshot_path,
+  data jsonb, correct_label, created_at, answered_at, answer_source, expires_at.
+- `inventory_examples` (`InventoryExample`): id, label, camera_id, crop_path, bbox jsonb, positive, embedding
+  real[] NULL, review_id NULL, created_at – Beispielsammlung aus D2-Antworten (später Few-shot/visuelle Prompts).
+- `pet_visits` (`PetVisit`): id, identity_id NULL, label, camera_id, zone_id, purpose, event_id NULL, start_ts,
+  end_ts NULL, duration_s NULL.
+- `reports` (`Report`): id, kind (`daily|manual`), period_key (`"daily:YYYY-MM-DD"`, eindeutig; `manual` → NULL),
+  period_start, period_end, created_at, facts jsonb, text, html, generator, delivery jsonb.
+
+`ADDITIVE_INDEXES`: `ix_inventory_items_identity_id` auf `inventory_items (identity_id)`.
+Identität `kind` erlaubt zusätzlich `"item"` (Spalte bleibt varchar(8)). `display_name` unbenannt: „Gegenstand #N“.
+Zonen (JSON in `cameras.zones`) haben zusätzlich `"purpose": "food"|"water"|"litter"|null` (C3, keine Spalte).
+
+### W2.B Settings (zusätzlich)
+
+```jsonc
+{ ...,
+  // B4/D2 – Exemplare und Rückfragen (Werte aus messungen.md §3)
+  "item_match_threshold": 0.55,      // 0.2..0.95  Kosinus; Band [thr-0.15, thr) → Rückfrage statt Zuordnung
+  "item_min_px": 90,                 // 0..1000    kürzere Crop-Seite (px); kleiner → keine automatische Zuordnung
+  "review_enabled": true,
+  "review_max_per_day": 10,          // 0..100     neue Fragen je lokalem Tag (0 = keine neuen Fragen)
+  "review_max_open": 20,             // 1..200
+  "review_expire_h": 48,             // 1..720
+  "review_band": 0.10,               // 0.01..0.5  Score-Band unter der Schwelle für „unsicher“
+  "review_auto_tune": true,          // Schwellen je Kamera+Label nachführen
+  // C1/D1 – Pose und Gesten
+  "gesture_hold_s": 1.0,             // 0.5..5
+  "fall_default_dwell_s": 60,        // 5..3600   Vorschlag für min_dwell_s im Regel-Editor (posture)
+  "fall_track_grace_s": 30,          // 0..300    Nachlauf: liegender Track reißt ab → Liegedauer wird vererbt
+  // C3 – Haustier-Tagebuch
+  "pet_diary_labels": ["dog", "cat"],
+  "pet_diary_min_visit_s": { "food": 5, "water": 3, "litter": 10 },   // je 0..600; andere Schlüssel → 422
+  "pet_diary_notify": true,
+  "pet_diary_single_pet_fallback": true,
+  // B3 – Tagesbericht
+  "report_enabled": false,
+  "report_time": "21:00",            // HH:MM lokal
+  "report_days": [0, 1, 2, 3, 4, 5, 6],
+  "report_generator": "template",    // "template" | "llm" (llm nur mit llm_provider ≠ "none", sonst template)
+  "report_channels": { "mqtt": true, "webhook_url": null, "mail_to": [] },  // Push über notify_routes.report
+  // Gemeinsamer LLM-Client (B3, später A2-Cloud) – standardmäßig AUS
+  "llm_provider": "none",            // "none" | "openai_compat" | "anthropic"
+  "llm_base_url": null,              // openai_compat: z. B. "http://llm-bridge:8000/v1"; PUT "" → null
+  "llm_model": null,                 // Modell-ID (Pflicht für llm-Aufrufe)
+  "llm_timeout_s": 60 }              // 5..600
+```
+- Schlüssel kommen **nur** aus der Backend-Env: `VG_LLM_API_KEY` (openai_compat, optional) bzw.
+  `VG_ANTHROPIC_API_KEY`; nie in Settings, API-Antworten oder Logs. `VG_REPORT_LLM_API_KEY` entfällt.
+- `GET /settings` liefert zusätzlich read-only `llm_key_configured: {"openai_compat": bool, "anthropic": bool}`
+  (PUT ignoriert das Feld).
+
+### W2.C Regeln: Pose, Gesten, Wiederholung, Quittieren (C1/D1)
+
+```jsonc
+// Rule (zusätzlich)
+{ ..., "trigger": "enter|leave|dwell|time|posture|gesture",
+  "trigger_options": { "posture": "lying|sitting|standing", "max_motion": 0.02 | null, "exclude_zone_ids": [] }  // posture
+                   | { "gestures": ["arms_up","arm_left","arm_right","arms_cross"] },                           // gesture (min. 1)
+  "min_dwell_s": 60,            // posture: so lange muss die Haltung bestehen
+  "repeat_s": 120,              // 0 = aus, sonst 10..3600: erneut auslösen, solange das Event nicht quittiert/beendet ist
+  "repeat_max": 3 }             // 0..20 (0 = unbegrenzt, solange repeat_s > 0)
+```
+- Neue Platzhalter: `{posture}` (deutsch, z. B. „liegt“), `{gesture}` (z. B. „beide Arme hoch“), `{repeat}`
+  (0 = erste Auslösung).
+- Registry (`rules.register_trigger`): `posture` und `gesture` sind `track_based=True` und haben einen
+  **Track-Evaluator** (`TriggerSpec.evaluate`, siehe W2.I). `exclude_zone_ids`: in diesen Zonen wird nicht ausgelöst
+  (Sofa, Bett). `gesture` wird durch `vg/internal/gesture/{cid}` ausgelöst (Phase `"gesture"`).
+- Event (REST/WS) zusätzlich `"acknowledged_at": "..." | null`; `POST /events/{id}/ack` (Scope `write`) → Event,
+  setzt `acknowledged_at` (idempotent) und sendet WS `event/update`. Quittierte oder beendete Events werden nicht
+  wiederholt. `attributes` zusätzlich `posture?`, `posture_since?` (Unix-s), `motion?`.
+- Kamera (REST + `GET /api/internal/cameras`) zusätzlich `pose_enabled`, `gesture_enabled` (bei `PUT` nur geändert,
+  wenn im Body).
+
+**MQTT intern (Worker):**
+- `Obj.attributes` zusätzlich `posture?: "standing|sitting|lying|unknown"`, `motion?: float`; Track-`update`
+  zusätzlich bei Haltungswechsel (`attributes.posture`, `attributes.posture_since`).
+- Worker → `vg/internal/gesture/{camera_id}` (QoS 1, nicht retained, mit `worker_id`):
+  `{camera_id, track_id, gesture, score, held_s, ts, zones:[…], identity:{…}|null}`.
+- `vg/internal/system.models.pose` (`"off"|"loading"|"ready (…)"|"error: …"`), `perf.pose = {ms, crops_per_s}`.
+
+**Backend:** WS `{"type":"gesture", …wie MQTT…, "camera_name"}`; MQTT extern `{prefix}/gesture/{camera_slug}`
+(nicht retained) `{gesture, camera, camera_id, identity, ts}`.
+
+### W2.D Exemplare (B4) und Rückfragen (D2)
+
+```jsonc
+// Identity: kind += "item"; zusätzlich "item_label": "backpack" | null (nur bei item)
+// Sample zusätzlich: "negative": false, "source": "auto|merge|upload|review"
+// InventoryItem zusätzlich:
+{ ..., "identity": { "id": 31, "kind": "item", "display_name": "Annas Rucksack", "name": "Annas Rucksack" } | null,
+  "identity_score": 0.78 | null }
+// Camera zusätzlich (REST, PUT nur wenn im Body):
+{ ..., "inventory_label_min_scores": { "remote": 0.30 },              // 0.05..0.95, nur Vokabular-Schlüssel
+       "inventory_suppress": [ { "label": "remote", "bbox": [x1,y1,x2,y2], "review_id": 41 | null } ] }   // max. 200
+
+// ReviewRequest
+{ "id": 41, "kind": "inventory_label|inventory_identity|identity_match",   // erweiterbar über review.register_kind
+  "status": "open|yes|no|skipped|expired", "question": "Ist das eine Fernbedienung?",
+  "camera_id": 3 | null, "camera_name": "Wohnzimmer" | null, "label": "remote" | null, "name_de": "Fernbedienung" | null,
+  "inventory_item_id": 17 | null, "identity_id": 5 | null, "source_identity_id": 12 | null,
+  "score": 0.31 | null, "threshold": 0.35 | null, "bbox": [..] | null,
+  "crop_url": "/media/…" | null, "snapshot_url": "/media/…" | null, "data": {},
+  "created_at": "...", "answered_at": null, "answer_source": "ui|push|mcp|api" | null, "expires_at": "...",
+  "correct_label": null }
+```
+- **REST (Exemplare, B4):** `POST /identities {kind:"item", item_label, name}` (nur `item`, sonst 422; `item_label`
+  muss im Vokabular sein) → 201 Identity. `POST /identities/{id}/samples` multipart `file` (jpeg/png/webp ≤ 10 MB),
+  `bbox?="x1,y1,x2,y2"` (normiert) → 201 Sample (`source:"upload"`, `manual:true`); Worker antwortet nicht binnen
+  15 s → **503** „Analyse-Dienst nicht erreichbar“ (keine halbe Identität/kein Sample).
+  `POST /identities/{id}/samples/from-inventory {inventory_item_id}` → 201 Sample. Suche: `match.via` += `"identity"`,
+  `answer` nennt den Exemplar-Namen. `GET /identities/{id}/suggestions` lässt Ziele weg, die in einer Rückfrage mit
+  „Nein“ beantwortet wurden. `GET /identities?kind=` ohne `kind` liefert weiterhin alle Arten (auch `item`).
+- **REST (Rückfragen, D2):**
+  `GET /review?status=open&kind=&camera_id=&limit=50&offset=0&signed=` → `{items, total, open_count, asked_today, max_per_day}`
+  (offene nach `priority` absteigend, sonst neueste zuerst); `GET /review/{id}`;
+  `POST /review/{id}/answer {answer:"yes|no|skip", correct_label?}` (Scope `write`) → ReviewRequest; nicht offen → 409.
+  `GET /review/thresholds?camera_id=` → `[{camera_id, label, base, current, auto, yes, no}]`.
+  Signierte Antwort-Links ohne Login (D2): `GET /review/a/{id}?a=yes|no&exp=&sig=` → kleine HTML-Seite mit Knopf (kein
+  Beantworten beim Prefetch), `POST` derselben URL beantwortet (`answer_source:"push"`); `sig` wie `media_sign`, aber
+  `msg = "review:{id}:{a}:{exp}"`; falsch/abgelaufen → 403. `nginx` reicht `/api/review/a/` unverändert durch.
+- **WS:** `{"type":"review","action":"new|answered|expired","review":ReviewRequest}`; `inventory` wie bisher, Items
+  mit `identity`.
+- **Dedup/Limits (Kern in `backend/app/review.py`, K2):** Ein `dedup_key` wird nicht erneut gefragt, wenn er offen
+  ist, in den letzten 30 Tagen mit „Ja“ oder jemals mit „Nein“ beantwortet wurde. Höchstens `review_max_per_day` neue
+  Fragen je lokalem Tag und `review_max_open` offene; offene verfallen nach `review_expire_h` (`status:"expired"`).
+  Schlüssel-Schema (D2): `lbl:{cam}:{label}:{zelle10x10}`, `inst:{inventory_item_id}:{identity_id}`, `idm:{src}:{dst}`.
+- **Push:** Notification `source:"review"` über `notify_routes.review` (D2), mit signierten Antwort-Links
+  (`public_base_url` nötig). MQTT extern `{prefix}/review` (nicht retained) `{review, answer_urls:{yes,no}}`.
+
+**Intern:**
+- `GET /api/internal/cameras` je Kamera zusätzlich `inventory_suppress` (Liste wie oben), `inventory_review: bool`
+  (= `review_enabled`); `inventory_vocab[]` zusätzlich `instances: int` (Zahl der `item`-Identitäten mit diesem
+  `item_label`), und `min_score` ist bereits mit `inventory_label_min_scores` aufgelöst (Kamera-Wert vor
+  Vokabular-Wert, `null` = `inventory_min_score`).
+- `POST /api/internal/identify` mit `kind:"item"`, zusätzlich `label` (Vokabular-Schlüssel) und `item_id`
+  (Worker-Item-ID, statt `track_id`): Abgleich nur gegen Identitäten mit `item_label == label`; schlägt ein
+  negatives Sample das beste positive, ist es kein Treffer; legt **nie** eine neue Identität an
+  (`identity_id: null`); lernt automatisch nur bei Score ≥ Schwelle + 0,10, ohne Lernsperre, Crop ≥ `item_min_px`.
+  Umsetzung: `backend/app/item_identity.py::identify_item` (B4).
+- `vg/internal/inventory/{cid}`: Items zusätzlich `identity`, `identity_score`; Nachricht zusätzlich
+  `uncertain: [{label, score, bbox, crop_path}]` (≤ 3 je Durchlauf, Score in [min − band, min), je Kamera+Label
+  höchstens 1 Crop/10 min). Exemplar-Abgleich bei neuem Gegenstand, `moved`, sonst höchstens alle 10 min, nur für
+  Labels mit `instances > 0`. Treffer in einer Unterdrückungsfläche (gleiches Label, IoU ≥ 0,5) verwirft der Worker.
+
+### W2.E Embedding-Dienst (gemeinsam, K2) – `vg/internal/embed`
+
+Ein Topic-Paar für alle Bild-/Text-Embeddings (ersetzt B4 `embed` und B1 `history/encode`). Der Worker nutzt das
+**geteilte DINOv2** der Tiererkennung (`identify.PetModel`, 384-d, L2-normiert; 0 MB zusätzlich, wenn das
+Tiermodell geladen ist; lädt es sonst bei Bedarf). Modul `worker/vg_worker/embed.py` (`EmbedService`): eigener
+Thread, Warteschlange max. 32 (voll → Anfrage wird mit `ok:false, error:"busy"` beantwortet), Batch ≤ 8, läuft mit
+niedriger Priorität (wartet nicht auf die Detektion, blockiert sie aber auch nicht: kurze Batches).
+
+```jsonc
+// Backend → Worker: vg/internal/embed (QoS 1, nicht retained; retained Nachrichten ignoriert der Worker)
+{ "request_id": "hex", "kind": "item|image|text",
+  "path": "identities/31/upload_1.jpg" | null,    // relativ zu /data/media (oder image_b64)
+  "image_b64": "<JPEG/PNG base64>" | null,        // ≤ 4 MB, für Bilder außerhalb des Medienordners
+  "bbox": [x1,y1,x2,y2] | null,                   // normiert; Ausschnitt vor dem Embedding
+  "augment": false,                               // item: + Spiegelung und verkleinerte/verrauschte Fassungen
+  "text": null }                                  // kind text (W3, B1) – bis dahin ok:false, "kind text nicht unterstützt"
+// Worker → Backend: vg/internal/embed_result (QoS 1, mit worker_id)
+{ "request_id": "hex", "ok": true, "kind": "item", "model": "vit_small_patch14_dinov2.lvd142m", "dim": 384,
+  "embedding": [384 float] | null,                // bei augment: L2-normierter Mittelwert aller Fassungen
+  "variants": [[384 float], …] | null,            // nur bei augment: einzelne Fassungen (Original zuerst)
+  "width": 812, "height": 640,                    // Pixel des (ausgeschnittenen) Bildes
+  "ms": 6.1, "error": null }
+```
+- `kind:"item"` und `"image"` rechnen identisch (quadratisch auffüllen, 224 px, fp16); `item` mit `augment:true`
+  erzeugt: Original, gespiegelt, auf 120 px und auf 64 px verkleinert (Unschärfe, JPEG q=40) – Empfehlung aus
+  messungen.md §3.
+- Backend-API: `backend/app/embed_client.py::request(kind, *, path=None, image_bytes=None, bbox=None,
+  augment=False, text=None, timeout=15.0) -> EmbedResult` (blockierend, thread-sicher; `EmbedResult{embedding,
+  variants, dim, model, width, height, ms}`). Keine Antwort binnen `timeout` → `EmbedUnavailable`
+  („Analyse-Dienst nicht erreichbar“, Router → 503); `ok:false` → `EmbedError(<error>)` (Router → 422).
+- `vg/internal/system.perf.embed = {requests_per_min, ms, dropped}`; `models.embed` = Status des geteilten Modells.
+- Gemessen (K2, `cam_3` läuft parallel): Rechenzeit im Worker Median 8,7 ms (max. 12,6), Rundlauf Backend → Worker →
+  Backend Median 9,9 ms (max. 13,6); `augment` (4 Fassungen in einem Batch) 12 ms. Voraussetzung: `TCP_NODELAY` auf
+  den MQTT-Sockets von Worker und Backend (paho setzt es nicht; sonst +40 ms durch Delayed ACK) und
+  `set_tcp_nodelay true` in `mosquitto.conf`.
+
+### W2.F Haustier-Tagebuch (C3)
+
+- Zone `purpose` (siehe W2.A). Besuch beginnt mit `entered_zones` einer Zweck-Zone, endet mit `left_zones`/`end`;
+  gezählt ab `pet_diary_min_visit_s[purpose]`; Besuche desselben Tiers innerhalb von 60 s werden zusammengefasst.
+  Erfassung über `events.on_track` in `backend/app/pet_diary.py` (nur `pet_diary_labels`).
+- REST: `GET /pets/visits?identity_id=&purpose=&camera_id=&since=&until=&limit=100&offset=0&signed=` →
+  `{items:[PetVisit], total}`; `GET /pets/summary?days=14` → `[{identity:{id,kind,display_name,name}|null, label,
+  purposes:{food|water|litter:{today, normal:[lo,hi]|null, last_ts, daily:[{day, count}]}}}]`.
+  `PetVisit = {id, identity:{…}|null, label, camera_id, camera_name, zone_id, zone_name, purpose, event_id,
+  start_ts, end_ts, duration_s, thumb_url}`.
+- Hinweise: **keine** eigene Tabelle – Notification `source:"pet"`, `level:"warning"`, Ziele `notify_routes.pet`,
+  `data = {type:"too_few|too_many|long_gap", identity_id, purpose, day, value, expected:[lo,hi]}`,
+  `dedup_key = "pet:{identity_id|label}:{purpose}:{day}:{type}"`.
+- WS `{"type":"pet_visit","action":"new|update","visit":PetVisit}`. MQTT extern `{prefix}/pets/{pet_slug}/{purpose}`
+  (retain) `{today, last_ts}`.
+- Aufbewahrung: `pet_visits` wie Events (`retention_days_events`).
+
+### W2.G Tagesbericht (B3) und LLM-Client (K2)
+
+```jsonc
+// Report
+{ "id": 4, "kind": "daily|manual", "period_start": "...", "period_end": "...", "created_at": "...",
+  "text": "…", "html": "…", "generator": "template|llm:<modell>|template (Fallback)",
+  "facts": { … } ,                              // nur in GET /reports/{id} und preview
+  "delivery": { "mqtt": {"ok": true, "ts": "..."}, "push": {...}, "webhook": {...}, "mail": {"ok": false, "error": "SMTP nicht konfiguriert"} } }
+```
+- REST: `GET /reports?limit=30&offset=0` → `{items: Report ohne facts/html, total}`; `GET /reports/{id}?signed=`;
+  `DELETE /reports/{id}` → 204; `GET /reports/preview?since=&until=` (Scope `read`, Default heute 00:00 bis jetzt,
+  speichert nichts); `POST /reports/generate {since?, until?, deliver: false}` (Scope `write`) → Report.
+- Genau ein `daily` je lokalem Tag (`period_key` eindeutig); verpasster Lauf wird bis 6 h nach `report_time`
+  nachgeholt; Scheduler-Hook `report.tick()` (vom Backend-Ticker jede Sekunde aufgerufen, selbst gedrosselt).
+- Versand: MQTT extern `{prefix}/report` (retain) `{date, text, report_id, counts}`; Push als Notification
+  `source:"report"` über `notify_routes.report`; Webhook `report_channels.webhook_url`; Mail über Env
+  `VG_SMTP_HOST/PORT/USER/PASSWORD/FROM/STARTTLS`. Fehler je Kanal in `delivery`, nie Abbruch.
+- WS `{"type":"report","report":Report ohne facts}`. Aufbewahrung wie Events.
+- LLM nur mit `report_generator:"llm"` und `llm_provider ≠ "none"`; Fakten-JSON ohne Bilder/URLs;
+  Plausibilitätsprüfung (Uhrzeiten, Zahlen inkl. Zahlwörter, Namen müssen in den Fakten stehen), sonst
+  `template (Fallback)`.
+- **LLM-Client** `backend/app/llm_client.py` (K2): `configured() -> bool`, `complete(messages, *, system=None,
+  max_tokens=400, temperature=0.2, timeout=None) -> LLMResult{text, model, provider, ms, usage}`; Fehler →
+  `LLMError` (deutsche Meldung, ohne Schlüssel/URL-Geheimnisse). `openai_compat`: `POST {llm_base_url}/chat/completions`
+  (Bearer `VG_LLM_API_KEY`, falls gesetzt); `anthropic`: Messages-API `https://api.anthropic.com/v1/messages`
+  (Header `x-api-key` aus `VG_ANTHROPIC_API_KEY`, `anthropic-version: 2023-06-01`). Kein neues Paket (httpx).
+  Test-Server ohne Kosten: `scripts/llm_mock.py` (OpenAI-kompatibel, nur Standardbibliothek).
+
+### W2.H MCP
+
+- **Schreibwerkzeuge (Regel ab W2):** Tools mit Wirkung sind erlaubt. Sie rufen zuerst
+  `await common.require_write(ctx)` auf (prüft `scopes` aus `GET /auth/me`, 30 s gecacht) und liefern ohne `write`
+  `isError` „API-Key ohne Schreibrecht.“; Backend-Aufrufe mit Wirkung über `common.api_send(ctx, method, path,
+  json=…)`; Annotation `common.WRITE` (`read_only_hint=False`, `destructive_hint=False`). Lesende Tools bleiben
+  `READ_ONLY`.
+
+| Tool | Modul | Parameter | Rückgabe (`structuredContent`) |
+|---|---|---|---|
+| `list_alerts` | `alerts.py` (C1) | `active_only: bool = True`, `limit: int = 10` | `{total, items:[{event_id, camera_id, camera_name, label, posture, since, acknowledged_at, repeat, snapshot_url}]}` |
+| `acknowledge_alert` (write) | `alerts.py` (C1) | `event_id: str` | `{event_id, acknowledged_at}` |
+| `list_open_questions` | `review.py` (D2) | `limit: int = 10` | `{open_count, items:[{id, kind, question, camera_name, crop_url, created_at, expires_at}]}` |
+| `answer_question` (write) | `review.py` (D2) | `id: int`, `answer: "yes"\|"no"\|"skip"`, `correct_label: str?` | ReviewRequest (kompakt) |
+| `get_pet_diary` | `pets.py` (C3) | `pet: str?`, `days: int = 1` | `{pets:[{name, label, purposes:{…}}], visits:[…]}` aus `/pets/summary` + `/pets/visits?signed=1` |
+| `get_daily_report` | `reports.py` (B3) | `date: str?` (`YYYY-MM-DD`, `today`, `yesterday`) | Report (Text + Zustellstatus); ohne gespeicherten Bericht → Vorschau |
+
+- `find_object` liefert in `items[]` zusätzlich `identity_name` (B4, `null` ohne Exemplar).
+
+### W2.I Gemeinsame Bausteine (K2) – Python-APIs
+
+- **Track-Trigger-Evaluator** (`backend/app/rules.py`): `register_trigger(name, *, track_based, options_model,
+  label_de, evaluate=None)`. `evaluate(TriggerContext) -> list[str] | None` (Zonen, in denen ausgelöst wird; `None` =
+  nicht auslösen). `TriggerContext{rule, track: TrackState, msg, now (lokale Unix-s), phase:"start|update|end|tick|gesture",
+  state: dict}` – `state` ist je Regel+Track persistent (`TrackState.trigger_state[rule_id]`), z. B. für
+  Haltedauer/Wiederholungen. `events.Processor._evaluate` ruft Evaluatoren für alle Nicht-Standard-Trigger auf; `tick`
+  ruft sie jede Sekunde mit Phase `"tick"` für aktive Tracks auf (posture: Liegedauer). Cooldown, `static_match`
+  (Kamera/Label/Score/Identität/Zeitplan) und Bedingungen prüft weiterhin `events`.
+  `processor.dispatch_track_phase(camera_id, track_id, phase, msg)` wertet nur Evaluator-Trigger für einen laufenden
+  Track aus (für `vg/internal/gesture`). Wiederholung (`repeat_s/repeat_max`, Platzhalter `{repeat}`) setzt C1 in
+  `events.py` um.
+- **MQTT-Handler-Registry** (`backend/app/mqtt_bus.py`): `register_handler(kind, fn, *, direct=False)` für
+  `vg/internal/<kind>/…`; `fn(camera_id|None, msg)`; `direct=True` läuft im MQTT-Thread (nur für sehr kurze
+  Arbeit, z. B. `embed_result`), sonst im Track-Thread. Vorbelegt: `gesture` → `pose_events.handle_gesture`,
+  `embed_result` → `embed_client.handle_result`.
+- **Rückfragen-Kern** (`backend/app/review.py`): `register_kind(kind, *, label_de, on_answer)` mit
+  `on_answer(session, ReviewRequest, answer, correct_label)` (läuft vor dem Commit, Ausnahme → Antwort wird nicht
+  gespeichert, 422); `create(*, kind, dedup_key, question, priority=0.0, camera_id=None, label=None,
+  inventory_item_id=None, identity_id=None, source_identity_id=None, score=None, threshold=None, bbox=None,
+  crop_path=None, snapshot_path=None, data=None) -> dict | None` (None = abgeschaltet, Dublette oder Limit);
+  `answer(session, review_id, answer, *, source, correct_label=None) -> dict`; `review_json(r, signed=False)`;
+  `counts(session) -> {open_count, asked_today, max_per_day}`; `on_created(callback)` (D2: Push/MQTT);
+  `tick()` (Verfall). Dedup und Limits sind dort fertig, die Erzeuger und Antwort-Wirkungen baut D2.
+- **Platzhalter-Module mit fertiger Verdrahtung** (vom Fach-Agenten zu füllen, nicht umbenennen):
+  `backend/app/pose_events.py` (C1), `item_identity.py` (B4), `pet_diary.py` (C3), `report/` (B3, `tick()`),
+  Router `routers/review.py` (D2 ergänzt), `routers/pets.py` (C3), `routers/reports.py` (B3);
+  Worker `worker/vg_worker/embed.py` (fertig); MCP `mcp/tools/{alerts,review,pets,reports}.py`.
+- **Oberfläche:** Seiten `/bestaetigen` (`pages/Review.tsx`, „Bitte bestätigen“, Zähler in der Kopfzeile),
+  `/tiere` (`pages/Pets.tsx`), `/berichte` (`pages/Reports.tsx`); Einstellungs-Karten
+  `admin/ReviewSettings.tsx` (D2), `admin/PersonSettings.tsx` (C1/D1), `admin/PetSettings.tsx` (C3),
+  `admin/ReportSettings.tsx` (B3), `admin/AiSettings.tsx` (K2, LLM-Client). Typen in `types.ts`:
+  `ReviewRequest`, `ReviewKind`, `ReviewStatus`, `ReviewList`, `ReviewAnswerInput`, `ReviewThreshold`, `ReviewMsg`,
+  `InventorySuppress`, `Posture`, `GestureName`, `GestureMsg`, `PostureTriggerOptions`, `GestureTriggerOptions`,
+  `ZonePurpose`, `PetVisit`, `PetSummary`, `PetPurposeStats`, `PetVisitMsg`, `Report`, `ReportList`,
+  `ReportChannels`, `ReportMsg`, `ReportGenerateInput`, `LlmProvider`, `ItemIdentityInput`; API in `lib/api.ts`:
+  `reviews`, `review`, `answerReview`, `reviewThresholds`, `ackEvent`, `createItemIdentity`, `uploadSample`,
+  `sampleFromInventory`, `petVisits`, `petSummary`, `reports`, `report`, `deleteReport`, `reportPreview`,
+  `generateReport`; Mock-Routen in `lib/mock.ts`.
