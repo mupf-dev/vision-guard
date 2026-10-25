@@ -366,7 +366,7 @@ def tick() -> None:
 
 
 def drop_camera(camera_id: int) -> None:
-    """Kamera gelöscht: Zustand und Log entfernen, externes Topic räumen."""
+    """Kamera gelöscht: Zustand, Log und Referenzbilder entfernen, externes Topic räumen."""
     cam = registry.get(camera_id)
     with _lock:
         _cams.pop(camera_id, None)
@@ -378,6 +378,9 @@ def drop_camera(camera_id: int) -> None:
             s.commit()
     except Exception:  # noqa: BLE001
         log.exception("Gesundheits-Log Kamera %s nicht gelöscht", camera_id)
+    from .util import safe_remove
+    for mode in ("day", "night"):
+        safe_remove(f"health/cam{camera_id}_{mode}.jpg")
     if cam:
         _publish_external(cam, None)
 
