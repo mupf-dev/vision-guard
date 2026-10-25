@@ -701,6 +701,22 @@ werden geloggt.
 - Paarung: `disappeared` + `appeared` mit gleichem `label` und gleicher Kamera → ein `moved` (nächster Mittelpunkt
   zuerst); ein Worker-Neustart erzeugt so kein Paar. Rauschfilter: kürzer als `inventory_change_min_s` `present`
   → kein `appeared` (mit `include_transient=1` als `transient`). Modul `backend/app/inventory_diff.py`.
+- Ergänzungen der Umsetzung (B2, additiv):
+  - `since`/`until` verstehen zusätzlich `now`/`jetzt`, `heute`, `heute morgen`, `gestern` sowie `45s`, `1w`,
+    `90 min`, `2 Tage`; ISO ohne Zeitzone = lokale Zeit. `morning` vor 06:00 = gestriger Morgen. `until` in der
+    Zukunft wird auf jetzt gekürzt; `since ≥ until` → 422. `limit` 1..1000.
+  - Rauschfilter gilt in beide Richtungen: Zustandsabschnitte (sichtbar, weg, `stale`) kürzer als
+    `inventory_change_min_s` werden eingeschmolzen; ein noch laufender Abschnitt zählt erst nach der Mindestdauer
+    (ein frisch verschwundener Gegenstand erscheint also erst nach 120 s als `disappeared`). Kurze `stale`-Phasen
+    (Worker-Neustart) zählen nicht.
+  - `transient` = vorher und nachher nicht da, im Zeitraum aber (abgeschlossen) sichtbar – unabhängig von der
+    Dauer; Text „zwischendurch da, inzwischen wieder weg“. Ist es nur die alte/neue Zeile eines Gegenstands an
+    derselben Stelle (≤ 0,10), entfällt es; ein `appeared` übernimmt dann den früheren Zeitpunkt.
+  - Paarung ohne Abstandsgrenze; liegt der neue Fund an derselben Stelle (≤ 0,10, gleiche Zonen), wird gar nichts
+    gemeldet. Liefert eine Kamera zu `until` Gegenstände (`present`), gelten ihre übrigen `stale`-Zeilen als
+    Altlast (nicht `uncertain`, sondern wie `missing`).
+  - `before`/`after`: `crop_url` nur bei `state == "present"`, sonst `null`. `disappeared.before` = letzter
+    sichtbarer Stand, `disappeared.after` = Zustand `missing`; `appeared.before` = `null`.
 
 ### W1.F C5 Kamera-Gesundheit (Umsetzung C5)
 

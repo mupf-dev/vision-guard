@@ -200,23 +200,29 @@ class Verdict:
     type: Optional[str]          # appeared|disappeared|moved?|uncertain|transient|None
     at: Optional[datetime] = None
     check_moved: bool = False
+    after_cls: str = ABSENT
 
 
 def classify(points: list[tuple[datetime, str]], since: datetime, until: datetime, min_s: float,
-             initial: Optional[str] = None) -> Verdict:
-    """Zustand zu `since` gegen Zustand zu `until` (beides entprellt)."""
+             initial: Optional[str] = None, stale_as_absent: bool = False) -> Verdict:
+    """Zustand zu `since` gegen Zustand zu `until` (beides entprellt). `stale_as_absent`: die Kamera liefert zu
+    `until` nachweislich wieder Daten (andere Gegenstände sichtbar) – ein `stale` am Ende ist dann eine
+    Altlast (z. B. nach Worker-Neustart als neue Zeile erkannt) und zählt als nicht mehr da."""
     raw = build_segments(points, until, initial)
     segs = debounce(raw, min_s)
     after = segs[-1]                      # alle Abschnitte enden spätestens bei `until`
     before_cls = known_cls_at(segs, since)
-    if after.cls == STALE:
-        return Verdict("uncertain", after.start if after.start != NEG_INF else since)
-    if before_cls == ABSENT and after.cls == PRESENT:
-        return Verdict("appeared", after.start)
-    if before_cls == PRESENT and after.cls == ABSENT:
+    a_cls = after.cls
+    if a_cls == STALE:
+        if not stale_as_absent:
+            return Verdict("uncertain", after.start if after.start != NEG_INF else since, after_cls=STALE)
+        a_cls = ABSENT
+    if before_cls == ABSENT and a_cls == PRESENT:
+        return Verdict("appeared", after.start, after_cls=PRESENT)
+    if before_cls == PRESENT and a_cls == ABSENT:
         return Verdict("disappeared", after.start)
-    if before_cls == PRESENT and after.cls == PRESENT:
-        return Verdict(None, None, check_moved=True)
+    if before_cls == PRESENT and a_cls == PRESENT:
+        return Verdict(None, None, check_moved=True, after_cls=PRESENT)
     # vorher und nachher nicht da: im Zeitraum kurz sichtbar?
     # nur abgeschlossene Abschnitte – ein noch laufender, junger Fund ist (noch) unbestätigt
     shown = [s for s in raw[:-1] if s.cls == PRESENT and s.end > since]
@@ -390,6 +396,11 @@ def compute_changes(db: Session, since: datetime, until: Optional[datetime] = No
     initial, trans = _transitions(db, ids, t0, until)
     verdicts: dict[int, Verdict] = {iid: classify(trans[iid], since, until, min_s, initial.get(iid))
                                     for iid in ids}
+    # Kameras, die zu `until` nachweislich Daten lieferten: dortige `stale`-Zeilen sind Altlasten
+    alive = {items[i].camera_id for i, v in verdicts.items() if v.after_cls == PRESENT}
+    for iid, v in list(verdicts.items()):
+        if v.type == "uncertain" and items[iid].camera_id in alive:
+            verdicts[iid] = classify(trans[iid], since, until, min_s, initial.get(iid), stale_as_absent=True)
     involved = [i for i, v in verdicts.items() if v.type or v.check_moved]
     last_present_until = _last_rows(db, involved, until, present_only=True)
     last_until = _last_rows(db, involved, until)
