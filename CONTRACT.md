@@ -1184,3 +1184,288 @@ niedriger Priorität (wartet nicht auf die Detektion, blockiert sie aber auch ni
   `reviews`, `review`, `answerReview`, `reviewThresholds`, `ackEvent`, `createItemIdentity`, `uploadSample`,
   `sampleFromInventory`, `petVisits`, `petSummary`, `reports`, `report`, `deleteReport`, `reportPreview`,
   `generateReport`; Mock-Routen in `lib/mock.ts`.
+
+## Nachträge: Welle 3 – Bildverständnis & Gedächtnis (Frag die Kamera, Sensoren/Vorräte, Zeitmaschine)
+
+Verbindlich wie der Rest, rein additiv. Grundlage: `docs/plan/roadmap/00-wellenplan.md` (Abschnitt 2, W3), die
+Entwürfe `a2-a3-…`, `c3-c4-c5-…` (C4), `b1-…` und `messungen.md` (§5 B1, §6 A2). Angelegt im Kickoff K3;
+Fach-Agenten (A2, A3+C4, B1) ändern diesen Abschnitt, `db.py`, `models.py` und die Settings-Defaults nicht selbst.
+Wo dieser Abschnitt einem Entwurf widerspricht, gilt dieser Abschnitt (insbesondere: C4 `supply_items`,
+`vg/internal/supplies`, `rules.sensor`, B1 `history/encode` und das einseitige `vg/internal/gpu` entfallen).
+
+### W3.A Datenbank (pgvector)
+
+- Dienst `db` läuft ab K3 auf **`pgvector/pgvector:0.8.2-pg17-bookworm`** mit dem neuen Volume `db-data-pgv`
+  (Umzug per Dump/Restore: `scripts/db-migrate-pgvector.sh`; Rückfall auf das alte Volume `db-data` mit
+  `postgres:17-alpine`: `scripts/db-rollback-pgvector.sh`, schreibt `docker-compose.override.yml`). Backups unter
+  `~/vision-guard-backups/` (außerhalb des Repos, 600).
+- `init_db()` führt `CREATE EXTENSION IF NOT EXISTS vector` aus. Klappt das nicht (alte DB nach Rückfall), bleibt
+  `db.vector_available()` `False`: Tabellen mit Vektorspalten werden **nicht** angelegt, B1 meldet sich ab
+  (`/system.db.vector = false`), alles andere läuft. Tabellen mit Vektorspalten tragen im Modell
+  `__table_args__ = {"info": {"vector": True}}` und werden nur dann angelegt (eigener Schritt nach `create_all`,
+  inkl. ihrer Indizes aus `db.VECTOR_INDEXES`).
+- Vektortyp: `backend/app/vector.py::HalfVec(dim)` (SQLAlchemy-Typ für `halfvec(dim)`, ohne Zusatzpaket; Werte
+  als `list[float]`/`numpy`), Vergleich `HistoryFrame.embedding.cosine_distance(vec)` (Operator `<=>`).
+
+| Tabelle | Spalte | Typ / Default | Thema |
+|---|---|---|---|
+| `cameras` | `vlm_cloud_allowed` | boolean NOT NULL DEFAULT false | A2 |
+| `cameras` | `history_enabled` | boolean NOT NULL DEFAULT false | B1 |
+| `cameras` | `history_interval_s` | double precision NOT NULL DEFAULT 30 (5..600) | B1 |
+| `cameras` | `history_tiling` | boolean NOT NULL DEFAULT false | B1 |
+
+Neue Tabellen (`create_all`, Spalten siehe `models.py`):
+- `ask_log` (`AskLog`, A2): id, ts, camera_id, question, region jsonb NULL, answer, yes_no, engine, model, ms,
+  snapshot_path, source (`ui|api|mcp|sensor`), token_name NULL, error NULL.
+- `virtual_sensors` (`VirtualSensor`, A3): id, name, camera_id, enabled, kind, region jsonb (Polygon), params jsonb,
+  state_set, supply, verify_vlm, interval_s, vlm_max_age_s, change_threshold, confirm_n, state, value NULL,
+  since NULL, last_eval NULL, last_engine NULL, last_vlm_ts NULL, snapshot_path NULL, created_at, updated_at.
+- `sensor_history` (`SensorHistory`, A3): id, sensor_id (FK, CASCADE), ts, state, value NULL, engine NULL,
+  snapshot_path NULL; Index `ix_sensor_history_sensor_ts (sensor_id, ts)`.
+- `sensor_references` (`SensorReference`, A3): id, sensor_id (FK, CASCADE), state (`on|off|full|half|empty`),
+  image_path, embedding real[] NULL, created_at.
+- `shopping_list` (`ShoppingItem`, C4): id, name, note, source (`auto|manual|mcp`), sensor_id NULL, created_at,
+  done_at NULL.
+- `history_frames` (`HistoryFrame`, B1, **nur mit pgvector**): id bigserial, camera_id, ts, last_ts, tile smallint
+  (0 = ganzes Bild, 1..4 Kacheln), bbox jsonb NULL, embedding `halfvec(768)`, thumb_path NULL, model varchar(60).
+  Indizes (`db.VECTOR_INDEXES`): `ix_history_frames_camera_ts (camera_id, ts)`, `ix_history_frames_ts (ts)`,
+  `ix_history_frames_embedding` = HNSW `embedding halfvec_cosine_ops`. Suche mit
+  `SET LOCAL hnsw.iterative_scan = relaxed_order` bei Filtern.
+
+### W3.B Settings (zusätzlich)
+
+```jsonc
+{ ...,
+  // A2 – Frag die Kamera (Werte aus messungen.md §6)
+  "vlm_enabled": true,                 // lokales VLM (Dienst vlm, Compose-Profil vlm) nutzen, wenn erreichbar
+  "vlm_model": "moondream2-int4",      // moondream2-int4 | smolvlm-500m | qwen25vl-3b-nf4 (nur nicht-kommerziell)
+  "vlm_idle_unload_s": 120,            // 30..3600  danach entlädt der Dienst das Modell und gibt die GPU frei
+  "vlm_need_mb": 3000,                 // 500..6000 Lease-Bedarf (torch + eigener CUDA-Kontext)
+  "vlm_cloud_model": null,             // Modell-ID für den Cloud-Fallback über llm_client (llm_provider);
+                                       // null = Cloud aus. Zusätzlich nötig: cameras.vlm_cloud_allowed
+  "retention_days_ask": 7,             // 1..365  ask_log + Bilder unter ask/
+  // A3+C4 – Sensoren und Vorräte
+  "retention_days_sensors": 30,        // 1..3650 sensor_history
+  "shopping_list_auto": true,          // Vorrats-Sensoren (supply) setzen bei low/out Einträge, bei ok erledigt
+  // B1 – Zeitmaschine (messungen.md §5)
+  "retention_days_history": 14,        // 1..365
+  "history_min_change": 0.05,          // 0..0.5  1−cos unter diesem Wert → nur last_ts verlängern
+  "history_model": "siglip2-b16-256" } // siglip2-b16-256 | mobileclip2-s0 (Wechsel macht alte Vektoren unsuchbar)
+```
+`PUT /settings`: `vlm_cloud_model: ""` setzt auf `null` zurück. `notify_routes.sensor` existiert seit W1.
+
+### W3.C GPU-Lease (K3, Worker) – `vg/internal/gpu/*`
+
+Ein Dienst mit großem Modell (A2: `vlm`) leiht sich die GPU vom Worker. Der Worker entlädt dafür alle
+registrierten entladbaren Modelle (heute YOLOE des Inventars, ab B1 der SigLIP-Bildturm), ruft
+`torch.cuda.empty_cache()` und meldet den freien Speicher per **NVML** (nicht `cudaMemGetInfo`, WSL2).
+Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
+
+```jsonc
+// Dienst → Worker: vg/internal/gpu/request (QoS 1, nicht retained)
+{ "request_id": "hex", "holder": "vlm", "need_mb": 3000, "max_s": 300 }   // max_s 10..1800 (Default 300)
+// Worker → Dienst: vg/internal/gpu/granted (QoS 1, mit worker_id)
+{ "request_id": "hex", "holder": "vlm", "ok": true, "free_mb": 3410, "need_mb": 3000,
+  "unloaded": ["inventory"], "until": 1761300300.0, "ms": 420.0, "error": null }
+// Dienst → Worker: vg/internal/gpu/release (QoS 1)
+{ "request_id": "hex", "holder": "vlm" }
+// Worker → Dienst: vg/internal/gpu/released (QoS 1, mit worker_id)
+{ "request_id": "hex", "holder": "vlm", "reason": "release|expired" }
+```
+- `unloaded` = alle registrierten entladbaren Modelle, die jetzt **nicht** im VRAM sind (auch solche, die gar nicht
+  geladen waren). `ok:false` mit `error`: `"busy: GPU-Lease von <holder>"` (anderer Halter aktiv; nichts entladen) oder
+  `"zu wenig VRAM: <free_mb> < <need_mb>"` (entladen, Lease **läuft trotzdem** – der Dienst gibt sie mit `release`
+  zurück oder lädt ein kleineres Modell). Der Dienst wartet höchstens **10 s** auf `granted`, sonst → 503
+  „Bildmodell nicht verfügbar“.
+- Erneutes `request` mit derselben `request_id` verlängert die Lease (`until` = jetzt + `max_s`) und wird sofort
+  wieder mit `granted` beantwortet. Läuft `until` ab, gibt der Worker die GPU selbst frei (`released`,
+  `reason:"expired"`). Nach dem Freigeben lädt das Inventar YOLOE beim nächsten Takt neu (≈ 1–2 s).
+- Während der Lease: `models.inventory = "paused: GPU-Lease vlm"`, Inventar-Takte verfallen (`perf.inventory.skipped`),
+  Inventar-Nachrichten pausieren (das Backend setzt nach 3 × Intervall auf `stale`, wie bei einem Worker-Ausfall).
+- `vg/internal/system` zusätzlich `gpu_lease: {request_id, holder, since, until, need_mb, free_mb} | null`;
+  `GET /system.worker` gibt `gpu_lease` und `perf` (seit K3) mit aus.
+- Worker-API (`worker/vg_worker/gpu_lease.py`): `GpuLeaseManager` (an `Pipeline.lease`) mit
+  `register(name, pause: Callable[[str], bool], resume: Callable[[], None])` – `pause(holder)` entlädt
+  blockierend (≤ 8 s) und liefert `True`, wenn das Modell aus dem VRAM ist; `resume()` erlaubt das Neuladen.
+  `active() -> bool`, `status() -> dict | None`. Referenz-Client und Prüfwerkzeug:
+  `python -m vg_worker.leasetest --need-mb 3000 --hold 5` (im Worker-Container, ohne GPU-Zugriff).
+
+### W3.D Frame-Tap (K3, Worker) – Abnehmer pro Kamera
+
+`worker/vg_worker/frametap.py`: `FrameTapHub` an `Pipeline.taps`. Nach jedem analysierten Detect-Frame (in
+`Pipeline._post`, nach Tracking) bekommt jeder registrierte Abnehmer – gedrosselt je Kamera – das Bild.
+- `taps.register(name, callback, *, cameras: Callable[[int], bool], interval_s: float | Callable[[int], float] = 1.0)`
+  → `FrameTap`. `callback(TapFrame)` läuft im **eigenen Thread** des Abnehmers; je Kamera liegt höchstens ein
+  Frame bereit (neuer ersetzt älteren = verwerfen statt queuen). Ausnahmen werden geloggt (höchstens 1×/min) und
+  stoppen weder Detektion noch andere Abnehmer.
+- `TapFrame{camera_id, ts (Worker-Wanduhr wie detections.ts), image (BGR uint8, Detect-Auflösung, NUR lesen),
+  width, height, objects: [Obj wie in vg/internal/detections], persons: [[x1,y1,x2,y2]] (rohe Personen-Boxen ≥ 0,3,
+  normiert), runtime}` – `runtime` = `CameraRuntime` (für `KeyframeGrabber`, z. B. B1/Vollauflösung).
+- `taps.unregister(name)`; `vg/internal/system.perf.taps = {name: {frames_per_min, ms, dropped}}`.
+- Abnehmer in W3: `sensors` (A3, CPU-Messungen), `history` (B1, Bildquelle wenn kein Keyframe).
+
+### W3.E Frag die Kamera (A2)
+
+- Dienst **`vlm`** (`vlm/`, Compose-Profil `vlm`, intern `vlm:8200`, kein Port nach außen; Basis
+  `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, Pins wie `vlm/Dockerfile.bench`). Backend-Env `VG_VLM_URL`
+  (Default `http://vlm:8200`).
+  - `POST /infer {image_b64, question, region?: [x1,y1,x2,y2], mode: "query"|"yesno", max_tokens?: int}` →
+    `{answer, yes_no: "yes"|"no"|"unknown", ms, model}`; 429 beschäftigt (Warteschlange 1), 503 nicht verfügbar.
+  - `GET /health` → `{state: "off|loading|ready|error: …", model, vram_mb, last_used}`.
+  - Vor dem Laden: GPU-Lease (W3.C, `need_mb` = Setting `vlm_need_mb`, das Backend reicht Settings im Request-Header
+    nicht durch – der Dienst liest `GET /api/internal/settings`). Nach `vlm_idle_unload_s`: entladen,
+    `empty_cache`, `release`.
+- Backend: `backend/app/vlm.py` (Bild über go2rtc `frame.jpeg?src=cam_N`, Ausschnitt, an `vlm` oder Cloud),
+  `backend/app/cloud_vlm.py` (über `llm_client.complete(..., images=[jpeg])`, Modell `vlm_cloud_model`),
+  Router `backend/app/routers/ask.py`. `/system.worker.models.vlm` ergänzt das Backend aus `vlm /health`.
+- REST:
+  - `POST /cameras/{id}/ask {question: 1..300, region?: [x1,y1,x2,y2], engine?: "auto"|"local"|"cloud"}` → `AskResult`.
+    **Scope `read` genügt**, Rate-Limit **10/min je API-Key** (Sitzungen: 10/min je Benutzer) über
+    `auth.require_read_limited("ask", 10)` → 429 „Zu viele Anfragen (max. 10/min)“ mit `Retry-After`.
+    Fehler: 503 „Bildmodell nicht verfügbar“, 429 „Bildmodell beschäftigt“, 403 „Cloud für diese Kamera nicht
+    freigegeben“, 409 „Kamera ist deaktiviert“, 502 „Kamerabild nicht verfügbar“.
+  - `GET /ask?camera_id=&limit=20&offset=0&signed=` → `{items: AskResult[], total}`; `DELETE /ask/{id}` → 204.
+```jsonc
+// AskResult
+{ "id": 7, "camera_id": 3, "camera_name": "Wohnzimmer", "question": "Is the light on?", "region": null,
+  "answer": "Yes, the ceiling light is on.", "yes_no": "yes|no|unknown", "engine": "local|cloud",
+  "model": "moondream2-int4", "ms": 1012, "snapshot_url": "/media/ask/…jpg", "ts": "...", "source": "ui|api|mcp|sensor" }
+```
+- Medien `ask/YYYY-MM-DD/cam{N}_{unix}.jpg` (beantwortetes Standbild), Aufbewahrung `retention_days_ask`.
+- Prompts intern englisch; Antworten werden **nicht** übersetzt (Vorlagen in der UI; MCP-Beschreibung bittet um
+  englische Fragen). `answer` ist Modelltext, `yes_no` heuristisch (`unknown` erlaubt).
+
+### W3.F Virtuelle Sensoren und Vorräte (A3+C4)
+
+```jsonc
+// VirtualSensor
+{ "id": 4, "name": "Bad-Fenster", "camera_id": 3, "camera_name": "Wohnzimmer", "room": "Wohnzimmer" | null,
+  "enabled": true,
+  "kind": "brightness|blink|reference|inventory_count|fill|vlm",
+  "region": [[0.62,0.10],[0.80,0.10],[0.80,0.45],[0.62,0.45]],   // Polygon wie Zonen (≥ 3 Punkte); Rechteck = 4 Punkte
+  "params": { "threshold": 0.55 },   // je Art, siehe unten
+  "state_set": "binary|level",       // binary: on|off|unknown; level: ok|low|out|unknown
+  "supply": false,                   // Vorrat (nur level): low/out → Einkaufsliste (shopping_list_auto)
+  "verify_vlm": false,               // billige Art liefert Kandidaten, VLM bestätigt den Wechsel (A2 nötig)
+  "interval_s": 10,                  // 2..3600 (vlm: ≥ 60)
+  "vlm_max_age_s": 900,              // 60..86400 VLM höchstens so oft bei unverändertem Bild
+  "change_threshold": 0.08,          // 0..1  Änderungsmaß, ab dem das Bild als verändert gilt
+  "confirm_n": 2,                    // 1..10 gleiche Messungen in Folge für einen Zustandswechsel (Hysterese)
+  "state": "on|off|ok|low|out|unknown", "value": 0.71 | null, "since": "...", "last_eval": "...",
+  "last_engine": "cheap|local|cloud" | null, "snapshot_url": "/media/…" | null,
+  "state_text": "an seit 14:02" }
+```
+| `kind` | `state_set` | `params` (Defaults) | Auswertung |
+|---|---|---|---|
+| `brightness` | binary | `{threshold: 0.5, invert: false}` | Worker: mittlere Helligkeit 0..1 im Bereich; on wenn ≥ threshold (invert: ≤) |
+| `blink` | binary | `{min_std: 0.05, window_s: 3}` | Worker: Std.-Abw. der Helligkeit über `window_s`; on wenn ≥ min_std |
+| `reference` | binary | `{}` | Worker: DINOv2-Ähnlichkeit zu Referenzen `on`/`off` (je ≤ 5); value = P(on) |
+| `inventory_count` | binary oder level | `{labels: [..] (≥ 1), min_count: 1}` | Backend: Gegenstände `present` mit Mittelpunkt im Bereich; binary on ⇔ count ≥ min_count; level ok ≥ min_count, low 1..min_count−1, out 0 |
+| `fill` | level | `{low_below: 0.4, out_below: 0.15}` | Worker: DINOv2-Ähnlichkeit zu Referenzen `full`/`half`/`empty` → Füllstand 0..1 |
+| `vlm` | binary | `{question: str 1..300}` | Backend über A2 (`source:"sensor"`); yes → on, no → off, sonst unknown |
+
+- Personen im Bereich (`persons` des Frame-Taps, Überlappung > 10 %) → `occluded:true`, Messung zählt nicht.
+- REST (Präfix `/api`): `GET /sensors?camera_id=&room=&kind=&supply=&signed=` → `VirtualSensor[]`;
+  `POST /sensors` (SensorIn = VirtualSensor ohne Zustandsfelder) → 201; `GET/PUT/DELETE /sensors/{id}`;
+  `POST /sensors/{id}/evaluate` (write) → VirtualSensor; `GET /sensors/{id}/history?limit=50` (1..500) →
+  `[{ts, state, value, engine, snapshot_url}]` neueste zuerst; `GET /sensors/{id}/references` →
+  `[{id, state, image_url, created_at}]`; `POST /sensors/{id}/references {state}` (write; aktuelles Bild, Ausschnitt
+  des Bereichs; max. 5 je Zustand → 422) → SensorReference; `DELETE /sensors/{id}/references/{rid}` → 204.
+- Einkaufsliste: `GET /shopping-list?done=false|true|all` (Default `false`) → `{items: ShoppingItem[], open_count}`;
+  `POST /shopping-list {name: 1..100, note?: ≤ 300}` (write; offener Eintrag gleichen Namens → derselbe, 200 statt
+  201); `PATCH /shopping-list/{id} {done?, name?, note?}`; `DELETE /shopping-list/{id}` → 204.
+  `ShoppingItem = {id, name, note, source: "auto|manual|mcp", sensor_id, created_at, done_at, done}`.
+- WS: `{"type":"sensor","sensor":VirtualSensor}` (Anlegen/Ändern/Zustandswechsel; Löschen:
+  `{"type":"sensor","sensor":{"id","deleted":true}}`), `{"type":"shopping_list","action":"new|update|delete","item":ShoppingItem}`.
+- MQTT intern: Worker → `vg/internal/sensor/{camera_id}` (QoS 0, je Messung, mit `worker_id`):
+  `{camera_id, ts, frame_ts, values: [{sensor_id, value, change, occluded, scores: {on,off}|{full,half,empty}|null}]}`
+  – nur Arten `brightness|blink|reference|fill`. `GET /api/internal/cameras` je Kamera zusätzlich
+  `sensors: [{id, kind, region, params, interval_s, change_threshold, references: [{id, state, path}]}]` (nur
+  aktive Sensoren dieser Arten). `vg/internal/system.perf.sensors = {per_min, ms}`.
+- MQTT extern: `{prefix}/sensor/{sensor_slug}` → `on|off|ok|low|out|unknown` (retain),
+  `{prefix}/sensor/{sensor_slug}/attributes` → VirtualSensor (signierte URLs, retain);
+  `{prefix}/shopping_list` → `{count, items: [name]}` (retain). `sensor_slug` = `util.slugify(name)`, bei
+  Gleichstand mit Suffix `_{id}`. `shopping_list` ist reservierter Slug.
+- Hinweise: Vorrats-Sensoren auf `low`/`out` → Notification `source:"sensor"`, `level:"info"`, Ziele
+  `notify_routes.sensor`, `dedup_key = "sensor:{id}:{state}:{YYYY-MM-DD}"`.
+- **Regeln:** Trigger `sensor` (ohne Track → **kein Event**, Notification + Aktionen wie bei `time`)
+  mit `trigger_options = {sensor_id: int, state: "on|off|ok|low|out|any"}`; Bedingung
+  `{type: "sensor", sensor_id: int, state: "on|off|ok|low|out|unknown"}` (für alle Trigger). Neue Platzhalter
+  `{sensor}` (Name), `{sensor_state}` (deutsch: an/aus/ok/knapp/leer/unklar). `snapshot`/`clip` in Sensor-Regeln:
+  Snapshot über `cmd` ohne Event (A3), Clip übersprungen.
+- Aufbewahrung: `sensor_history` nach `retention_days_sensors`; erledigte Einkaufseinträge nach 30 Tagen.
+
+### W3.G Zeitmaschine (B1)
+
+- Kamerafelder `history_enabled`, `history_interval_s`, `history_tiling` (REST und `GET /api/internal/cameras`).
+- Modell `siglip2-b16-256` = open_clip `ViT-B-16-SigLIP2-256`/`webli` (`open_clip_torch==3.2.0`, eigene
+  Dockerfile-Schicht, Gewichte nach `/models/history/`): Bildturm fp16 auf der GPU (entladbar per Lease),
+  Textturm auf der CPU. 768-d, L2-normiert.
+- MQTT intern: Worker → `vg/internal/history/{camera_id}` (QoS 1, mit `worker_id`):
+  `{camera_id, ts, model, dim, thumb_path|null, extend: bool, vectors: [{tile, bbox:[x1,y1,x2,y2], vec_b64}]}`
+  (`vec_b64` = float16 little-endian, L2-normiert; `extend:true` → nur `last_ts` der letzten Zeile verlängern,
+  `vectors` leer). `vg/internal/system`: `models.history`, `perf.history = {per_min, ms, skipped}`.
+- **Textkodierung über `vg/internal/embed`** (ersetzt `history/encode`): Request zusätzlich
+  `model: "dinov2"|"siglip2"` (Default `dinov2` für item/image, `siglip2` für text);
+  `{kind:"text", text:"roter Karton", model:"siglip2"}` → `embed_result {embedding:[768], dim:768,
+  model:"ViT-B-16-SigLIP2-256"}`. `kind:"image"` mit `model:"siglip2"` = Bild-Suche (optional). Backend:
+  `embed_client.request("text", text=…, model="siglip2", timeout=5)` – Timeout → 503 „Textsuche derzeit nicht verfügbar“.
+- REST: `GET /history/search?q=&camera_id=&room=&since=&until=&limit=10&signed=` →
+  `{query, model, items: [HistoryEpisode]}`; `HistoryEpisode = {camera_id, camera_name, room, start_ts, end_ts,
+  best_ts, score (0..100), tile_bbox, thumb_url, frames}` (Treffer derselben Kamera mit Abstand ≤ 2 × Intervall);
+  `GET /history/frames?camera_id=&around=&span_min=10` → `{items: [{ts, last_ts, thumb_url}]}`;
+  `GET /history/stats` → `{enabled: bool, frames, vectors, thumb_bytes, oldest, by_camera: {id: n}}`;
+  `DELETE /history?camera_id=&before=` (write) → `{deleted}`. Ohne pgvector: Suche/Frames 503
+  „Zeitmaschine nicht verfügbar (Datenbank ohne pgvector)“, Stats `enabled:false`.
+- Medien `history/YYYY-MM-DD/cam{N}_{unix}.jpg` (256×144), Aufbewahrung `retention_days_history`.
+
+### W3.H MCP
+
+| Tool | Modul | Parameter | Rückgabe (`structuredContent`) |
+|---|---|---|---|
+| `ask_camera` | `ask.py` (A2) | `question: str`, `camera_id: int?`, `camera_name: str?`, `region: [4 float]?`, `allow_cloud: bool = False` | `{answer, yes_no, engine, model, ms, camera_id, camera_name, snapshot_url}` + `ImageContent` (Standbild) |
+| `list_sensors` | `sensors.py` (A3) | `camera_id: int?`, `room: str?`, `supply: bool?` | `{total, items:[{id, name, kind, camera_name, room, state, state_text, value, since}]}` |
+| `get_sensor` | `sensors.py` (A3) | `sensor_id: int?`, `name: str?` | VirtualSensor (kompakt) + `history:[…]` (≤ 20) |
+| `get_shopping_list` | `sensors.py` (C4) | `include_done: bool = False` | `{open_count, items:[{id, name, note, source, created_at, done}]}` |
+| `add_to_shopping_list` (write) | `sensors.py` (C4) | `name: str`, `note: str?` | ShoppingItem |
+| `search_history` | `history.py` (B1) | `query: str`, `since: str?`, `until: str?`, `camera: str?`, `limit: int = 5`, `include_image: bool = False` | `{query, items:[{camera_name, room, start_ts, end_ts, best_ts, score, thumb_url}]}` (+ Bild des besten Treffers) |
+
+`ask_camera` ist ein lesendes Tool (Scope `read`, wie REST), unterliegt aber dem Rate-Limit des Keys.
+
+### W3.I Gemeinsame Bausteine (K3) – Python-APIs
+
+- **Regeln ohne Event** (`backend/app/events.py`): `processor.run_eventless_rule(rule_id, *, trigger, ctx=None,
+  camera_id=None, image_path=None, snapshot_path=None, data=None, force=False) -> dict | None` (Bedingungen,
+  Cooldown, Notification/Push, MQTT/Webhook – wie bisher `run_time_rule`, das jetzt darauf aufsetzt) und
+  `processor.sensor_changed(sensor: dict, old_state: str | None, new_state: str)` – startet alle Regeln mit
+  `trigger:"sensor"`, deren `sensor_id`/`state` passt (asynchron im Bedingungs-Pool). A3 ruft es bei jedem
+  bestätigten Zustandswechsel auf. Bedingung `sensor` ist in `rule_conditions.py` ausgewertet (liest
+  `virtual_sensors.state`).
+- **Rate-Limit mit Scope `read`** (`backend/app/auth.py`): `require_read_limited(bucket: str, per_min: int)` →
+  Dependency (Cookie oder Key mit `read`, Zähler je Key bzw. Sitzung, gleitendes 60-s-Fenster); Liste der
+  POST-Ausnahmen mit `read`: `auth.READ_POST_EXCEPTIONS` (`/api/media/sign`, `/api/cameras/{id}/ask`).
+- **LLM-Client mit Bildern** (`backend/app/llm_client.py`): `complete(messages, *, images: list[bytes] | None = None,
+  model: str | None = None, …)` – Bilder (JPEG/PNG) hängen an der letzten `user`-Nachricht
+  (`openai_compat`: `image_url` als data-URL, `anthropic`: `image`-Block base64); `model` überschreibt `llm_model`.
+- **pgvector** (`backend/app/db.py`, `vector.py`): `vector_available()`, `vector_version()`, `HalfVec(dim)`.
+- **MQTT-Handler** (`mqtt_bus.register_handler`): vorbelegt `sensor` → `sensors.handle_worker_values` (A3),
+  `history` → `history.handle_worker_frame` (B1); `gpu` wird vom Backend nicht ausgewertet.
+- **Platzhalter-Module mit fertiger Verdrahtung** (vom Fach-Agenten zu füllen, nicht umbenennen):
+  Backend `vlm.py`, `cloud_vlm.py`, `routers/ask.py` (A2); `sensors.py`, `shopping.py`, `routers/sensors.py`
+  (A3+C4, inkl. `/shopping-list`); `history.py`, `routers/history.py` (B1); Ticks `sensors.tick()`,
+  `history.tick()` (Backend-Ticker jede Sekunde, selbst gedrosselt), Aufbewahrung `retention.py` ruft
+  `vlm.retention(now)`, `sensors.retention(now)`, `history.retention(now)`. Worker `worker/vg_worker/sensors.py`
+  (`SensorEngine`, Frame-Tap-Abnehmer), `worker/vg_worker/history.py` (`HistoryEngine`, entladbar per Lease); MCP
+  `mcp/tools/{ask,sensors,history}.py`.
+- **Oberfläche:** Seiten `/zeitmaschine` (`pages/History.tsx`, B1), `/vorraete` (`pages/Supplies.tsx`, Vorräte +
+  Einkaufsliste, C4); Admin `/admin/sensoren` (`admin/Sensors.tsx`, A3); Einstellungs-Karten `admin/VlmSettings.tsx`
+  (A2), `admin/HistorySettings.tsx` (B1), `admin/SensorSettings.tsx` (A3+C4); Komponente
+  `components/AskCamera.tsx` („Frag die Kamera“-Dialog in der Live-Ansicht, A2). Kamera-Formular: Schalter
+  `vlm_cloud_allowed` und Abschnitt „Zeitmaschine“ legt K3 an. Typen in `types.ts`: `AskEngine`, `AskYesNo`,
+  `AskInput`, `AskResult`, `AskList`, `SensorKind`, `SensorStateSet`, `SensorState`, `VirtualSensor`, `SensorInput`,
+  `SensorHistoryEntry`, `SensorReference`, `SensorMsg`, `ShoppingItem`, `ShoppingList`, `ShoppingListMsg`,
+  `HistoryEpisode`, `HistorySearch`, `HistoryFrameThumb`, `HistoryStats`, `GpuLease`, `VlmModel`; API in
+  `lib/api.ts`: `askCamera`, `askLog`, `deleteAsk`, `sensors`, `sensor`, `createSensor`, `updateSensor`,
+  `deleteSensor`, `evaluateSensor`, `sensorHistory`, `sensorReferences`, `addSensorReference`,
+  `deleteSensorReference`, `shoppingList`, `addShoppingItem`, `updateShoppingItem`, `deleteShoppingItem`,
+  `historySearch`, `historyFrames`, `historyStats`, `deleteHistory`; Mock-Routen in `lib/mock.ts`.
