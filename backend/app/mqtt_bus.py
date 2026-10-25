@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import queue
 import threading
-from typing import Any
+from typing import Any, Callable, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -15,6 +16,17 @@ from .events import processor
 from .ws import hub
 
 log = logging.getLogger("vg.mqtt")
+
+# W2: Handler je vg/internal/<kind>/… (Fach-Module registrieren sich, statt mqtt_bus zu ändern)
+Handler = Callable[[Optional[int], dict[str, Any]], None]
+_handlers: dict[str, tuple[Handler, bool]] = {}
+
+
+def register_handler(kind: str, fn: Handler, *, direct: bool = False) -> None:
+    """`fn(camera_id|None, msg)` für Nachrichten auf `vg/internal/<kind>[/<camera_id>]`. `direct=True` läuft im
+    MQTT-Netzwerk-Thread (nur sehr kurze Arbeit, z. B. Futures auflösen), sonst im Track-Thread (Reihenfolge
+    wie die übrigen Worker-Nachrichten). Eingebaute Arten (detections, track, …) lassen sich nicht überschreiben."""
+    _handlers[kind] = (fn, direct)
 
 
 class Bus:
@@ -76,6 +88,14 @@ class Bus:
             return
         state.mqtt_connected = True
         log.info("MQTT verbunden (%s:%s)", config.mqtt_host, config.mqtt_port)
+        # W2 (K2): Nagle aus – paho setzt kein TCP_NODELAY; bei laufendem Datenstrom verzögerte das kleine
+        # Antworten (vg/internal/embed_result) um ~40 ms (Delayed ACK)
+        try:
+            sock = client.socket()
+            if sock is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:  # noqa: BLE001
+            pass
         client.subscribe("vg/internal/#", qos=1)
         client.publish(f"{self.prefix}/available", "online", qos=1, retain=True)
         self.work.put(("reset_counts", None, None))
@@ -139,6 +159,17 @@ class Bus:
             elif kind == "health":
                 cam_id = int(parts[3]) if len(parts) > 3 else int(msg.get("camera_id"))
                 self._enqueue(("health", cam_id, msg))
+            elif kind in _handlers:
+                fn, direct = _handlers[kind]
+                cam_id = None
+                if len(parts) > 3 and parts[3].isdigit():
+                    cam_id = int(parts[3])
+                elif isinstance(msg.get("camera_id"), int):
+                    cam_id = msg["camera_id"]
+                if direct:
+                    fn(cam_id, msg)
+                else:
+                    self._enqueue(("handler", cam_id, (kind, msg)))
         except Exception as e:  # noqa: BLE001
             log.warning("MQTT-Nachricht auf %s nicht verarbeitbar: %s", topic, e)
 
@@ -164,6 +195,9 @@ class Bus:
                 elif kind == "health":
                     from . import health
                     health.handle(cam_id, msg)
+                elif kind == "handler":
+                    hkind, hmsg = msg
+                    _handlers[hkind][0](cam_id, hmsg)
                 elif kind == "reset_counts":
                     processor.reset_counts()
                 elif kind == "call":

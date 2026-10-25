@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .. import settings_store, state
 from ..auth import require_user
-from ..config import VERSION
+from ..config import VERSION, config
 from ..db import get_db
 from ..models import Camera, Event, Identity
 from ..notifications import mask_settings, unmask_push_targets
@@ -18,9 +18,17 @@ from ..sync import settings_changed
 router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(require_user)])
 
 
+def _out(data: dict) -> dict:
+    """Push-Zugangsdaten nur als "***"; dazu read-only, ob LLM-Schlüssel per Env gesetzt sind (W2)."""
+    out = mask_settings(data)
+    out["llm_key_configured"] = {"openai_compat": bool(config.llm_api_key),
+                                 "anthropic": bool(config.anthropic_api_key)}
+    return out
+
+
 @router.get("/settings")
 def get_settings():
-    return mask_settings(settings_store.get())   # Push-Zugangsdaten nur als "***"
+    return _out(settings_store.get())
 
 
 @router.put("/settings")
@@ -39,7 +47,20 @@ def put_settings(body: SettingsPatch, db: Session = Depends(get_db)):
                                   for err in e.errors()]) from None
     bus.set_prefix(new["mqtt_prefix"])
     settings_changed()
-    return mask_settings(new)
+    return _out(new)
+
+
+@router.post("/settings/llm_test")
+def llm_test():
+    """W2: gespeicherten LLM-Anbieter mit einer kurzen Anfrage prüfen (Scope write, kostet ggf. Tokens)."""
+    from .. import llm_client
+
+    try:
+        r = llm_client.complete([{"role": "user", "content": "Antworte nur mit dem Wort: OK"}], max_tokens=10,
+                                temperature=0)
+    except llm_client.LLMError as e:
+        return {"ok": False, "error": str(e), "text": None, "model": None, "ms": None}
+    return {"ok": True, "error": None, "text": r.text[:200], "model": r.model, "ms": r.ms}
 
 
 @router.get("/stats")

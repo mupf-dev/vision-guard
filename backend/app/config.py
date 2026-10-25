@@ -21,6 +21,9 @@ class Config:
     admin_password = _env("VG_ADMIN_PASSWORD", "admin")
     secret_key = _env("VG_SECRET_KEY", "change-me-please")
     demo_cameras = _env("VG_DEMO_CAMERAS", "0") in ("1", "true", "yes")
+    # Welle 2: Schlüssel für den LLM-Client – nur aus der Env, nie in Settings/API/Logs
+    llm_api_key = os.getenv("VG_LLM_API_KEY") or ""
+    anthropic_api_key = os.getenv("VG_ANTHROPIC_API_KEY") or ""
     tz_name = _env("TZ", "Europe/Berlin")
     cookie_name = "vg_session"
     session_days = 7
@@ -146,4 +149,33 @@ DEFAULT_SETTINGS = {
     "retention_days_notifications": 30,
     "inventory_change_min_s": 120,
     "health_alert_after_s": 60,
+    # Welle 2 (K2): Exemplare/Rückfragen (B4/D2, Werte aus messungen.md §3)
+    "item_match_threshold": 0.55,
+    "item_min_px": 90,
+    "review_enabled": True,
+    "review_max_per_day": 10,
+    "review_max_open": 20,
+    "review_expire_h": 48,
+    "review_band": 0.10,
+    "review_auto_tune": True,
+    # Pose und Gesten (C1/D1)
+    "gesture_hold_s": 1.0,
+    "fall_default_dwell_s": 60,
+    "fall_track_grace_s": 30,
+    # Haustier-Tagebuch (C3)
+    "pet_diary_labels": ["dog", "cat"],
+    "pet_diary_min_visit_s": {"food": 5, "water": 3, "litter": 10},
+    "pet_diary_notify": True,
+    "pet_diary_single_pet_fallback": True,
+    # Tagesbericht (B3)
+    "report_enabled": False,
+    "report_time": "21:00",
+    "report_days": [0, 1, 2, 3, 4, 5, 6],
+    "report_generator": "template",
+    "report_channels": {"mqtt": True, "webhook_url": None, "mail_to": []},
+    # Gemeinsamer LLM-Client (standardmäßig aus; Schlüssel nur per Env VG_LLM_API_KEY / VG_ANTHROPIC_API_KEY)
+    "llm_provider": "none",
+    "llm_base_url": None,
+    "llm_model": None,
+    "llm_timeout_s": 60,
 }

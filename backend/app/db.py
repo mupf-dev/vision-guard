@@ -53,6 +53,19 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("rules", "conditions", "jsonb NOT NULL DEFAULT '[]'::jsonb"),
     ("rules", "condition_delay_s", "double precision NOT NULL DEFAULT 0"),
     ("cameras", "health_enabled", "boolean NOT NULL DEFAULT true"),
+    # Welle 2 (K2)
+    ("rules", "repeat_s", "double precision NOT NULL DEFAULT 0"),
+    ("rules", "repeat_max", "integer NOT NULL DEFAULT 0"),
+    ("events", "acknowledged_at", "timestamptz NULL"),
+    ("cameras", "pose_enabled", "boolean NOT NULL DEFAULT false"),
+    ("cameras", "gesture_enabled", "boolean NOT NULL DEFAULT false"),
+    ("cameras", "inventory_label_min_scores", "jsonb NOT NULL DEFAULT '{}'::jsonb"),
+    ("cameras", "inventory_suppress", "jsonb NOT NULL DEFAULT '[]'::jsonb"),
+    ("identities", "item_label", "varchar(40) NULL"),
+    ("identity_samples", "negative", "boolean NOT NULL DEFAULT false"),
+    ("identity_samples", "source", "varchar(16) NOT NULL DEFAULT 'auto'"),
+    ("inventory_items", "identity_id", "integer NULL"),
+    ("inventory_items", "identity_score", "double precision NULL"),
 ]
 
 
@@ -63,6 +76,8 @@ ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
     # (Indexname, Tabelle, Spaltenliste bzw. Ausdruck), z. B.
     # Welle 1 (B2 „Was hat sich verändert?“): Zustand je Kamera zu einem Zeitpunkt
     ("ix_inventory_history_camera_ts", "inventory_history", "camera_id, ts"),
+    # Welle 2 (B4): Gegenstände je Exemplar
+    ("ix_inventory_items_identity_id", "inventory_items", "identity_id"),
 ]
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")

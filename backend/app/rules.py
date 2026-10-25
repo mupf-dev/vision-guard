@@ -19,8 +19,8 @@ from sqlalchemy import select
 from .config import config
 from .db import SessionLocal
 from .models import Rule
-from .schemas import (CondInventory, CondInventoryUntouched, CondTrackCameFrom, CondWeather, TimeTriggerOptions,
-                      TriggerOptionsNone)
+from .schemas import (CondInventory, CondInventoryUntouched, CondTrackCameFrom, CondWeather,
+                      GestureTriggerOptions, PostureTriggerOptions, TimeTriggerOptions, TriggerOptionsNone)
 
 log = logging.getLogger("vg.rules")
 
@@ -51,12 +51,28 @@ def all_rules() -> list[dict[str, Any]]:
 # angelegten Bedingung nach (A1: rule_conditions.py). Erneutes Registrieren desselben Namens überschreibt.
 
 
+@dataclass
+class TriggerContext:
+    """W2: Kontext für Track-Trigger-Evaluatoren (posture, gesture, …), siehe register_trigger(evaluate=…)."""
+    rule: dict[str, Any]
+    track: "TrackState"
+    msg: dict[str, Any]                  # Worker-Nachricht (Track oder z. B. vg/internal/gesture); bei tick: {}
+    now: float                           # lokale Unix-s
+    phase: str                           # start|update|end|tick|gesture|…
+    state: dict[str, Any]                # je Regel+Track persistent (TrackState.trigger_state[rule_id])
+
+
+# Evaluator liefert die Zonen, in denen ausgelöst wird, oder None (nicht auslösen)
+TriggerEvaluator = Callable[[TriggerContext], Optional[list[str]]]
+
+
 @dataclass(frozen=True)
 class TriggerSpec:
     name: str
     track_based: bool                    # True: aus Track-Nachrichten (Event-Bezug); False: Regel ohne Event → Notification
     options_model: type[BaseModel]       # validiert rules.trigger_options
     label_de: str = ""
+    evaluate: Optional[TriggerEvaluator] = None   # W2: für Track-Trigger außer enter/leave/dwell
 
 
 @dataclass
@@ -99,11 +115,26 @@ TRIGGERS: dict[str, TriggerSpec] = {}
 CONDITIONS: dict[str, ConditionSpec] = {}
 
 
+BUILTIN_TRACK_TRIGGERS = ("enter", "leave", "dwell")
+
+
 def register_trigger(name: str, *, track_based: bool, options_model: type[BaseModel] = TriggerOptionsNone,
-                     label_de: str = "") -> TriggerSpec:
-    spec = TriggerSpec(name=name, track_based=track_based, options_model=options_model, label_de=label_de or name)
+                     label_de: str = "", evaluate: Optional[TriggerEvaluator] = None) -> TriggerSpec:
+    """Registriert (oder überschreibt) einen Trigger. Ein erneuter Aufruf ohne `evaluate` behält den bisherigen
+    Evaluator (so kann ein Fach-Modul den Evaluator nachreichen, ohne die Optionen zu ändern)."""
+    prev = TRIGGERS.get(name)
+    spec = TriggerSpec(name=name, track_based=track_based, options_model=options_model, label_de=label_de or name,
+                       evaluate=evaluate or (prev.evaluate if prev else None))
     TRIGGERS[name] = spec
     return spec
+
+
+def track_evaluator(name: Optional[str]) -> Optional[TriggerEvaluator]:
+    """Evaluator eines Nicht-Standard-Track-Triggers (W2: posture, gesture), sonst None."""
+    if not name or name in BUILTIN_TRACK_TRIGGERS:
+        return None
+    spec = TRIGGERS.get(name)
+    return spec.evaluate if spec and spec.track_based else None
 
 
 def register_condition(name: str, model: type[BaseModel], *, evaluate: Optional[ConditionEvaluator] = None,
@@ -234,6 +265,9 @@ register_trigger("enter", track_based=True, label_de="betritt")
 register_trigger("leave", track_based=True, label_de="verlässt")
 register_trigger("dwell", track_based=True, label_de="verweilt")
 register_trigger("time", track_based=False, options_model=TimeTriggerOptions, label_de="zu einer Uhrzeit")
+# W2 (C1/D1): Evaluatoren reicht pose_events.py per register_trigger(..., evaluate=…) nach
+register_trigger("posture", track_based=True, options_model=PostureTriggerOptions, label_de="Haltung (z. B. liegt am Boden)")
+register_trigger("gesture", track_based=True, options_model=GestureTriggerOptions, label_de="Geste")
 
 # W1-Bedingungen (Auswertung: A1 in rule_conditions.py per register_condition(..., evaluate=…))
 register_condition("inventory", CondInventory, label_de="Gegenstand da/weg")
@@ -267,6 +301,8 @@ class TrackState:
     # A1: Reihenfolge der betretenen Zonen (Richtung „hinaus“ ohne Pose-Modell) und Eintrittszeiten
     zones_visited: list[str] = field(default_factory=list)
     zone_entries: list[tuple[str, float]] = field(default_factory=list)   # (zone_id, lokale Eintrittszeit), max. 50
+    # W2: Zustand der Track-Trigger-Evaluatoren je Regel (TriggerContext.state)
+    trigger_state: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def set_zones(self, zones: list[str], now: float) -> None:
         zs = [str(z) for z in (zones or [])]

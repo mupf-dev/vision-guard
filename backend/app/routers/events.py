@@ -87,3 +87,20 @@ def delete_event(event_id: str, db: Session = Depends(get_db)):
         safe_remove(p)
     hub.broadcast({"type": "event", "action": "delete", "event": data})
     return Response(status_code=204)
+
+
+@router.post("/{event_id}/ack")
+def ack_event(event_id: str, db: Session = Depends(get_db)):
+    """W2 (C1): Event quittieren – stoppt Wiederholungen (repeat_s). Idempotent, Scope write."""
+    from ..events import processor
+    from ..models import utcnow
+
+    e = db.get(Event, event_id)
+    if e is None:
+        raise HTTPException(404, "Event nicht gefunden")
+    if e.acknowledged_at is None:
+        e.acknowledged_at = utcnow()
+        db.commit()
+        processor.notify_event_changed(e.id)   # WS event/update (+ MQTT extern, wie jede Änderung)
+    db.refresh(e)
+    return event_json(e)

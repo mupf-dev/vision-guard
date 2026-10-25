@@ -50,7 +50,8 @@ def _matrix(s: Session, kind: str) -> Optional[tuple[np.ndarray, np.ndarray]]:
     rows = s.execute(
         select(IdentitySample.identity_id, IdentitySample.embedding)
         .join(Identity, Identity.id == IdentitySample.identity_id)
-        .where(Identity.kind == kind, IdentitySample.embedding.is_not(None))
+        .where(Identity.kind == kind, IdentitySample.embedding.is_not(None),
+               IdentitySample.negative.is_(False))   # W2: Negativbeispiele nie als Treffer
     ).all()
     # Nur Embeddings der häufigsten Dimension verwenden (Modellwechsel robust behandeln)
     dims: dict[int, int] = {}
@@ -161,6 +162,9 @@ def identify(s: Session, req: Any) -> dict[str, Any]:
     """Kern von POST /api/internal/identify. req: schemas.IdentifyIn."""
     settings = settings_store.get()
     kind = req.kind
+    if kind == "item":   # W2 (B4): Exemplare – eigener Abgleich, legt nie neue Identitäten an
+        from .item_identity import identify_item
+        return identify_item(s, req)
     quality = float(req.quality or 0)
     with _lock:
         ident: Optional[Identity] = None

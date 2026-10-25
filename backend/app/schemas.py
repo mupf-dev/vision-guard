@@ -30,6 +30,13 @@ class Zone(BaseModel):
     name: str = ""
     color: str = "#ff9800"
     polygon: list[list[float]] = Field(default_factory=list)
+    # W2 (C3): Zweck der Zone fürs Haustier-Tagebuch
+    purpose: Optional[Literal["food", "water", "litter"]] = None
+
+    @field_validator("purpose", mode="before")
+    @classmethod
+    def _purpose(cls, v: Any) -> Any:
+        return v or None
 
     @field_validator("polygon")
     @classmethod
@@ -42,6 +49,20 @@ class Zone(BaseModel):
         if v and len(v) < 3:
             raise ValueError("Polygon braucht mindestens 3 Punkte")
         return v
+
+
+class InventorySuppress(BaseModel):
+    """W2 (D2): Fehlerkennung an dieser Stelle unterdrücken (gleiches Label, IoU ≥ 0,5)."""
+    label: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    review_id: Optional[int] = None
+
+    @field_validator("bbox")
+    @classmethod
+    def _bbox(cls, v: list[float]) -> list[float]:
+        if not all(-0.001 <= c <= 1.001 for c in v) or v[2] <= v[0] or v[3] <= v[1]:
+            raise ValueError("bbox muss normiert [x1,y1,x2,y2] sein")
+        return [round(float(c), 4) for c in v]
 
 
 class CameraIn(BaseModel):
@@ -65,6 +86,21 @@ class CameraIn(BaseModel):
     inventory_tiling: bool = False
     # W1 C5: Kamera-Gesundheit prüfen (PTZ-Kameras: aus)
     health_enabled: bool = True
+    # W2: Pose/Gesten (C1/D1), Schwellen je Label und Unterdrückungsflächen (D2)
+    pose_enabled: bool = False
+    gesture_enabled: bool = False
+    inventory_label_min_scores: dict[str, float] = Field(default_factory=dict)
+    inventory_suppress: list[InventorySuppress] = Field(default_factory=list, max_length=200)
+
+    @field_validator("inventory_label_min_scores")
+    @classmethod
+    def _label_scores(cls, v: dict[str, float]) -> dict[str, float]:
+        for k, x in v.items():
+            if not re.match(r"^[a-z0-9_]{1,40}$", str(k)):
+                raise ValueError(f"Ungültiger Gegenstands-Schlüssel: {k}")
+            if not 0.05 <= float(x) <= 0.95:
+                raise ValueError("Schwelle je Gegenstand muss zwischen 0.05 und 0.95 liegen")
+        return {str(k): round(float(x), 3) for k, x in v.items()}
 
     @field_validator("room")
     @classmethod
@@ -186,6 +222,27 @@ class TimeTriggerOptions(BaseModel):
         return f"{int(h):02d}:{m}"
 
 
+GESTURES = ("arms_up", "arm_left", "arm_right", "arms_cross")
+POSTURES = ("lying", "sitting", "standing")
+
+
+class PostureTriggerOptions(BaseModel):
+    """W2 (C1): trigger=posture – Haltung seit min_dwell_s; optional kaum Bewegung, ohne Ausschluss-Zonen."""
+    posture: Literal["lying", "sitting", "standing"] = "lying"
+    max_motion: Optional[float] = Field(None, ge=0, le=1)
+    exclude_zone_ids: list[str] = Field(default_factory=list)
+
+
+class GestureTriggerOptions(BaseModel):
+    """W2 (D1): trigger=gesture – eine der Gesten (vg/internal/gesture)."""
+    gestures: list[Literal["arms_up", "arm_left", "arm_right", "arms_cross"]] = Field(min_length=1)
+
+    @field_validator("gestures")
+    @classmethod
+    def _uniq(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(v))
+
+
 class CondInventory(BaseModel):
     type: Literal["inventory"]
     labels: list[str] = Field(min_length=1)
@@ -240,6 +297,16 @@ class RuleIn(BaseModel):
     conditions: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     condition_delay_s: float = Field(0, ge=0, le=600)
     actions: list[Action] = Field(default_factory=list)
+    # W2 (C1): Wiederholung bis Quittierung (0 = aus; sonst 10..3600 s), repeat_max 0 = unbegrenzt
+    repeat_s: float = Field(0, ge=0, le=3600)
+    repeat_max: int = Field(0, ge=0, le=20)
+
+    @field_validator("repeat_s")
+    @classmethod
+    def _repeat(cls, v: float) -> float:
+        if 0 < v < 10:
+            raise ValueError("repeat_s muss 0 oder mindestens 10 s sein")
+        return v
 
     @field_validator("actions", "conditions", mode="before")
     @classmethod
@@ -344,6 +411,39 @@ def _default_routes() -> dict[str, list[str]]:
     return {k: [] for k in NOTIFY_ROUTE_SOURCES}
 
 
+PET_PURPOSES = ("food", "water", "litter")
+
+
+class ReportChannels(BaseModel):
+    """W2 (B3): Versandwege des Tagesberichts (Push läuft über notify_routes.report)."""
+    mqtt: bool = True
+    webhook_url: Optional[str] = Field(None, max_length=500)
+    mail_to: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _wh(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        v = v.strip()
+        if not re.match(r"^https?://[^\s/]+", v):
+            raise ValueError("Webhook-URL muss mit http:// oder https:// beginnen")
+        return v
+
+    @field_validator("mail_to")
+    @classmethod
+    def _mail(cls, v: list[str]) -> list[str]:
+        out = []
+        for m in v:
+            m = (m or "").strip()
+            if not m:
+                continue
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", m):
+                raise ValueError(f"Ungültige Mail-Adresse: {m}")
+            out.append(m)
+        return out
+
+
 class SettingsModel(BaseModel):
     retention_days_events: int = Field(30, ge=1, le=3650)
     retention_days_media: int = Field(7, ge=1, le=3650)
@@ -370,6 +470,83 @@ class SettingsModel(BaseModel):
     # W1: B2 Veränderungen, C5 Kamera-Gesundheit
     inventory_change_min_s: int = Field(120, ge=0, le=3600)
     health_alert_after_s: int = Field(60, ge=10, le=3600)
+    # W2: Exemplare/Rückfragen (B4/D2)
+    item_match_threshold: float = Field(0.55, ge=0.2, le=0.95)
+    item_min_px: int = Field(90, ge=0, le=1000)
+    review_enabled: bool = True
+    review_max_per_day: int = Field(10, ge=0, le=100)
+    review_max_open: int = Field(20, ge=1, le=200)
+    review_expire_h: int = Field(48, ge=1, le=720)
+    review_band: float = Field(0.10, ge=0.01, le=0.5)
+    review_auto_tune: bool = True
+    # W2: Pose und Gesten (C1/D1)
+    gesture_hold_s: float = Field(1.0, ge=0.5, le=5)
+    fall_default_dwell_s: int = Field(60, ge=5, le=3600)
+    fall_track_grace_s: int = Field(30, ge=0, le=300)
+    # W2: Haustier-Tagebuch (C3)
+    pet_diary_labels: list[str] = Field(default_factory=lambda: ["dog", "cat"], max_length=20)
+    pet_diary_min_visit_s: dict[str, float] = Field(default_factory=lambda: {"food": 5, "water": 3, "litter": 10})
+    pet_diary_notify: bool = True
+    pet_diary_single_pet_fallback: bool = True
+    # W2: Tagesbericht (B3)
+    report_enabled: bool = False
+    report_time: str = "21:00"
+    report_days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
+    report_generator: Literal["template", "llm"] = "template"
+    report_channels: ReportChannels = Field(default_factory=lambda: ReportChannels())
+    # W2: gemeinsamer LLM-Client (aus = "none")
+    llm_provider: Literal["none", "openai_compat", "anthropic"] = "none"
+    llm_base_url: Optional[str] = Field(None, max_length=300)
+    llm_model: Optional[str] = Field(None, max_length=200)
+    llm_timeout_s: int = Field(60, ge=5, le=600)
+
+    @field_validator("pet_diary_min_visit_s", mode="before")
+    @classmethod
+    def _visit_s(cls, v: Any) -> Any:
+        if not isinstance(v, dict):
+            return {"food": 5, "water": 3, "litter": 10}
+        unknown = [k for k in v if k not in PET_PURPOSES]
+        if unknown:
+            raise ValueError(f"Unbekannter Zweck: {', '.join(map(str, unknown))} (erlaubt: food, water, litter)")
+        out = {"food": 5.0, "water": 3.0, "litter": 10.0}
+        for k, x in v.items():
+            x = float(x)
+            if not 0 <= x <= 600:
+                raise ValueError("Mindestdauer je Zweck 0..600 s")
+            out[k] = x
+        return out
+
+    @field_validator("report_time")
+    @classmethod
+    def _report_time(cls, v: str) -> str:
+        if not _TIME_RE.match(v or ""):
+            raise ValueError("report_time im Format HH:MM")
+        h, m = v.split(":")
+        return f"{int(h):02d}:{m}"
+
+    @field_validator("report_days")
+    @classmethod
+    def _report_days(cls, v: list[int]) -> list[int]:
+        if any(d < 0 or d > 6 for d in v):
+            raise ValueError("Tage 0..6 (0=Mo)")
+        return sorted(set(v))
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def _llm_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip().rstrip("/")
+        if not v:
+            return None
+        if not re.match(r"^https?://[^\s/]+", v):
+            raise ValueError("llm_base_url muss mit http:// oder https:// beginnen")
+        return v
+
+    @field_validator("llm_model")
+    @classmethod
+    def _llm_model(cls, v: Optional[str]) -> Optional[str]:
+        return (v.strip() or None) if isinstance(v, str) else v
 
     @field_validator("push_targets")
     @classmethod
@@ -448,6 +625,31 @@ class SettingsPatch(BaseModel):
     retention_days_notifications: Optional[int] = None
     inventory_change_min_s: Optional[int] = None
     health_alert_after_s: Optional[int] = None
+    # W2 – llm_base_url/llm_model: "" setzt auf null zurück (null-Werte ignoriert PUT)
+    item_match_threshold: Optional[float] = None
+    item_min_px: Optional[int] = None
+    review_enabled: Optional[bool] = None
+    review_max_per_day: Optional[int] = None
+    review_max_open: Optional[int] = None
+    review_expire_h: Optional[int] = None
+    review_band: Optional[float] = None
+    review_auto_tune: Optional[bool] = None
+    gesture_hold_s: Optional[float] = None
+    fall_default_dwell_s: Optional[int] = None
+    fall_track_grace_s: Optional[int] = None
+    pet_diary_labels: Optional[list[str]] = None
+    pet_diary_min_visit_s: Optional[dict[str, float]] = None
+    pet_diary_notify: Optional[bool] = None
+    pet_diary_single_pet_fallback: Optional[bool] = None
+    report_enabled: Optional[bool] = None
+    report_time: Optional[str] = None
+    report_days: Optional[list[int]] = None
+    report_generator: Optional[str] = None
+    report_channels: Optional[dict[str, Any]] = None
+    llm_provider: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_timeout_s: Optional[int] = None
 
 
 class PushTestIn(BaseModel):
@@ -479,14 +681,44 @@ class MergeIn(BaseModel):
     sample_ids: Optional[list[int]] = Field(None, max_length=1000)
 
 
+class IdentityCreateIn(BaseModel):
+    """W2 (B4): POST /identities – nur Exemplare (kind item) werden von Hand angelegt."""
+    kind: Literal["item"]
+    item_label: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    name: str = Field(min_length=1, max_length=200)
+
+
+class SampleFromInventoryIn(BaseModel):
+    """W2 (B4): POST /identities/{id}/samples/from-inventory."""
+    inventory_item_id: int
+
+
+class ReviewAnswerIn(BaseModel):
+    """W2 (D2): POST /review/{id}/answer."""
+    answer: Literal["yes", "no", "skip"]
+    correct_label: Optional[str] = Field(None, pattern=r"^[a-z0-9_]{1,40}$")
+    # Herkunft für answer_source: Browser-Sitzung → "ui", API-Key → "api" bzw. "mcp", wenn hier angegeben
+    source: Optional[Literal["mcp", "api"]] = None
+
+
+class ReportGenerateIn(BaseModel):
+    """W2 (B3): POST /reports/generate (Zeitangaben wie B2-since; Default heute 00:00 bis jetzt)."""
+    since: Optional[str] = Field(None, max_length=64)
+    until: Optional[str] = Field(None, max_length=64)
+    deliver: bool = False
+
+
 class IdentifyIn(BaseModel):
-    kind: Literal["face", "pet", "plate"]
+    kind: Literal["face", "pet", "plate", "item"]
     camera_id: Optional[int] = None
     track_id: Optional[int] = None
     embedding: Optional[list[float]] = None
     plate_text: Optional[str] = None
     crop_path: Optional[str] = None
     quality: float = 0.0
+    # W2 (B4) bei kind="item": Vokabular-Schlüssel und Worker-Item-ID (statt track_id)
+    label: Optional[str] = None
+    item_id: Optional[str] = None
 
 
 class IdentifyOut(BaseModel):

@@ -230,6 +230,9 @@ def item_json(it: InventoryItem, *, signed: bool = False, vocab: Optional[dict[s
         "snapshot_url": _media(it.snapshot_path, signed),
         # Zusatz für Menschen/KI-Agenten: „aktuell sichtbar“ / „zuletzt gesehen vor 2 h“
         "status_text": status_text(it.state, it.last_seen),
+        # W2 (B4): zugeordnetes Exemplar {id, kind:"item", display_name, name} – Auflösung über identity_id: B4
+        "identity": None,
+        "identity_score": round(float(it.identity_score), 4) if it.identity_score is not None else None,
     }
 
 

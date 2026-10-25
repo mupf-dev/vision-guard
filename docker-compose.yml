@@ -58,6 +58,15 @@ services:
       VG_DEMO_CAMERAS: ${DEMO_CAMERAS:-1}
       # 1 = /media ohne Anmeldung (altes Verhalten); Standard 0 = Cookie | API-Key | signierter Link
       VG_MEDIA_PUBLIC: ${MEDIA_PUBLIC:-0}
+      # Welle 2: optionale Schlüssel für den LLM-Client (Tagesbericht) und Mailversand – leer = aus
+      VG_LLM_API_KEY: ${LLM_API_KEY:-}
+      VG_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VG_SMTP_HOST: ${SMTP_HOST:-}
+      VG_SMTP_PORT: ${SMTP_PORT:-587}
+      VG_SMTP_USER: ${SMTP_USER:-}
+      VG_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      VG_SMTP_FROM: ${SMTP_FROM:-}
+      VG_SMTP_STARTTLS: ${SMTP_STARTTLS:-1}
     volumes:
       - media:/data/media
     healthcheck:

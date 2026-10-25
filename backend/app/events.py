@@ -310,8 +310,14 @@ class Processor:
 
     # ---------------------------------------------------------- Regeln
 
-    def _evaluate(self, s: Session, tr: TrackState, msg: dict[str, Any], now: float, phase: str) -> None:
+    def _evaluate(self, s: Session, tr: TrackState, msg: dict[str, Any], now: float, phase: str,
+                  only_custom: bool = False) -> None:
+        """Regeln für einen Track-Schritt auswerten. enter/leave/dwell nur in den Track-Phasen start/update/end;
+        Nicht-Standard-Trigger (W2: posture, gesture) über ihren Evaluator in jeder Phase (auch tick/gesture)."""
         lookup = self._name_lookup(s)
+        if only_custom or phase not in ("start", "update", "end"):
+            self._evaluate_custom(s, tr, msg, now, phase, lookup)
+            return
         entered = [str(z) for z in msg.get("entered_zones") or []]
         left = [str(z) for z in msg.get("left_zones") or []]
         if phase == "start":
@@ -349,6 +355,38 @@ class Processor:
                     self._check_dwell(s, rule, tr, now, lookup)
             except Exception:
                 log.exception("Regel %s: Auswertung fehlgeschlagen", rule.get("name"))
+        self._evaluate_custom(s, tr, msg, now, phase, lookup)
+
+    def _evaluate_custom(self, s: Session, tr: TrackState, msg: dict[str, Any], now: float, phase: str,
+                         lookup) -> None:
+        """W2: Track-Trigger mit Evaluator (rules.register_trigger(..., evaluate=…)). Der Evaluator entscheidet über
+        Haltezeiten/Einmaligkeit (eigener `state`); Cooldown, static_match und Bedingungen prüft wie immer _fire."""
+        for rule in rules.all_rules():
+            ev_fn = rules.track_evaluator(rule.get("trigger"))
+            if ev_fn is None or not rule.get("enabled"):
+                continue
+            try:
+                rid = int(rule["id"])
+                st = tr.trigger_state.setdefault(rid, {})
+                zones = ev_fn(rules.TriggerContext(rule=rule, track=tr, msg=msg or {}, now=now, phase=phase, state=st))
+                if zones is not None and rules.static_match(rule, tr, lookup):
+                    self._fire(s, rule, tr, list(zones), now)
+            except Exception:
+                log.exception("Regel %s: Trigger %s fehlgeschlagen", rule.get("name"), rule.get("trigger"))
+
+    def dispatch_track_phase(self, camera_id: int, track_id: int, phase: str, msg: dict[str, Any]) -> bool:
+        """W2: Nur Evaluator-Trigger für einen laufenden Track auswerten (z. B. phase="gesture" aus
+        vg/internal/gesture). False, wenn der Track (noch) nicht bekannt ist."""
+        with self.lock:
+            tr = self.tracks.get((camera_id, int(track_id)))
+            if tr is None:
+                return False
+            try:
+                with SessionLocal() as s:
+                    self._evaluate(s, tr, msg, time.time(), phase=phase, only_custom=True)
+            except Exception:
+                log.exception("Track-Phase %s (Kamera %s, Track %s) fehlgeschlagen", phase, camera_id, track_id)
+            return True
 
     def _check_dwell(self, s: Session, rule: dict[str, Any], tr: TrackState, now: float, lookup) -> None:
         rid = int(rule["id"])
@@ -618,7 +656,8 @@ class Processor:
         with self.lock:
             try:
                 dwell_rules = [r for r in rules.all_rules() if r.get("enabled") and r.get("trigger") == "dwell"]
-                if dwell_rules and self.tracks:
+                custom = any(r.get("enabled") and rules.track_evaluator(r.get("trigger")) for r in rules.all_rules())
+                if (dwell_rules or custom) and self.tracks:
                     with SessionLocal() as s:
                         lookup = self._name_lookup(s)
                         for tr in list(self.tracks.values()):
@@ -627,6 +666,8 @@ class Processor:
                                     self._check_dwell(s, rule, tr, now, lookup)
                                 except Exception:
                                     log.exception("Dwell-Prüfung fehlgeschlagen")
+                            if custom:   # W2: Evaluator-Trigger (posture: Haltedauer) jede Sekunde
+                                self._evaluate_custom(s, tr, {}, now, "tick", lookup)
                 # abgelaufene Aufträge
                 for rid in [k for k, v in self.pending.items() if now - v["created"] > PENDING_TTL_S]:
                     self.pending.pop(rid, None)

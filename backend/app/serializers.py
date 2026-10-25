@@ -31,6 +31,11 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "inventory_min_score": c.inventory_min_score if c.inventory_min_score is not None else 0.35,
         "inventory_tiling": True if c.inventory_tiling is None else bool(c.inventory_tiling),
         "health_enabled": True if c.health_enabled is None else bool(c.health_enabled),
+        # W2: Pose/Gesten (C1/D1), Schwellen je Label und Unterdrückungsflächen (D2)
+        "pose_enabled": bool(c.pose_enabled),
+        "gesture_enabled": bool(c.gesture_enabled),
+        "inventory_label_min_scores": dict(c.inventory_label_min_scores or {}),
+        "inventory_suppress": list(c.inventory_suppress or []),
         "status": state.status_for(c.id, c.enabled),
     }
 
@@ -54,6 +59,8 @@ def rule_json(r: Rule) -> dict[str, Any]:
         "conditions": list(r.conditions or []),
         "condition_delay_s": float(r.condition_delay_s or 0),
         "actions": list(r.actions or []),
+        "repeat_s": float(r.repeat_s or 0),
+        "repeat_max": int(r.repeat_max or 0),
     }
 
 
@@ -85,6 +92,7 @@ def identity_json(s: Session, i: Identity) -> dict[str, Any]:
         "last_seen": iso(i.last_seen),
         "event_count": event_count,
         "learning_locked": bool(i.learning_locked),
+        "item_label": i.item_label,
     }
 
 
@@ -113,7 +121,7 @@ def identities_json(s: Session, items: list[Identity]) -> list[dict[str, Any]]:
             "plate_text": i.plate_text, "notes": i.notes or "", "sample_count": sc.get(i.id, 0),
             "cover_url": media_url(covers.get(i.id)), "first_seen": iso(i.first_seen),
             "last_seen": iso(i.last_seen), "event_count": ec.get(i.id, 0),
-            "learning_locked": bool(i.learning_locked),
+            "learning_locked": bool(i.learning_locked), "item_label": i.item_label,
         })
     return out
 
@@ -136,6 +144,7 @@ def event_json(e: Event) -> dict[str, Any]:
         "clip_url": media_url(e.clip_path),
         "rules": list(e.rules or []),
         "active": bool(e.active),
+        "acknowledged_at": iso(e.acknowledged_at),
     }
 
 

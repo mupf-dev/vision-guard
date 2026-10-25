@@ -25,6 +25,11 @@ def reload() -> None:
                 "labels": list(c.labels or []),
                 "room": c.room,
                 "zones": {z.get("id"): z.get("name") or z.get("id") for z in (c.zones or []) if isinstance(z, dict)},
+                # W2 (C3): Zweck je Zone (nur Zonen mit purpose), z. B. {"z_napf": "food"}
+                "zone_purpose": {z.get("id"): z.get("purpose") for z in (c.zones or [])
+                                 if isinstance(z, dict) and z.get("purpose")},
+                "pose_enabled": bool(c.pose_enabled),
+                "gesture_enabled": bool(c.gesture_enabled),
             }
             for c in rows
         }

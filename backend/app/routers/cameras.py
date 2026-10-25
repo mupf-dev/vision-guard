@@ -47,7 +47,9 @@ def _check_inventory_labels(labels: list[str], previous: list[str] | None = None
 # Später hinzugekommene Felder: bei PUT nur übernehmen, wenn der Client sie mitschickt (ältere/externe API-Clients
 # setzen sonst Raum und Inventar still auf die Defaults zurück).
 OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "inventory_labels",
-                          "inventory_min_score", "inventory_tiling", "health_enabled")
+                          "inventory_min_score", "inventory_tiling", "health_enabled",
+                          # W2
+                          "pose_enabled", "gesture_enabled", "inventory_label_min_scores", "inventory_suppress")
 
 
 def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:
@@ -63,6 +65,12 @@ def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:
     if "inventory_labels" in data:
         data["inventory_labels"] = _check_inventory_labels(data.get("inventory_labels") or [],
                                                            list(c.inventory_labels or []))
+    if "inventory_label_min_scores" in data:   # W2 (D2): nur Vokabular-Schlüssel (gespeicherte Altlasten fallen weg)
+        scores = data.get("inventory_label_min_scores") or {}
+        keep = set(_check_inventory_labels(list(scores), list((c.inventory_label_min_scores or {}).keys())))
+        data["inventory_label_min_scores"] = {k: v for k, v in scores.items() if k in keep}
+    if "inventory_suppress" in data:
+        data["inventory_suppress"] = [x.model_dump() for x in body.inventory_suppress]
     for k, v in data.items():
         setattr(c, k, v)
 

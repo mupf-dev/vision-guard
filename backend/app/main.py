@@ -26,6 +26,13 @@ from .routers import notifications as notifications_router
 from .rules import reload as reload_rules
 from . import health as camera_health
 from . import rule_conditions  # noqa: F401  – registriert die Bedingungs-Auswertungen (A1)
+# Welle 2 (K2): Fach-Module mit fertiger Verdrahtung (Inhalt: C1, C3, D2, B3)
+from . import embed_client, pet_diary, pose_events, review
+from . import report as daily_report
+from .mqtt_bus import register_handler
+from .routers import pets as pets_router
+from .routers import reports as reports_router
+from .routers import review as review_router
 from .sync import load_cameras
 from .util import ensure_media_dirs
 from .ws import hub
@@ -62,11 +69,21 @@ def seed_demo() -> None:
         s.commit()
 
 
+def _w2_tick() -> None:
+    """W2: Ticks der Fach-Module (jedes drosselt sich selbst); Fehler eines Moduls stoppen die anderen nicht."""
+    for name, fn in (("review", review.tick), ("pet_diary", pet_diary.tick), ("report", daily_report.tick)):
+        try:
+            fn()
+        except Exception:
+            log.exception("Tick %s fehlgeschlagen", name)
+
+
 async def _ticker() -> None:
     while True:
         await asyncio.sleep(1)
         await asyncio.to_thread(processor.tick)
         await asyncio.to_thread(inventory_memory.tick)
+        await asyncio.to_thread(_w2_tick)
 
 
 async def _retention_loop() -> None:
@@ -114,6 +131,10 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(reload_rules)
     await asyncio.to_thread(inventory_memory.startup)
     await asyncio.to_thread(camera_health.startup)
+    await asyncio.to_thread(pet_diary.startup)
+    # W2: Worker-Nachrichten an Fach-Module (vg/internal/<kind>/…)
+    register_handler("embed_result", embed_client.handle_result, direct=True)
+    register_handler("gesture", pose_events.handle_gesture)
     bus.start()
     bus.publish_config_changed()
     tasks = [asyncio.create_task(t) for t in (_ticker(), _retention_loop(), _go2rtc_startup_sync())]
@@ -140,6 +161,8 @@ for r in (tokens_router.router, media_router.router):
 
 app.include_router(inventory_router.router)
 app.include_router(notifications_router.router)
+for r in (review_router.router, pets_router.router, reports_router.router):   # W2
+    app.include_router(r)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):

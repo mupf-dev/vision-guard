@@ -115,7 +115,8 @@ def list_samples(iid: int, db: Session = Depends(get_db)):
     rows = db.scalars(select(IdentitySample).where(IdentitySample.identity_id == iid)
                       .order_by(IdentitySample.quality.desc(), IdentitySample.id.desc())).all()
     return [{"id": s.id, "image_url": media_url(s.image_path), "created_at": iso(s.created_at),
-             "quality": s.quality, "manual": bool(s.manual)} for s in rows]
+             "quality": s.quality, "manual": bool(s.manual),
+             "negative": bool(s.negative), "source": s.source or "auto"} for s in rows]
 
 
 @router.delete("/{iid}/samples/{sid}", status_code=204)
