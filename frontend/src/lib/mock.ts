@@ -9,6 +9,7 @@ import type { InventoryHistoryEntry, InventoryItem, InventoryRelation, Inventory
 import type { ApiToken, TokenScope } from "./types";
 import type { IdentitySuggestion } from "./types";
 import type { CameraHealth, InventoryChange, InventoryChanges, PushTarget, VGNotification } from "./types";
+import type { RuleAction, RuleInput } from "./types";
 
 const now = () => new Date().toISOString();
 const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
@@ -513,6 +514,20 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     const t: PushTarget | undefined = body?.config ?? settings.push_targets.find((x) => x.id === body?.target);
     return t ? json({ ok: t.type === "ntfy", error: t.type === "ntfy" ? null : "Mock: Pushover nicht erreichbar", target: t.id })
       : json({ detail: `Push-Ziel „${body?.target}“ nicht gefunden` }, 404);
+  }
+  if (path === "/rules/check" && method === "POST") {
+    const conds: RuleInput["conditions"] = body?.conditions ?? [];
+    const details = conds.map((c) => c.type === "track_came_from"
+      ? { type: c.type, ok: null, reason: "wird erst beim Auslösen geprüft (Weg des Tracks)" }
+      : c.type === "weather" ? { type: c.type, ok: c.min <= 40, reason: `Wetter: 40 % Regen ab 15 Uhr (Schwelle ${c.min} % in ${c.hours} h)` }
+      : c.type === "inventory" ? { type: c.type, ok: c.state === "present", reason: c.state === "present" ? "Schlüssel: sichtbar (Flur, Schlüsselbrett, Score 0.62)" : "Schlüssel: noch sichtbar (Flur, Schlüsselbrett)" }
+      : { type: c.type, ok: true, reason: `Medikamente: seit ${c.since} unberührt (Küche, Regal)` });
+    const ph = { items: conds.some((c) => c.type.startsWith("inventory")) ? "Schlüssel" : "", item_place: "Flur, Schlüsselbrett", weather: conds.some((c) => c.type === "weather") ? "40 % Regen ab 15 Uhr" : "" };
+    const ok = details.every((d) => d.ok !== false);
+    const push = (body?.actions ?? []).find((a: RuleAction) => a.type === "push") as Extract<RuleAction, { type: "push" }> | undefined;
+    const fill = (s: string) => s.replace(/\{(items|item_place|weather|rule)\}/g, (_x: string, k: string) => (k === "rule" ? body?.name ?? "" : ph[k as keyof typeof ph]));
+    return json({ ok, reason: details.map((d) => d.reason).join("; "), details, placeholders: ph, item_ids: ok ? [17] : [],
+      preview: push ? { title: fill(push.title), message: fill(push.message) } : null });
   }
   if (path === "/notifications") {
     const src = (p.get("source") ?? "").split(",").filter(Boolean);

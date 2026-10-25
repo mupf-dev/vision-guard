@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from . import go2rtc, media_sign, notifications, registry, rules, settings_store, state
 from .db import SessionLocal
-from .models import Event, Identity, utcnow
+from .models import KV, Event, Identity, utcnow
 from .rules import TrackState
 from .serializers import event_json
 from .util import from_unix, local_date_str, media_path
@@ -27,6 +28,12 @@ log = logging.getLogger("vg.events")
 SNAPSHOT_FALLBACK_S = 5.0
 PENDING_TTL_S = 900.0
 WORKER_GONE_S = 60.0
+TIME_CHECK_EVERY_S = 20.0          # Zeit-Regeln: Prüftakt (fällig ab `at`, 15 min Nachholfenster)
+WEATHER_PREFETCH_EVERY_S = 300.0   # Wetter-Cache warm halten, solange Regeln mit Wetter-Bedingung existieren
+TIME_RUNS_KEY = "rule_time_runs"   # KV: {rule_id: "YYYY-MM-DD HH:MM"} – letzter Lauf je Zeit-Regel
+
+# Bedingungsprüfungen (A1) laufen außerhalb des Track-Threads (DB-Abfragen, ggf. Wetter-Abruf)
+_cond_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vg-cond")
 
 
 # ------------------------------------------------------------------ Hook-API (W1, genutzt von C3/C1/C2)
@@ -87,6 +94,11 @@ class Processor:
         self.publish = None   # callable(topic, payload, retain=False, qos=0)
         self._last_status_check = 0.0
         self._status_seen: dict[int, str] = {}
+        # A1: laufende/geplante Bedingungsprüfungen je (Regel, Kamera) und Zeit-Regeln
+        self.cond_pending: dict[tuple[int, int], float] = {}
+        self._last_time_check = 0.0
+        self._last_weather_prefetch = 0.0
+        self._time_runs: Optional[dict[str, str]] = None
 
     # ---------------------------------------------------------- Hilfen
 
@@ -352,14 +364,71 @@ class Processor:
         tr.fired_dwell.add(rid)
         self._fire(s, rule, tr, rules.rule_zones_hit(rule, tr.zones) if rz else list(tr.zones), now)
 
+    def _cooldown_active(self, ck: tuple[int, int], rule: dict[str, Any], now: float) -> bool:
+        last = self.cooldowns.get(ck)
+        return last is not None and now - last < float(rule.get("cooldown_s") or 0)
+
     def _fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float) -> None:
         ck = (int(rule["id"]), tr.camera_id)
-        cd = float(rule.get("cooldown_s") or 0)
-        last = self.cooldowns.get(ck)
-        if last is not None and now - last < cd:
+        if self._cooldown_active(ck, rule, now):
             log.info("Regel '%s' (Kamera %s): Cooldown aktiv", rule["name"], tr.camera_id)
             return
+        if rule.get("conditions"):
+            # A1: Bedingungen erst nach condition_delay_s prüfen (Gegenstand braucht Zeit, um „missing“ zu werden);
+            # je Regel und Kamera höchstens eine offene Prüfung, Cooldown erst, wenn die Aktionen wirklich laufen
+            if ck in self.cond_pending:
+                log.debug("Regel '%s' (Kamera %s): Prüfung läuft bereits", rule["name"], tr.camera_id)
+                return
+            self.cond_pending[ck] = now
+            delay = float(rule.get("condition_delay_s") or 0)
+            log.info("Regel '%s' ausgelöst (Kamera %s, Track %s) – Bedingungen werden in %.0f s geprüft",
+                     rule["name"], tr.camera_id, tr.track_id, delay)
+            rid, zs = int(rule["id"]), list(zones)
+
+            def job() -> None:
+                _cond_pool.submit(self._conditional_fire, rid, tr, zs, now)
+            if delay > 0:
+                t = threading.Timer(delay, job)
+                t.daemon = True
+                t.start()
+            else:
+                job()
+            return
         self.cooldowns[ck] = now
+        self._do_fire(s, rule, tr, zones, now)
+
+    def _conditional_fire(self, rule_id: int, tr: TrackState, zones: list[str], trigger_ts: float) -> None:
+        """Läuft im Pool: Bedingungen prüfen (ohne Lock), bei Erfolg Aktionen unter dem Lock ausführen."""
+        ck = (rule_id, tr.camera_id)
+        try:
+            rule = next((r for r in rules.all_rules() if int(r["id"]) == rule_id), None)
+            if rule is None or not rule.get("enabled"):
+                log.info("Regel %s inzwischen gelöscht/deaktiviert – Prüfung entfällt", rule_id)
+                return
+            ctx = rules.CondContext(rule=rule, now=datetime.now(timezone.utc), camera_id=tr.camera_id, track=tr,
+                                    event_id=tr.event_id, trigger_ts=trigger_ts, trigger_zones=list(zones))
+            res = rules.evaluate_conditions(rule, ctx)
+            if not res.ok:
+                log.info("Regel '%s' (Kamera %s): Bedingungen nicht erfüllt – %s", rule["name"], tr.camera_id,
+                         res.reason or "?")
+                return
+            with self.lock:
+                now = time.time()
+                if self._cooldown_active(ck, rule, now):
+                    log.info("Regel '%s' (Kamera %s): Cooldown aktiv", rule["name"], tr.camera_id)
+                    return
+                self.cooldowns[ck] = now
+                log.info("Regel '%s' (Kamera %s): Bedingungen erfüllt – %s", rule["name"], tr.camera_id, res.reason)
+                with SessionLocal() as s:
+                    self._do_fire(s, rule, tr, zones, now, cond=res)
+        except Exception:
+            log.exception("Regel %s: verzögerte Prüfung fehlgeschlagen", rule_id)
+        finally:
+            with self.lock:
+                self.cond_pending.pop(ck, None)
+
+    def _do_fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float,
+                 cond: Optional[rules.CondResult] = None) -> None:
         ev = s.get(Event, tr.event_id)
         if ev is None:
             return
@@ -388,16 +457,27 @@ class Processor:
             "thumb_url": media_sign.sign_media_path(ev.thumb_path, ttl) if ev.thumb_path else "",
             "snapshot_url": media_sign.sign_media_path(snap_path, ttl) if snap_path else "",
             "clip_url": media_sign.sign_media_path(clip_path, ttl) if clip_path else "",
+            # A1: Platzhalter aus den Bedingungen (leer ohne passende Bedingung)
+            "items": "", "item_place": "", "weather": "",
         }
+        if cond is not None:
+            ctx.update({k: v for k, v in cond.ctx.items() if k in ("items", "item_place", "weather")})
         event_data = media_sign.sign_urls(event_data, ttl)   # Webhook-/MQTT-Payloads gehen nach außen
         for action in rule.get("actions") or []:
             try:
-                self._run_action(action, rule, tr, ev, event_data, ctx, date)
+                self._run_action(action, rule, tr, ev, event_data, ctx, date, cond)
             except Exception:
                 log.exception("Regel '%s': Aktion %s fehlgeschlagen", rule["name"], action.get("type"))
+        if cond is not None and "push" not in act_types:
+            # Regeln mit Bedingungen, aber ohne Push: Hinweis nur anzeigen (CONTRACT W1.B)
+            notifications.create(
+                source="rule", title=rule["name"], message=_cond_message(ctx), rule_id=int(rule["id"]),
+                rule_name=rule.get("name"), camera_id=tr.camera_id, event_id=ev.id, item_ids=list(cond.item_ids),
+                image_path=snap_path or cond.image_path or ev.thumb_path, push_enabled=False)
 
     def _run_action(self, action: dict[str, Any], rule: dict[str, Any], tr: TrackState, ev: Event,
-                    event_data: dict[str, Any], ctx: dict[str, Any], date: str) -> None:
+                    event_data: dict[str, Any], ctx: dict[str, Any], date: str,
+                    cond: Optional[rules.CondResult] = None) -> None:
         typ = action.get("type")
         if typ == "snapshot":
             rid = rules.new_request_id()
@@ -429,7 +509,7 @@ class Processor:
         elif typ == "webhook":
             rules.submit_async(self.loop, rules.run_webhook(action, ctx, event_data))
         elif typ == "push":
-            self._run_push(action, rule, tr, ev, ctx, date)
+            self._run_push(action, rule, tr, ev, ctx, date, cond)
         else:
             log.warning("Unbekannte Aktion: %s", typ)
 
@@ -555,6 +635,137 @@ class Processor:
                     self._check_status(now)
             except Exception:
                 log.exception("Tick fehlgeschlagen")
+        if now - self._last_time_check >= TIME_CHECK_EVERY_S:
+            self._last_time_check = now
+            try:
+                self._check_time_rules()
+            except Exception:
+                log.exception("Zeit-Regeln: Prüfung fehlgeschlagen")
+
+    # ---------------------------------------------------------- Zeit-Regeln (A1, trigger=time)
+
+    def _load_time_runs(self) -> dict[str, str]:
+        if self._time_runs is None:
+            with SessionLocal() as s:
+                row = s.get(KV, TIME_RUNS_KEY)
+                self._time_runs = dict(row.value) if row and isinstance(row.value, dict) else {}
+        return self._time_runs
+
+    def _save_time_run(self, rule_id: int, key: str) -> None:
+        runs = self._load_time_runs()
+        runs[str(rule_id)] = key
+        valid = {str(r["id"]) for r in rules.all_rules()}
+        for k in [k for k in runs if k not in valid]:
+            runs.pop(k, None)
+        with SessionLocal() as s:
+            row = s.get(KV, TIME_RUNS_KEY)
+            if row is None:
+                s.add(KV(key=TIME_RUNS_KEY, value=dict(runs)))
+            else:
+                row.value = dict(runs)
+            s.commit()
+
+    def _check_time_rules(self) -> None:
+        """Fällige Zeit-Regeln starten (Planung zustandslos aus Regeln + KV `rule_time_runs`)."""
+        now_dt = datetime.now(timezone.utc)
+        time_rules = [r for r in rules.all_rules() if r.get("enabled") and r.get("trigger") == "time"]
+        if time_rules:
+            runs = self._load_time_runs()
+            for rule in time_rules:
+                key = rules.time_rule_due(rule, now_dt, runs.get(str(rule["id"])))
+                if key is None:
+                    continue
+                self._save_time_run(int(rule["id"]), key)   # vor dem Lauf merken: höchstens 1× je Tag und `at`
+                log.info("Zeit-Regel '%s' fällig (%s)", rule["name"], key)
+                _cond_pool.submit(self._run_time_rule_safe, int(rule["id"]))
+        if time.time() - self._last_weather_prefetch >= WEATHER_PREFETCH_EVERY_S:
+            from . import rule_conditions, weather
+            if rule_conditions.uses_weather() and weather.location() is not None:
+                self._last_weather_prefetch = time.time()
+                _cond_pool.submit(weather.prefetch)
+
+    def _run_time_rule_safe(self, rule_id: int) -> None:
+        try:
+            self.run_time_rule(rule_id)
+        except Exception:
+            log.exception("Zeit-Regel %s fehlgeschlagen", rule_id)
+
+    def run_time_rule(self, rule_id: int, *, force: bool = False) -> Optional[dict[str, Any]]:
+        """Zeit-Regel ausführen: Bedingungen prüfen, bei Erfolg Aktionen ohne Event (Notification statt Event).
+        Liefert {ok, reason, notifications} oder None (Regel unbekannt). `force` ignoriert den Cooldown."""
+        rule = next((r for r in rules.all_rules() if int(r["id"]) == rule_id), None)
+        if rule is None:
+            return None
+        now_dt = datetime.now(timezone.utc)
+        res = rules.evaluate_conditions(rule, rules.CondContext(rule=rule, now=now_dt))
+        if not res.ok:
+            log.info("Zeit-Regel '%s': Bedingungen nicht erfüllt – %s", rule["name"], res.reason or "?")
+            return {"ok": False, "reason": res.reason, "notifications": []}
+        ck = (rule_id, 0)
+        with self.lock:
+            if not force and self._cooldown_active(ck, rule, time.time()):
+                log.info("Zeit-Regel '%s': Cooldown aktiv", rule["name"])
+                return {"ok": False, "reason": "Cooldown aktiv", "notifications": []}
+            self.cooldowns[ck] = time.time()
+        log.info("Zeit-Regel '%s' ausgelöst – %s", rule["name"], res.reason or "ohne Bedingungen")
+        cam = registry.get(res.camera_id) if res.camera_id is not None else None
+        ttl = media_sign.default_ttl_s()
+        ctx: dict[str, Any] = {
+            "camera": (cam or {}).get("name") or "", "camera_id": res.camera_id if res.camera_id is not None else "",
+            "label": "", "score": "", "identity": "", "zone": "", "event_id": "", "rule": rule["name"],
+            "time": now_dt.astimezone(rules.config.tz).isoformat(timespec="seconds"),
+            "thumb_url": media_sign.sign_media_path(res.image_path, ttl) if res.image_path else "",
+            "snapshot_url": media_sign.sign_media_path(res.snapshot_path, ttl) if res.snapshot_path else "",
+            "clip_url": "", "items": "", "item_place": "", "weather": "",
+        }
+        ctx.update({k: v for k, v in res.ctx.items() if k in ("items", "item_place", "weather")})
+        created: list[dict[str, Any]] = []
+        actions = rule.get("actions") or []
+        for a in actions:
+            if a.get("type") != "push":
+                continue
+            mode = a.get("image") or "snapshot"
+            if mode == "snapshot":
+                image = res.snapshot_path or res.image_path
+            elif mode == "crop":
+                image = res.image_path or res.snapshot_path
+            else:
+                image = None
+            priority = a.get("priority") or "default"
+            n = notifications.create(
+                source="rule", level="alarm" if priority == "high" else "info",
+                title=rules.render(a.get("title") or "{rule}", ctx), message=rules.render(a.get("message") or "", ctx),
+                rule_id=rule_id, rule_name=rule.get("name"), camera_id=res.camera_id, item_ids=list(res.item_ids),
+                image_path=image, targets=[a["target"]] if a.get("target") else None, priority=priority,
+                data={"trigger": "time"})
+            if n:
+                created.append(n)
+        if not any(a.get("type") == "push" for a in actions):
+            n = notifications.create(
+                source="rule", title=rule["name"], message=_cond_message(ctx) or rule["name"], rule_id=rule_id,
+                rule_name=rule.get("name"), camera_id=res.camera_id, item_ids=list(res.item_ids),
+                image_path=res.snapshot_path or res.image_path, push_enabled=False, data={"trigger": "time"})
+            if n:
+                created.append(n)
+        # MQTT/Webhook ohne eigenen Payload: Notification-JSON (signierte URLs), sonst die Platzhalter
+        payload = media_sign.sign_urls(dict(created[0])) if created else dict(ctx)
+        for a in actions:
+            typ = a.get("type")
+            try:
+                if typ == "mqtt":
+                    topic = rules.render(a.get("topic") or "", ctx)
+                    if not topic or "#" in topic or "+" in topic:
+                        log.warning("Zeit-Regel '%s': ungültiges MQTT-Topic '%s'", rule["name"], topic)
+                        continue
+                    body = rules.render(a["payload"], ctx) if a.get("payload") else json.dumps(payload, default=str)
+                    self._pub(topic, body, retain=bool(a.get("retain")), qos=1)
+                elif typ == "webhook":
+                    rules.submit_async(self.loop, rules.run_webhook(a, ctx, payload))
+                elif typ in ("snapshot", "clip"):
+                    log.info("Zeit-Regel '%s': Aktion %s braucht ein Ereignis – übersprungen", rule["name"], typ)
+            except Exception:
+                log.exception("Zeit-Regel '%s': Aktion %s fehlgeschlagen", rule["name"], typ)
+        return {"ok": True, "reason": res.reason, "notifications": created}
 
     def _check_status(self, now: float) -> None:
         """Statuswechsel (z. B. online → offline durch Timeout) melden; verwaiste Tracks beenden."""
@@ -581,6 +792,18 @@ class Processor:
                 self.tracks.pop(key, None)
             for key in [k for k in self.counts if k[0] == camera_id]:
                 self.counts.pop(key, None)
+
+
+def _cond_message(ctx: dict[str, Any]) -> str:
+    """Hinweistext für Regeln mit Bedingungen ohne eigene Push-Aktion."""
+    parts = []
+    if ctx.get("items"):
+        parts.append(f"{ctx['items']}: {ctx['item_place']}" if ctx.get("item_place") else str(ctx["items"]))
+    if ctx.get("weather"):
+        parts.append(str(ctx["weather"]))
+    if not parts and ctx.get("label"):
+        parts.append(f"{ctx['label']} an {ctx.get('camera') or 'Kamera'}")
+    return " · ".join(parts)
 
 
 processor = Processor()

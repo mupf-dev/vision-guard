@@ -1,7 +1,10 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import rules as rules_mod
 from ..auth import require_user
 from ..db import get_db
 from ..models import Rule
@@ -38,6 +41,33 @@ def create_rule(body: RuleIn, db: Session = Depends(get_db)):
     db.refresh(r)
     rules_changed()
     return rule_json(r)
+
+
+@router.post("/check")
+def check_rule(body: RuleIn):
+    """A1: Bedingungen eines (auch ungespeicherten) Regel-Entwurfs jetzt prüfen – ohne Aktionen auszuführen.
+    → {ok, reason, details:[{type, ok, reason}], placeholders:{items,item_place,weather}, item_ids, preview}"""
+    rule = {"id": 0, **body.model_dump(mode="json")}
+    res = rules_mod.evaluate_conditions(
+        rule, rules_mod.CondContext(rule=rule, now=datetime.now(timezone.utc)), all_details=True)
+    details = []
+    for d in res.details:
+        spec = rules_mod.CONDITIONS.get(d["type"])
+        if spec is not None and spec.track_only:
+            d = {**d, "ok": None, "reason": "wird erst beim Auslösen geprüft (Weg des Tracks)"}
+        details.append(d)
+    ok = all(d["ok"] is not False for d in details)
+    ph = {"items": "", "item_place": "", "weather": "", **{k: v for k, v in res.ctx.items()
+                                                         if k in ("items", "item_place", "weather")}}
+    ctx = {**ph, "rule": rule["name"]}
+    preview = None
+    push = next((a for a in rule.get("actions") or [] if a.get("type") == "push"), None)
+    if push is not None:
+        preview = {"title": rules_mod.render(push.get("title") or "{rule}", ctx),
+                   "message": rules_mod.render(push.get("message") or "", ctx)}
+    return {"ok": ok, "reason": "; ".join(d["reason"] for d in details if d.get("reason")),
+            "details": details, "placeholders": ph, "item_ids": res.item_ids if ok else [],
+            "preview": preview}
 
 
 @router.get("/{rule_id}")

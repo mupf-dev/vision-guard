@@ -457,6 +457,17 @@ export interface PushTestResult {
   target: string;
 }
 
+/** A1: POST /rules/check – Bedingungen eines Regel-Entwurfs jetzt prüfen (ohne Aktionen) */
+export interface RuleCheckResult {
+  ok: boolean;
+  reason: string;
+  /** ok null = erst beim Auslösen prüfbar (track_came_from) */
+  details: { type: RuleCondition["type"]; ok: boolean | null; reason: string }[];
+  placeholders: { items: string; item_place: string; weather: string };
+  item_ids: number[];
+  preview: { title: string; message: string } | null;
+}
+
 // ---------------------------------------------------------------- W1 B2: Veränderungen im Inventar
 
 export type InventoryChangeType = "appeared" | "disappeared" | "moved" | "uncertain" | "transient";

@@ -1,13 +1,14 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Camera as CamIcon, Clapperboard, Copy, Globe, Image as ImageIcon, Pencil, Plus, Radio, Trash2, Workflow, X } from "lucide-react";
+import { BellRing, Camera as CamIcon, Clapperboard, Clock, Copy, Globe, Image as ImageIcon, ListChecks, Pencil, Plus, Radio, Trash2, Wand2, Workflow, X } from "lucide-react";
 import { api } from "../../lib/api";
 import type { Camera, Identity, Rule, RuleAction, RuleInput } from "../../lib/types";
 import { ALL_LABELS, DAYS, KIND_NAME, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, LabelIcon, Loading, Range, SearchSelect, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
+import { ConditionsBlock, RULE_TEMPLATES, useConditionSummary } from "../../components/RuleConditions";
 
-const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}"];
+const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}"];
 
 const EMPTY: RuleInput = {
   name: "", enabled: true, camera_ids: [], zone_ids: [], labels: ["person"], min_score: 0.6,
@@ -39,7 +40,7 @@ function joinOr(items: string[]) {
   return `${items.slice(0, -1).join(", ")} oder ${items[items.length - 1]}`;
 }
 
-export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[]): React.ReactNode {
+export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], condText = ""): React.ReactNode {
   const who = r.labels.length ? joinOr(r.labels.map(labelName)) : "ein Objekt";
   const idTxt = r.identity.mode === "known" ? " (bekannt)" : r.identity.mode === "unknown" ? " (unbekannt)"
     : r.identity.mode === "specific" ? ` (${joinOr(r.identity.identity_ids.map((id) => idents.find((i) => i.id === id)?.display_name ?? `#${id}`)) || "?"})` : "";
@@ -50,9 +51,19 @@ export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[]): R
     : r.trigger === "time" ? `– täglich um ${r.trigger_options?.at ?? "?"}` : `länger als ${r.min_dwell_s} s verweilt`;
   const sched = r.schedule ? ` · ${r.schedule.days.length === 7 ? "täglich" : r.schedule.days.map((d) => DAYS[d]).join(", ")} ${r.schedule.start}–${r.schedule.end}` : "";
   const acts = r.actions.map((a) => ACTION_META[a.type].name);
+  const cond = condText ? <> und <b>{condText}</b>{r.condition_delay_s ? <span className="muted"> (geprüft nach {r.condition_delay_s} s)</span> : null}</> : null;
+  if (r.trigger === "time") {
+    const days = r.schedule && r.schedule.days.length < 7 ? r.schedule.days.map((d) => DAYS[d]).join(", ") : "Täglich";
+    return (
+      <span className="rule-summary">
+        {days} um <b>{r.trigger_options?.at ?? "?"}</b>{condText ? <>, wenn <b>{condText}</b></> : null}
+        <span className="arrow">→</span>{acts.length ? acts.join(", ") : "Hinweis"}
+      </span>
+    );
+  }
   return (
     <span className="rule-summary">
-      Wenn <b>{who}{idTxt}</b> {where} {verb}
+      Wenn <b>{who}{idTxt}</b> {where} {verb}{cond}
       <span className="arrow">→</span>{acts.length ? acts.join(", ") : <span className="muted">keine Aktion</span>}
       {sched && <span className="muted">{sched}</span>}
     </span>
@@ -186,11 +197,21 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
     onSuccess: () => { toast.success("Regel gespeichert", f.name); qc.invalidateQueries({ queryKey: ["rules"] }); onClose(); },
     onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
   });
-  const valid = f.name.trim() && (f.identity.mode !== "specific" || f.identity.identity_ids.length > 0);
+  const isTime = f.trigger === "time";
+  const condText = useConditionSummary(f.conditions, cams);
+  const valid = f.name.trim() && (isTime || f.identity.mode !== "specific" || f.identity.identity_ids.length > 0)
+    && (!isTime || /^\d\d:\d\d$/.test(String(f.trigger_options?.at ?? "")))
+    && f.conditions.every((c) => (c.type === "track_came_from" ? c.zone_ids.length > 0 : c.type === "weather" || c.labels.length > 0));
+  const setTrigger = (t: RuleInput["trigger"]) => setF((p) => ({
+    ...p, trigger: t,
+    trigger_options: t === "time" ? { at: String(p.trigger_options?.at ?? "10:00") } : {},
+    // „kam aus Zone“ braucht einen Track
+    conditions: t === "time" ? p.conditions.filter((c) => c.type !== "track_came_from") : p.conditions,
+  }));
 
   return (
     <Dialog size="lg" onClose={onClose} icon={<Workflow size={18} />} title={rule ? "Regel bearbeiten" : "Neue Regel"} footer={<>
-      <div className="spacer" style={{ fontSize: 13 }}>{ruleSummary(f, cams, idents)}</div>
+      <div className="spacer" style={{ fontSize: 13 }}>{ruleSummary(f, cams, idents, condText)}</div>
       <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
       <button className="btn btn-primary" disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending && <span className="spinner" />}Speichern</button>
     </>}>
@@ -200,6 +221,21 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
           <div className="field"><label>Status</label><div style={{ height: 38, display: "flex", alignItems: "center" }}><Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? "aktiv" : "inaktiv"} /></div></div>
         </div>
 
+        {!rule && (
+          <div className="row-wrap" style={{ gap: 8, alignItems: "center" }}>
+            <span className="muted row" style={{ gap: 6, fontSize: 13 }}><Wand2 size={14} />Vorlage:</span>
+            {RULE_TEMPLATES.map((t) => (
+              <button type="button" key={t.id} className="btn btn-sm" title={t.text} onClick={() => setF((p) => t.build(p))}>{t.name}</button>
+            ))}
+          </div>
+        )}
+
+        {isTime ? (
+          <div className="muted" style={{ fontSize: 13 }}>
+            Zeit-Regeln laufen ohne Kamera-Ereignis: Kameras, Objekte und Identität spielen keine Rolle. Ergebnis ist ein Eintrag unter
+            „Hinweise“ (und ein Push, wenn die Aktion „Push“ gewählt ist).
+          </div>
+        ) : <>
         <fieldset className="fieldset"><legend>Wo</legend>
           <div className="field"><label>Kameras (leer = alle)</label>
             <ChipSelect options={cams.map((c) => c.id)} value={f.camera_ids} onChange={(v) => set("camera_ids", v)}
@@ -239,25 +275,36 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
           )}
           {(f.identity.mode === "known" || f.identity.mode === "unknown") && <div className="hint muted" style={{ fontSize: 12 }}>„Bekannt“ = Identität mit vergebenem Namen.</div>}
         </fieldset>
+        </>}
 
         <fieldset className="fieldset"><legend>Wann</legend>
           <div className="form-grid">
             <div className="field"><label>Auslöser</label>
               <div className="seg">
-                {(["enter", "leave", "dwell"] as const).map((t) => (
-                  <button type="button" key={t} className={f.trigger === t ? "on" : ""} onClick={() => set("trigger", t)}>
-                    {{ enter: "Betreten", leave: "Verlassen", dwell: "Verweilen" }[t]}
+                {(["enter", "leave", "dwell", "time"] as const).map((t) => (
+                  <button type="button" key={t} className={f.trigger === t ? "on" : ""} onClick={() => setTrigger(t)}>
+                    {{ enter: "Betreten", leave: "Verlassen", dwell: "Verweilen", time: "Uhrzeit" }[t]}
                   </button>
                 ))}
               </div>
             </div>
             {f.trigger === "dwell" ? (
               <div className="field"><label>Mindest-Verweildauer</label><Range value={f.min_dwell_s} min={1} max={600} step={1} format={(v) => `${v} s`} onChange={(v) => set("min_dwell_s", v)} /></div>
+            ) : isTime ? (
+              <div className="field"><label><Clock size={13} style={{ verticalAlign: -2 }} /> Uhrzeit *</label>
+                <input type="time" className="input" style={{ width: 130 }} value={String(f.trigger_options?.at ?? "")}
+                  onChange={(e) => set("trigger_options", { at: e.target.value })} />
+              </div>
             ) : <div />}
-            <div className="field"><label>Cooldown (pro Kamera)</label><Range value={f.cooldown_s} min={0} max={3600} step={5} format={(v) => (v >= 60 ? `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}` : `${v} s`)} onChange={(v) => set("cooldown_s", v)} /></div>
+            <div className="field"><label>Cooldown ({isTime ? "pro Regel" : "pro Kamera"})</label><Range value={f.cooldown_s} min={0} max={3600} step={5} format={(v) => (v >= 60 ? `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}` : `${v} s`)} onChange={(v) => set("cooldown_s", v)} /></div>
           </div>
-          <Switch checked={!!f.schedule} onChange={(v) => set("schedule", v ? { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" } : null)} label="Nur zu bestimmten Zeiten" />
-          {f.schedule && (
+          {isTime ? (
+            <div className="field"><label>An diesen Tagen</label>
+              <ChipSelect options={[0, 1, 2, 3, 4, 5, 6]} value={f.schedule?.days ?? [0, 1, 2, 3, 4, 5, 6]}
+                onChange={(d) => set("schedule", d.length === 7 ? null : { days: [...d].sort(), start: "00:00", end: "23:59" })} render={(d) => DAYS[d]} />
+            </div>
+          ) : <Switch checked={!!f.schedule} onChange={(v) => set("schedule", v ? { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" } : null)} label="Nur zu bestimmten Zeiten" />}
+          {f.schedule && !isTime && (
             <div className="row-wrap" style={{ gap: 16 }}>
               <ChipSelect options={[0, 1, 2, 3, 4, 5, 6]} value={f.schedule.days} onChange={(d) => set("schedule", { ...f.schedule!, days: [...d].sort() })} render={(d) => DAYS[d]} />
               <div className="row">
@@ -270,12 +317,14 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
           )}
         </fieldset>
 
+        <ConditionsBlock f={f} cams={cams} onChange={(p) => setF((x) => ({ ...x, ...p }))} />
+
         <fieldset className="fieldset"><legend>Aktionen</legend>
           {f.actions.map((a, i) => (
             <ActionEditor key={i} a={a} onChange={(n) => set("actions", f.actions.map((x, k) => (k === i ? n : x)))} onRemove={() => set("actions", f.actions.filter((_, k) => k !== i))} />
           ))}
           <div className="row-wrap">
-            {(Object.keys(ACTION_META) as RuleAction["type"][]).map((t) => (
+            {(Object.keys(ACTION_META) as RuleAction["type"][]).filter((t) => !isTime || (t !== "snapshot" && t !== "clip")).map((t) => (
               <button type="button" key={t} className="btn btn-sm" onClick={() => set("actions", [...f.actions, newAction(t)])}><Plus size={14} />{ACTION_META[t].name}</button>
             ))}
           </div>
@@ -283,6 +332,11 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
       </div>
     </Dialog>
   );
+}
+
+function RuleSummaryRow({ r, cams, idents }: { r: Rule; cams: Camera[]; idents: Identity[] }) {
+  const condText = useConditionSummary(r.conditions ?? [], cams);
+  return <>{ruleSummary(r, cams, idents, condText)}{r.conditions?.length ? <span className="badge outline" style={{ marginLeft: 6 }} title="Regel mit Bedingungen"><ListChecks size={12} /></span> : null}</>;
 }
 
 export function RulesPage() {
@@ -314,7 +368,7 @@ export function RulesPage() {
         <button className="btn btn-primary" onClick={() => setEdit("new")}><Plus size={16} />Neue Regel</button>
       </div>
       {rules.isLoading ? <Loading /> : !rules.data?.length ? (
-        <div className="card"><Empty icon={<Workflow size={44} />} title="Keine Regeln" text="Regeln lösen Snapshots, Clips, MQTT-Nachrichten oder Webhooks aus." /></div>
+        <div className="card"><Empty icon={<Workflow size={44} />} title="Keine Regeln" text="Regeln lösen Snapshots, Clips, MQTT-Nachrichten, Webhooks oder Push-Hinweise aus – bei Erkennungen oder zu einer Uhrzeit." /></div>
       ) : (
         <div className="list">
           {rules.data.map((r, i) => (
@@ -322,7 +376,7 @@ export function RulesPage() {
               <Switch checked={r.enabled} onChange={() => toggle.mutate(r)} />
               <div className="grow">
                 <div className="title">{r.name}{!r.enabled && <span className="badge">inaktiv</span>}</div>
-                <div style={{ marginTop: 4 }}>{ruleSummary(r, cams.data ?? [], idents.data ?? [])}</div>
+                <div style={{ marginTop: 4 }}><RuleSummaryRow r={r} cams={cams.data ?? []} idents={idents.data ?? []} /></div>
               </div>
               <div className="row" style={{ gap: 4 }}>{r.actions.map((a, k) => <span key={k} className="badge accent" title={ACTION_META[a.type].name}>{ACTION_META[a.type].icon}</span>)}</div>
               <button className="btn btn-sm" onClick={() => setEdit(r)}><Pencil size={14} />Bearbeiten</button>
