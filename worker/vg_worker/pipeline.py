@@ -116,6 +116,7 @@ class Pipeline:
         self.sensors = SensorEngine(publish, self.taps, self.identifier.pet)
         self.history = HistoryEngine(publish, self.taps, self.gpu)
         self.lease.register("history", self.history.pause_gpu, self.history.resume_gpu)
+        self.embed.siglip = self.history          # B1: vg/internal/embed mit model "siglip2" (lädt bei Bedarf)
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
