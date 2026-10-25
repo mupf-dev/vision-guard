@@ -20,6 +20,7 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
 | `rule_conditions.py` | Auswertung `conditions`: Gegenstand da/weg, unberührt, Regen, kam aus Zone (A1) |
 | `weather.py` | Regenwahrscheinlichkeit von Open-Meteo (ohne Key, Cache 30 min, `VG_WEATHER_URL` für Tests) |
 | `identity.py` | Kosinus-Abgleich (numpy, In-Memory-Cache) für face/pet, Levenshtein für Kennzeichen |
+| `reid.py`, `routers/presence.py` | C2: RAM-Galerie (presence_key ↔ Embeddings/Tracks/Identität), `POST /api/internal/reid`, `GET/DELETE /api/presence`, WS `presence` |
 | `retention.py` | Events älter `retention_days_events`, Dateien in snapshots/crops/clips älter `retention_days_media` |
 | `ws.py`, `state.py`, `registry.py` | WebSocket-Hub, flüchtiger Status, Kamera-Cache |
 
@@ -48,6 +49,11 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
 - **Identitäten**: neue unbenannte → „Person #N“ / „Tier #N“ (Zähler je Art), „Kennzeichen <Text>“.
   Max. 20 Samples je Identität (beste Qualität bleibt), Crops werden nach `identities/<id>/` kopiert.
   `identify` mit `camera_id`+`track_id` verknüpft die Identität direkt mit dem aktiven Event.
+- **Anwesenheit (C2)**: Track-Hook für Personen/Hunde/Katzen, jeder Track gehört genau einem `presence_key`.
+  ReID-Embeddings (nur `reid_enabled`-Kameras) werden gegen die Galerie abgeglichen (Kosinus, Maximum je Eintrag,
+  Schwelle `reid_match_threshold`), nur gegen Einträge ohne gleichzeitig aktiven Track. Gesicht hat Vorrang: eine
+  eigene Identität benennt den Eintrag bzw. löst einen per ReID verknüpften Track heraus. Identität wird per ReID nur
+  ab Schwelle + 0,1 weitergegeben. Alles nur im RAM, Verfall nach `reid_ttl_min`, Neustart = leer.
 - Aktive Events aus einem früheren Lauf werden beim Start beendet; Tracks ohne Lebenszeichen
   (60 s) werden automatisch beendet.
 

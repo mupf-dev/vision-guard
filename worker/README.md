@@ -141,6 +141,20 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 * GPU-Lease: Bildturm wandert in den Arbeitsspeicher (kein Neuladen von Platte), Takte verfallen
   (`perf.history.skipped`), danach zurück auf die GPU. `perf.history = {per_min, ms, skipped, stored_per_min, cameras}`.
 
+## Person über mehrere Kameras (C2, ReID)
+
+* Nur auf Kameras mit `reid_enabled` (Standard aus). Je bestätigtem Personen-Track höchstens alle 3 s und höchstens
+  5 Ausschnitte (Box ≥ 128 px hoch, höher als breit, nicht am Rand, nicht liegend, nicht von einer anderen Person
+  überdeckt) → OSNet x0_25 (MSMT17, ONNX, 512-d) → `POST /api/internal/reid`. Antwort: `presence_key` als
+  Track-Attribut, ggf. eine über ReID weitergegebene Identität (`attributes.identity_source: "reid"`, nur ohne eigene;
+  ein später erkanntes Gesicht hat Vorrang).
+* Standard **CPU** (≈ 7 ms je Ausschnitt, 0 MB VRAM; messungen.md §11). Gewichte einmalig nach `/models/reid`
+  (0,9 MB, SHA-256 geprüft). Ladefehler → `models.reid = "error: …"`, Detektion läuft weiter.
+* **Embeddings nur im RAM**, weder geloggt noch gespeichert. `perf.reid = {embeds_per_min, runs_per_min, ms,
+  skipped, cameras, sent, linked, new, errors}`.
+* Machbarkeitstest: `python -m vg_worker.tests_feasibility.reidtest --market <Market-1501>` (Rank-1/mAP,
+  Haushalt-Simulation, Zeit, VRAM; `--dino` vergleicht mit dem Tiermodell).
+
 ## Track-Lebenszyklus
 
 * `start`: nach ≥ 3 Treffern mit `score ≥ min_score` (Label = score-gewichtete Mehrheit).
@@ -176,6 +190,9 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 | `VG_INVENTORY_SOURCE` | `auto` | `auto` (Ringpuffer → go2rtc → RTSP), `buffer`, `go2rtc`, `rtsp` |
 | `VG_INVENTORY_CROP_MIN_S` / `VG_INVENTORY_UNLOAD_S` / `VG_INVENTORY_PERSON_HOLD_S` | `60` / `600` / `3` | Crop-Abstand, Entladen ohne Inventar-Kamera, Zeitfenster für Verdeckung |
 | `VG_HEALTH` / `VG_HEALTH_INTERVAL_S` / `VG_HEALTH_PUBLISH_S` | `1` / `10` / `30` | Kamera-Gesundheit: globaler Schalter, Prüfabstand je Kamera, spätestes Senden |
+| `VG_REID_DEVICE` / `VG_REID_THREADS` | `cpu` / `2` | ReID (C2) auf `cpu` oder `cuda` |
+| `VG_REID_INTERVAL_S` / `VG_REID_MAX_PER_TRACK` / `VG_REID_MIN_HEIGHT` | `3` / `5` / `128` | Drosselung und Mindestgröße je Track |
+| `VG_REID_MODEL_URL` / `VG_REID_MODEL_SHA256` | Hugging Face `kornia/osnet` / Prüfsumme | eigene Gewichte (leere Prüfsumme = ohne Prüfung) |
 | `VG_GO2RTC_URL` | `http://go2rtc:1984` | nur für den Keyframe-Fallback |
 | `VG_LOG_LEVEL` | `INFO` | |
 

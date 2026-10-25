@@ -655,7 +655,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     return json({ by_label, by_camera: { 1: 142, 2: 87, 3: 0 }, timeline, identities_new: 3 });
   }
   // W4 C2: Anwesenheit (RAM-Galerie im Backend)
-  if (path === "/presence/status") return json({ entries: presence.length, active: presence.filter((x) => x.active).length, embeddings: 7, requests: 12, linked: 3, new: 4, identity_given: 1, merged: 0, expired: 2 });
+  if (path === "/presence/status") return json({ entries: presence.length, active: presence.filter((x) => x.active).length, embeddings: 7, requests: 12, linked: 3, new: 4, adopted: 1, identity_given: 1, merged: 0, expired: 2 });
   if (path === "/presence" && method === "DELETE") { presence = []; return json(undefined, 204); }
   if (path === "/presence") {
     const min = Number(p.get("minutes") ?? 60);

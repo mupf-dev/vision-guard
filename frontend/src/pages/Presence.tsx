@@ -32,7 +32,9 @@ function place(p: Presence) {
 
 function PresenceCard({ p }: { p: Presence }) {
   const src = SOURCE[p.source] ?? SOURCE.none;
-  const trail = p.trail.slice(0, 5).reverse();    // älteste zuerst → Weg durchs Haus
+  // älteste zuerst → Weg durchs Haus; aufeinanderfolgende Tracks derselben Kamera zusammenfassen
+  const trail = p.trail.slice(0, 8).reverse()
+    .filter((t, i, a) => i === 0 || a[i - 1].camera_id !== t.camera_id).slice(-5);
   return (
     <div className={`card presence-card ${p.active ? "active" : ""}`}>
       <div className="presence-head">
@@ -60,7 +62,7 @@ function PresenceCard({ p }: { p: Presence }) {
             {trail.map((t, i) => (
               <span key={`${t.camera_id}-${t.since}-${i}`} className="presence-step">
                 {i > 0 && <ArrowRight size={11} className="muted" />}
-                <span className={t.active ? "" : "muted"} title={`${fmtShort(t.since)}–${fmtTime(t.last_seen)}${t.via === "reid" ? " (Wiedererkennung)" : t.via === "face" ? " (Gesicht)" : ""}`}>
+                <span className={t.active ? "" : "muted"} title={`${fmtShort(t.since)}–${fmtTime(t.last_seen)}${t.via === "reid" ? ` (Wiedererkennung${t.score ? ` ${pct(t.score)}` : ""})` : t.via === "face" ? " (Gesicht)" : ""}`}>
                   {t.camera_name ?? t.camera_id}
                 </span>
               </span>
@@ -94,7 +96,7 @@ export function PresencePage() {
         </div>
         <div className="row">
           <select className="select input-sm" value={label} onChange={(e) => setLabel(e.target.value as typeof label)}>
-            <option value="">Personen und Tiere</option><option value="person">nur Personen</option><option value="dog,cat">nur Tiere</option>
+            <option value="">Alle</option><option value="person">Personen</option><option value="dog,cat">Tiere</option>
           </select>
           <select className="select input-sm" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} title="zuletzt gesehen innerhalb von">
             <option value={15}>15 min</option><option value={60}>1 h</option><option value={180}>3 h</option><option value={720}>12 h</option>

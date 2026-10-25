@@ -1074,6 +1074,8 @@ export interface PresenceTrail {
   last_seen: string | null;
   active: boolean;
   event_id: string | null;
+  /** Score der ReID-Verknüpfung dieses Tracks (null = nicht per ReID verknüpft) */
+  score?: number | null;
   via: "face" | "reid" | "track";
 }
 
@@ -1111,6 +1113,8 @@ export interface PresenceStatus {
   requests: number;
   linked: number;
   new: number;
+  /** anonyme Einträge, die ein Track mit Gesicht übernommen hat (ab Schwelle + 0,1) */
+  adopted: number;
   identity_given: number;
   merged: number;
   expired: number;

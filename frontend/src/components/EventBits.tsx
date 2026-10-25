@@ -73,7 +73,8 @@ export function EventDetailDialog({ event, onClose }: { event: VGEvent; onClose:
     onSuccess: (ev) => { toast.success("Quittiert"); qc.setQueryData(["event", e.id], ev); qc.invalidateQueries({ queryKey: ["events"] }); },
     onError: (err: Error) => toast.error("Quittieren fehlgeschlagen", err.message),
   });
-  const HIDDEN = new Set(["plate_text", "alert", "posture", "posture_since", "motion"]);
+  const HIDDEN = new Set(["plate_text", "alert", "posture", "posture_since", "motion", "presence_key", "identity_source"]);
+  const viaReid = e.attributes?.identity_source === "reid";
   const extraAttrs = Object.entries(e.attributes ?? {}).filter(([k, v]) => !HIDDEN.has(k) && v !== null && v !== undefined && v !== "" && typeof v !== "object");
   const posture = e.attributes?.posture ? String(e.attributes.posture) as Posture : null;
 
@@ -113,7 +114,9 @@ export function EventDetailDialog({ event, onClose }: { event: VGEvent; onClose:
             <dt>Konfidenz</dt><dd>{Math.round(e.score * 100)} %</dd>
             <dt>Track</dt><dd className="mono">#{e.track_id}</dd>
             <dt>Identität</dt>
-            <dd>{e.identity ? <Link to={`/identitaeten/${e.identity.id}`} onClick={onClose}><Fingerprint size={13} style={{ verticalAlign: -2 }} /> {e.identity.display_name}</Link> : <span className="muted">–</span>}</dd>
+            <dd>{e.identity ? <Link to={`/identitaeten/${e.identity.id}`} onClick={onClose}><Fingerprint size={13} style={{ verticalAlign: -2 }} /> {e.identity.display_name}</Link> : <span className="muted">–</span>}
+              {e.identity && viaReid && <span className="muted" title="Kein eigenes Gesicht – über Kleidung/Statur von einer anderen Kamera übernommen (nur ein Hinweis)"> · über Wiedererkennung</span>}
+              {e.attributes?.presence_key ? <> · <Link to="/anwesenheit" onClick={onClose} className="muted">Anwesenheit</Link></> : null}</dd>
             {plate && <><dt>Kennzeichen</dt><dd><Plate text={plate} /></dd></>}
             {posture && <><dt>Haltung</dt><dd>{POSTURE_NAME[posture] ?? posture}{typeof e.attributes?.motion === "number" ? <span className="muted"> · Bewegung {Number(e.attributes.motion).toFixed(2)}</span> : null}</dd></>}
             {alert && <><dt>Notfall</dt><dd><AlertBadge e={e} />{alert.repeat ? <span className="muted"> · {alert.repeat}× wiederholt</span> : null}{e.acknowledged_at ? <span className="muted"> · {fmtDateTime(e.acknowledged_at)}</span> : null}</dd></>}
