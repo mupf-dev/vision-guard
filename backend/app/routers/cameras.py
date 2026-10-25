@@ -123,6 +123,8 @@ async def delete_camera(cam_id: int, db: Session = Depends(get_db)):
     from ..inventory import memory as inventory_memory
     await run_in_threadpool(inventory_memory.drop_camera, cam_id)
     await run_in_threadpool(camera_health.drop_camera, cam_id)
+    from .. import history as time_machine     # B1: Zeitmaschinen-Bilder der Kamera entfernen
+    await run_in_threadpool(time_machine.drop_camera, cam_id)
     await cameras_changed()
     return Response(status_code=204)
 
