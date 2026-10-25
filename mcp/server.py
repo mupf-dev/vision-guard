@@ -2,7 +2,8 @@
 
 Der Dienst hat keinen eigenen Zugang: Er verlangt vom MCP-Client einen API-Key (`Authorization: Bearer vgt_…`),
 prüft ihn über `GET /api/auth/me` und reicht denselben Header bei jedem Backend-Aufruf durch. Keys werden nie
-geloggt. Alle Tools lesen nur (Scope `read` genügt). Siehe CONTRACT.md, Abschnitt „I. MCP-Dienst“.
+geloggt. Lesende Tools brauchen Scope `read`; Tools mit Wirkung (ab W2) prüfen `write` selbst
+(`tools.common.require_write`). Siehe CONTRACT.md, Abschnitt „I. MCP-Dienst“.
 Die Tools liegen je Thema unter `tools/` (Aufteilung seit Welle 1, siehe `tools/__init__.py`).
 """
 

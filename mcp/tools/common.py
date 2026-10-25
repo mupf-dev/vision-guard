@@ -5,8 +5,10 @@ Jedes Themen-Modul unter `tools/` importiert von hier und bringt eine Funktion `
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -24,6 +26,11 @@ except Exception:  # noqa: BLE001
     LOCAL_TZ = ZoneInfo("Europe/Berlin")
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+# W2: Tools mit Wirkung (quittieren, Rückfrage beantworten …) – vorher `await require_write(ctx)`
+WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+WRITE_ERROR = "API-Key ohne Schreibrecht."
+SCOPE_CACHE_S = 30.0
+_scopes: dict[str, tuple[float, list[str]]] = {}   # sha256(Authorization) → (gültig bis, scopes)
 
 AUTH_ERROR = "API-Key ungültig oder ohne Berechtigung."
 
@@ -87,6 +94,52 @@ async def api(ctx: Context, path: str, params: Optional[dict] = None, *, raw: bo
     if resp.status_code >= 400:
         raise BackendError(f"Backend-Fehler: {_detail(resp)}")
     return resp if raw else resp.json()
+
+
+async def api_send(ctx: Context, method: str, path: str, *, json: Optional[dict] = None,
+                   params: Optional[dict] = None, not_found: Optional[str] = None) -> Any:
+    """W2: Backend-Aufruf mit Wirkung (POST/PUT/PATCH/DELETE) mit dem Key des Clients. Vorher require_write()."""
+    params = {k: v for k, v in (params or {}).items() if v is not None}
+    try:
+        resp = await http().request(method.upper(), "/api" + path, params=params, json=json,
+                                    headers={"Authorization": _auth_header(ctx)})
+    except httpx.HTTPError as e:
+        log.warning("Backend nicht erreichbar (%s %s): %s", method, path, type(e).__name__)
+        raise BackendError("VisionGuard-Backend ist nicht erreichbar.") from e
+    if resp.status_code == 401:
+        raise BackendError(AUTH_ERROR)
+    if resp.status_code == 403:
+        raise BackendError(WRITE_ERROR if "write" in _detail(resp) else AUTH_ERROR)
+    if resp.status_code == 404:
+        raise BackendError(not_found or "Nicht gefunden.")
+    if resp.status_code >= 400:
+        raise BackendError(f"Backend-Fehler: {_detail(resp)}")
+    if resp.status_code == 204 or not resp.content:
+        return None
+    return resp.json()
+
+
+async def scopes(ctx: Context) -> list[str]:
+    """Scopes des Keys aus GET /auth/me (30 s gecacht, Schlüssel = SHA-256 des Headers)."""
+    auth = _auth_header(ctx)
+    digest = hashlib.sha256(auth.encode()).hexdigest()
+    now = time.monotonic()
+    hit = _scopes.get(digest)
+    if hit and hit[0] > now:
+        return hit[1]
+    me = await api(ctx, "/auth/me")
+    sc = [str(x) for x in (me.get("scopes") or [])] if isinstance(me, dict) else []
+    if len(_scopes) > 1000:
+        for k in [k for k, v in _scopes.items() if v[0] <= now]:
+            _scopes.pop(k, None)
+    _scopes[digest] = (now + SCOPE_CACHE_S, sc)
+    return sc
+
+
+async def require_write(ctx: Context) -> None:
+    """W2-Regel für Schreibwerkzeuge: ohne Scope `write` → BackendError „API-Key ohne Schreibrecht.“"""
+    if "write" not in await scopes(ctx):
+        raise BackendError(WRITE_ERROR)
 
 
 # ------------------------------------------------------------------ Formatierung
