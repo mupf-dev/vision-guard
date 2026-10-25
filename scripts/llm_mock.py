@@ -12,7 +12,8 @@ Antwortmodi (Umgebungsvariable `LLM_MOCK_MODE` oder Kopfzeile `X-Mock-Mode`):
 - `echo` (Standard): wiederholt die letzte Nutzernachricht (max. 400 Zeichen) – gut für Plausibilitätsprüfungen,
   weil keine neuen Fakten entstehen.
 - `fixed`: Text aus `LLM_MOCK_TEXT`.
-- `invent`: hängt eine erfundene Uhrzeit an („… um 03:17 Uhr“) – testet den Rückfall auf Satzbausteine (B3).
+- `invent`: hängt an `LLM_MOCK_TEXT` (sonst Echo) eine erfundene Uhrzeit an („… um 03:17 Uhr“, `LLM_MOCK_TIME`) –
+  testet den Rückfall auf Satzbausteine (B3).
 - `error`: HTTP 500; `slow`: wartet `LLM_MOCK_DELAY` Sekunden (Timeout-Test).
 Ein Schlüssel wird nicht geprüft und nie ausgegeben.
 """
@@ -63,7 +64,9 @@ class Handler(BaseHTTPRequestHandler):
         if mode == "fixed":
             text = os.environ.get("LLM_MOCK_TEXT", "OK")
         elif mode == "invent":
-            text = (str(last)[:300] + " Außerdem kam jemand um 03:17 Uhr.").strip()
+            # Basis: LLM_MOCK_TEXT (plausibler Text) oder Echo; erfundene Uhrzeit aus LLM_MOCK_TIME (Standard 03:17)
+            base = os.environ.get("LLM_MOCK_TEXT") or str(last)[:300]
+            text = (base + f" Außerdem kam jemand um {os.environ.get('LLM_MOCK_TIME') or '03:17'} Uhr.").strip()
         else:
             text = str(last)[:400] or "OK"
         self._json(200, {
