@@ -204,7 +204,7 @@ export function NotificationsPage() {
                 <div key={n.id} className="card" style={{ cursor: "pointer" }} onClick={() => setOpen(n)}>
                   <div className="card-body" style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
                     <div style={{ width: 112, height: 72, flexShrink: 0, borderRadius: 8, overflow: "hidden", background: "var(--bg-4)", display: "grid", placeItems: "center" }}>
-                      {n.image_url ? <Img src={n.image_url} className="cover-img" /> : <BellRing size={22} className="muted" />}
+                      {n.image_url ? <Img src={n.image_url} className="cover-img" fallback={<BellRing size={22} className="muted" />} /> : <BellRing size={22} className="muted" />}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>

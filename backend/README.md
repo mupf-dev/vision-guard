@@ -16,7 +16,9 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
 | `go2rtc.py` | Stream-Sync `cam_N` / `cam_N_detect`, `frame.jpeg`-Proxy, URL-Probe über temporären Stream `probe_<hex>` |
 | `mqtt_bus.py` | paho-mqtt 2, abonniert `vg/internal/#`, LWT `{prefix}/available` |
 | `events.py` | Track → Event (ein Track = ein Event), Regel-Auswertung, Aktionen, Zähler `{prefix}/{kamera_slug}/{label}` |
-| `rules.py` | Bedingungen (Zeitplan inkl. über Mitternacht, Identität, Zonen, Dwell), Templates, Webhooks |
+| `rules.py` | Bedingungen (Zeitplan inkl. über Mitternacht, Identität, Zonen, Dwell), Registry für Trigger/Bedingungen, Zeit-Trigger-Fälligkeit, Templates, Webhooks |
+| `rule_conditions.py` | Auswertung `conditions`: Gegenstand da/weg, unberührt, Regen, kam aus Zone (A1) |
+| `weather.py` | Regenwahrscheinlichkeit von Open-Meteo (ohne Key, Cache 30 min, `VG_WEATHER_URL` für Tests) |
 | `identity.py` | Kosinus-Abgleich (numpy, In-Memory-Cache) für face/pet, Levenshtein für Kennzeichen |
 | `retention.py` | Events älter `retention_days_events`, Dateien in snapshots/crops/clips älter `retention_days_media` |
 | `ws.py`, `state.py`, `registry.py` | WebSocket-Hub, flüchtiger Status, Kamera-Cache |
@@ -31,6 +33,10 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
   Cooldown pro Regel+Kamera. Dwell wird bei Updates und jede Sekunde geprüft.
   Snapshot: Auftrag an Worker (`vg/internal/cmd/{id}`); ohne Antwort nach 5 s holt das Backend
   selbst ein Bild von go2rtc. Clip: höchstens ein Auftrag pro Event.
+- **Hinweise (A1)**: Regeln mit `conditions` prüfen diese erst `condition_delay_s` nach dem Auslösen (eigener
+  Thread-Pool, nie im Track-Thread); erfüllt → Aktionen + Notification. Zeit-Regeln (`trigger=time`) prüft der
+  Tick alle 20 s; der letzte Lauf steht in `kv.rule_time_runs`, verpasste Zeitpunkte werden bis 15 min nachgeholt.
+  `POST /api/rules/check` prüft einen Entwurf sofort (UI „Jetzt prüfen“).
 - **Identitäten**: neue unbenannte → „Person #N“ / „Tier #N“ (Zähler je Art), „Kennzeichen <Text>“.
   Max. 20 Samples je Identität (beste Qualität bleibt), Crops werden nach `identities/<id>/` kopiert.
   `identify` mit `camera_id`+`track_id` verknüpft die Identität direkt mit dem aktiven Event.

@@ -89,7 +89,7 @@ def register(mcp: MCPServer) -> None:
             for n in items:
                 head = f"{fmt_time(n['ts'])} ({fmt_ago(n['ts'])}) – {LEVEL_DE.get(n['level'] or '', 'Hinweis')}"
                 head += f", {SOURCE_DE.get(n['source'] or '', n['source'])}"
-                if n["rule"] and n["source"] == "rule":
+                if n["rule"] and n["source"] == "rule" and n["rule"] != n["title"]:
                     head += f" „{n['rule']}“"
                 text = f"- {head}: {n['title'] or ''}"
                 if n["message"]:

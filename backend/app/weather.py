@@ -55,10 +55,12 @@ class RainOutlook:
     fetched: float
 
     def text(self, threshold: float) -> str:
-        """„70 % Regen ab 15 Uhr“ / „70 % Regen ab morgen 6 Uhr“ / „Regen unwahrscheinlich (10 %)“."""
+        """„70 % Regen ab 15 Uhr“ / „70 % Regen ab morgen 6 Uhr“ / „höchstens 10 % Regen“ / „kein Regen erwartet“."""
         p = int(round(self.max_probability))
-        if self.max_probability <= 0 or (threshold > 0 and self.max_probability < threshold):
-            return f"Regen unwahrscheinlich ({p} %)"
+        if p <= 0:
+            return "kein Regen erwartet"
+        if threshold > 0 and self.max_probability < threshold:
+            return f"höchstens {p} % Regen"
         if self.start_ts is None:
             return f"{p} % Regen in den nächsten {self.hours} h"
         now = datetime.now(timezone.utc).astimezone(config.tz)
@@ -160,7 +162,8 @@ def rain_outlook(hours: int, threshold: float = 0.0) -> Optional[RainOutlook]:
     if not window:
         return None
     mx = max(h[1] for h in window)
-    thr = max(threshold, 1.0)
+    # „ab …“ = erste Stunde über der Schwelle; ohne Schwelle die erste Stunde mit dem Höchstwert
+    thr = threshold if threshold > 0 else max(mx, 1.0)
     start = next((h[0] for h in window if h[1] >= thr), None)
     return RainOutlook(max_probability=mx, start_ts=start, precipitation_mm=round(sum(h[2] for h in window), 1),
                        hours=hours, fetched=c.fetched)

@@ -184,6 +184,9 @@ def evaluate_conditions(rule: dict[str, Any], ctx: CondContext, *, all_details: 
         total.snapshot_path = total.snapshot_path or r.snapshot_path
         total.camera_id = total.camera_id if total.camera_id is not None else r.camera_id
     if first_fail is not None:
+        if all_details:   # Platzhalter der erfüllten Bedingungen bleiben für die Vorschau erhalten
+            total.ok, total.reason = False, first_fail.reason
+            return total
         first_fail.details = total.details
         return first_fail
     total.reason = "; ".join(d["reason"] for d in total.details if d.get("reason"))

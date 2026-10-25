@@ -619,6 +619,29 @@ image_path, reason}`. Schemas der W1-Bedingungen: `schemas.CondInventory`, `Cond
 `CondWeather`, `CondTrackCameFrom`, `TimeTriggerOptions`. Evaluatoren registriert A1 in
 `backend/app/rule_conditions.py` (wird von `main.py` importiert).
 
+Ergänzungen der Umsetzung (A1, additiv):
+- `POST /api/rules/check` (Body wie `POST /rules`, auch ungespeichert) prüft die Bedingungen **jetzt**, ohne Aktionen
+  → `{ok, reason, details:[{type, ok: bool|null, reason}], placeholders:{items, item_place, weather}, item_ids,
+  preview:{title, message}|null}`. `track_came_from` liefert `ok:null` („erst beim Auslösen prüfbar“).
+- Track-Regeln mit `conditions`: Prüfung `condition_delay_s` nach der Auslösung (Thread-Pool), je Regel+Kamera
+  höchstens eine offene Prüfung; der Cooldown beginnt erst, wenn die Bedingungen erfüllt sind und die Aktionen laufen.
+  Offene Prüfungen gehen bei einem Backend-Neustart verloren.
+- `trigger=time`: fällig ab `at` + `condition_delay_s` (lokal), Nachholfenster 15 min (Backend-Neustart), letzter
+  Lauf je Regel in `kv.rule_time_runs`. Aktionen `snapshot`/`clip` sind ohne Event wirkungslos; `mqtt`/`webhook` ohne
+  `payload`/`body` senden die Notification (signierte URLs). Notification `data.trigger = "time"`, Bild = Übersichts-
+  bild (`snapshot`) bzw. Crop (`crop`) des Gegenstands aus der Bedingung.
+- `inventory_untouched`: zählt nur Gegenstände, die zu `since` schon `present` waren (liegt `since` in der Zukunft:
+  gestern). „Berührt“ = Verschiebung > 0,1 oder `missing`-Phase > 120 s bzw. an anderer Stelle beendet; kürzere
+  Phasen am selben Ort gelten als Erkennungs-Flackern, `stale`-Phasen zählen nicht. `zone_ids` bedeutet hier: seit
+  `since` war **kein Personen-Track** in diesen Zonen (Bereich vor dem Gegenstand), nicht der Ort des Gegenstands.
+- `track_came_from`: erfüllt, wenn der Track eine der Zonen **vor** dem Eintritt in die Auslösezone betreten hat
+  (gleichzeitiger Eintritt beim Track-Start = Richtung unklar → nicht erfüllt). `TrackState` hat dafür
+  `zones_visited` und `zone_entries`; `CondContext` zusätzlich `trigger_ts`, `trigger_zones`; `CondResult`
+  zusätzlich `snapshot_path`, `camera_id`, `details`.
+- `weather`: Open-Meteo `hourly=precipitation_probability`, Cache 30 min je Standort, bei Fehlern höchstens 3 h alter
+  Cache, danach unbekannt. Basis-URL per Env `VG_WEATHER_URL` (Backend, Default
+  `https://api.open-meteo.com/v1/forecast`; für Tests).
+
 **Hook-API** (`backend/app/events.py`): `on_track(callback) -> off()`; `callback(TrackHook)` mit
 `TrackHook{phase:"start|update|end", camera_id, track_id, event_id, label, msg, track}` nach Event-Speicherung und
 Regelauswertung, auch bei nachträglich aufgelöster Identität (`phase:"update"`, `msg={"identity":…}`) und bei
