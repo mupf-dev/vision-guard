@@ -120,6 +120,12 @@ def _inventory_retention(now: datetime, days: int) -> dict:
         for crop, snap in s.execute(select(InventoryItem.crop_path, InventoryItem.snapshot_path)).all():
             keep.update(p for p in (crop, snap) if p)
         keep.update(p for p in s.scalars(select(InventoryHistory.crop_path).distinct()).all() if p)
+        # W2 (D2): Bilder offener Rückfragen und der Beispielsammlung bleiben erhalten
+        from .models import InventoryExample, ReviewRequest
+        for crop, snap in s.execute(select(ReviewRequest.crop_path, ReviewRequest.snapshot_path)
+                                    .where(ReviewRequest.status == "open")).all():
+            keep.update(p for p in (crop, snap) if p)
+        keep.update(p for p in s.scalars(select(InventoryExample.crop_path).distinct()).all() if p)
     keep_abs = {os.path.realpath(os.path.join(config.media_dir, p.lstrip("/"))) for p in keep}
     root = os.path.join(config.media_dir, "inventory")
     limit = time.time() - days * 86400
