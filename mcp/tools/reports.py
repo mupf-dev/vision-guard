@@ -93,7 +93,10 @@ def register(mcp: MCPServer) -> None:
             start = datetime.combine(day, datetime.min.time())
             until = None if day == now.date() else datetime.combine(day + timedelta(days=1), datetime.min.time())
             prev = await api(ctx, "/reports/preview", {"since": start.isoformat(),
-                                                       "until": until.isoformat() if until else None, "signed": 1})
+                                                       "until": until.isoformat() if until else None, "signed": 1,
+                                                       # R1: nie ein LLM – sonst > 20-s-Zeitlimit des MCP
+                                                       # und ggf. bezahlte Wiederholungen
+                                                       "template": 1})
             rep = _compact(prev)
             text = f"{rep['text']}\n\n(Vorschau – für diesen Tag ist kein Tagesbericht gespeichert; Text: {rep['generator']})"
             return ok(text, {"date": day.isoformat(), "source": "preview", "report": rep})

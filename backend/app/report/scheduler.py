@@ -77,6 +77,32 @@ def period_key(d: _date) -> str:
     return f"daily:{d.isoformat()}"
 
 
+# Refinement 1: Fehlversuche je period_key (im Speicher) – Wiederholung nach 5, 15, 60 min, danach aufgeben.
+# Ohne das würde ein dauerhaft fehlschlagender Bericht (SMTP/DB) bis zum Ende des Nachhol-Fensters alle 20 s neu
+# erzeugt (Log-Flut, mit Cloud-LLM bezahlte Aufrufe).
+RETRY_DELAYS_S = (300, 900, 3600)
+_failures: dict[str, tuple[int, float]] = {}   # period_key → (Fehlversuche, nächster Versuch frühestens monotonic)
+
+
+def _may_try(key: str, mono: float) -> bool:
+    n, next_at = _failures.get(key, (0, 0.0))
+    return n <= len(RETRY_DELAYS_S) and mono >= next_at
+
+
+def _failed(key: str) -> None:
+    n = _failures.get(key, (0, 0.0))[0] + 1
+    if n > len(RETRY_DELAYS_S):
+        log.error("Tagesbericht %s: %d Fehlversuche – keine weitere automatische Wiederholung", key, n)
+        _failures[key] = (n, float("inf"))
+        return
+    delay = RETRY_DELAYS_S[n - 1]
+    log.warning("Tagesbericht %s: Fehlversuch %d – nächster Versuch in %d min", key, n, delay // 60)
+    _failures[key] = (n, _time.monotonic() + delay)
+    if len(_failures) > 50:
+        for k in sorted(_failures)[:-20]:
+            _failures.pop(k, None)
+
+
 def _run_due(days: list[_date]) -> None:
     from .service import generate
 
@@ -87,6 +113,7 @@ def _run_due(days: list[_date]) -> None:
                 r = generate(start, end, kind="daily", period_key=period_key(d), deliver=True)
             except Exception:
                 log.exception("Tagesbericht %s fehlgeschlagen", d)
+                _failed(period_key(d))
                 continue
             if r:
                 log.info("Tagesbericht %s erzeugt (id %s, %s)", d, r["id"], r["generator"])
@@ -128,7 +155,7 @@ def tick() -> None:
     with SessionLocal() as s:
         have = set(s.scalars(select(Report.period_key).where(
             Report.period_key.in_([period_key(d) for d in days]))).all())
-    todo = [d for d in days if period_key(d) not in have]
+    todo = [d for d in days if period_key(d) not in have and _may_try(period_key(d), mono)]
     if not todo or not _busy.acquire(blocking=False):
         return
     threading.Thread(target=_run_due, args=(todo,), name="vg-report", daemon=True).start()

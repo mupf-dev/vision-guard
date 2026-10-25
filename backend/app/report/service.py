@@ -37,11 +37,17 @@ def known_names(db: Session) -> list[str]:
     return [n for n in db.scalars(select(Identity.name).where(Identity.name.is_not(None)).distinct()).all() if n]
 
 
-def build(db: Session, since: datetime, until: datetime, *, kind: str = "manual") -> dict[str, Any]:
-    """Bericht (ungespeichert): {kind, period_start, period_end, facts, text, html, generator}."""
+def build(db: Session, since: datetime, until: datetime, *, kind: str = "manual",
+          template_only: bool = False) -> dict[str, Any]:
+    """Bericht (ungespeichert): {kind, period_start, period_end, facts, text, html, generator}.
+
+    `template_only` (Refinement 1, MCP-Vorschau): nie ein Sprachmodell fragen, nur Satzbausteine."""
     facts = collect_facts(db, since, until)
     st = settings_store.get()
-    if st.get("report_generator") == "llm" and (st.get("llm_provider") or "none") != "none":
+    if template_only:
+        text, html = render_template(facts, kind)
+        generator = "template"
+    elif st.get("report_generator") == "llm" and (st.get("llm_provider") or "none") != "none":
         text, html, generator, meta = render_llm(facts, known_names(db), kind)
         facts["generation"] = meta
     else:

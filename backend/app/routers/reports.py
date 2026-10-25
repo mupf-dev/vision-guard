@@ -49,18 +49,20 @@ def list_reports(db: Session = Depends(get_db), limit: int = Query(30, ge=1, le=
     return {"items": [service.report_json(r) for r in rows], "total": total}
 
 
-def _preview(t0: datetime, t1: datetime) -> dict:
+def _preview(t0: datetime, t1: datetime, template_only: bool = False) -> dict:
     with SessionLocal() as db:
-        return service.preview_json(service.build(db, t0, t1, kind="manual"))
+        return service.preview_json(service.build(db, t0, t1, kind="manual", template_only=template_only))
 
 
 @router.get("/preview")
 async def preview(since: Optional[str] = None, until: Optional[str] = None,
-                  signed: Optional[int] = Query(None, description="1 = Bild-URLs in den Fakten signieren")):
+                  signed: Optional[int] = Query(None, description="1 = Bild-URLs in den Fakten signieren"),
+                  template: bool = Query(False, description="1 = nur Satzbausteine, kein Sprachmodell (schnell, "
+                                                            "kostenlos; MCP)")):
     """Bericht für den Zeitraum ohne Speichern (Default heute 00:00 bis jetzt). Mit Sprachmodell bis
-    `llm_timeout_s`."""
+    `llm_timeout_s`, mit `template=1` immer ohne."""
     t0, t1 = _period(since, until)
-    return await asyncio.to_thread(_preview, t0, t1)
+    return await asyncio.to_thread(_preview, t0, t1, template)
 
 
 @router.post("/generate")
