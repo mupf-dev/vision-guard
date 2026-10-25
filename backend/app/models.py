@@ -55,6 +55,8 @@ class Camera(Base):
     history_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     history_interval_s: Mapped[float] = mapped_column(Float, default=30, server_default=text("30"))
     history_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Welle 4: Person über mehrere Kameras (C2, ReID) – Embeddings nur im RAM des Backends
+    reid_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 
 class Rule(Base):

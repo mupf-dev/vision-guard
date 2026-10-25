@@ -96,6 +96,8 @@ class CameraIn(BaseModel):
     history_enabled: bool = False
     history_interval_s: float = Field(30, ge=5, le=600)
     history_tiling: bool = False
+    # W4 (C2): Wiedererkennung über Kameras (Kleidung/Statur, nur RAM)
+    reid_enabled: bool = False
 
     @field_validator("inventory_label_min_scores")
     @classmethod
@@ -532,6 +534,10 @@ class SettingsModel(BaseModel):
     retention_days_history: int = Field(14, ge=1, le=365)
     history_min_change: float = Field(0.05, ge=0, le=0.5)
     history_model: Literal["siglip2-b16-256", "mobileclip2-s0"] = "siglip2-b16-256"
+    # W4 (C2): Person über mehrere Kameras (Schwelle aus reidtest, messungen.md §11)
+    reid_ttl_min: int = Field(60, ge=5, le=720)
+    reid_match_threshold: float = Field(0.70, ge=0.3, le=0.95)
+    reid_assign_identity: bool = True
 
     @field_validator("vlm_cloud_model")
     @classmethod
@@ -700,6 +706,10 @@ class SettingsPatch(BaseModel):
     retention_days_history: Optional[int] = None
     history_min_change: Optional[float] = None
     history_model: Optional[str] = None
+    # W4 (C2)
+    reid_ttl_min: Optional[int] = None
+    reid_match_threshold: Optional[float] = None
+    reid_assign_identity: Optional[bool] = None
 
 
 class PushTestIn(BaseModel):
@@ -771,6 +781,25 @@ class IdentifyIn(BaseModel):
     item_id: Optional[str] = None
     # B4: kürzere Seite des Gegenstands im Kamerabild (px) – unter item_min_px keine automatische Zuordnung
     crop_px: Optional[int] = None
+
+
+class ReidIn(BaseModel):
+    """W4 (C2): POST /api/internal/reid – Embedding eines Personen-Tracks (nur RAM, nie gespeichert)."""
+    camera_id: int
+    track_id: int
+    embedding: list[float] = Field(min_length=64, max_length=2048)
+    quality: float = 0.0
+    ts: Optional[float] = None
+
+
+class ReidOut(BaseModel):
+    presence_key: str
+    identity_id: Optional[int] = None
+    score: float
+    is_new: bool
+    # nur gesetzt, wenn die Identität über ReID weitergegeben wird (score ≥ Schwelle + 0,1, Track ohne eigene)
+    identity: Optional[dict[str, Any]] = None
+    identity_source: Optional[str] = None
 
 
 class IdentifyOut(BaseModel):

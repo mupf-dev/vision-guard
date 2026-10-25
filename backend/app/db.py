@@ -71,6 +71,8 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("cameras", "history_enabled", "boolean NOT NULL DEFAULT false"),
     ("cameras", "history_interval_s", "double precision NOT NULL DEFAULT 30"),
     ("cameras", "history_tiling", "boolean NOT NULL DEFAULT false"),
+    # Welle 4 (C2): Person über mehrere Kameras
+    ("cameras", "reid_enabled", "boolean NOT NULL DEFAULT false"),
 ]
 
 

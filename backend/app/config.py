@@ -194,4 +194,8 @@ DEFAULT_SETTINGS = {
     "retention_days_history": 14,
     "history_min_change": 0.05,
     "history_model": "siglip2-b16-256",
+    # Welle 4 (C2): Person über mehrere Kameras – Galerie nur im RAM (reidtest, messungen.md §11)
+    "reid_ttl_min": 60,
+    "reid_match_threshold": 0.70,
+    "reid_assign_identity": True,
 }
