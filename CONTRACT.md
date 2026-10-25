@@ -1643,3 +1643,64 @@ Verbindlich wie der Rest, rein additiv (keine neuen Spalten, Tabellen oder Setti
 - Umsetzung: `backend/app/vlm_measure.py` (Fragen, Antworten lesen; ohne Abhängigkeiten), `sensors.py`
   (`vlm_measure_of`, `vlm_question`, `verify_enabled`, `_ask_vlm`), `routers/sensors.py` (Prüfungen), Oberfläche
   `admin/Sensors.tsx` (Messart Ja/Nein · Anzahl · leer/nicht leer, Nachzählen), Typ `VlmMeasure` in `types.ts`.
+
+## Nachträge: Refinement 1 – Robustheit, Sicherheit, Bedienung
+
+Verbindlich wie der Rest; wo es älteren Aussagen widerspricht, gilt dieser Abschnitt.
+
+**MQTT-Broker (`mosquitto`)**
+- Zwei Listener (`per_listener_settings true`): **1883** nur im Docker-Netz (anonym, voller Zugriff – Backend,
+  Worker, vlm, Selbsttests per `docker compose exec/run`) und **1884** für außen (Host-Port `MQTT_PORT` → 1884,
+  anonym, ACL `mosquitto/acl-extern.conf`: alles **lesen**, nichts schreiben). Damit sind steuernde Topics
+  (`vg/internal/gpu/request`, `cmd`, `config`) und gefälschte Inventar-/Sensor-Nachrichten von außen nicht möglich.
+  Image per Digest gepinnt.
+- Beim Löschen einer Kamera leert das Backend die retained Topics der Kamera: sofort `{prefix}/{slug}/{label}` (alle
+  Labels der Kamera), nach 10 s (nach dem einmaligen `offline` des Workers) `vg/internal/status|health|inventory/{id}`.
+  Retained Nachrichten auf diesen drei internen Topics für unbekannte Kamera-IDs löscht das Backend beim Verbinden.
+
+**GPU-Lease (Ergänzung zu W3.C)**
+- Der Worker sendet beim ersten MQTT-Connect nach dem Start `vg/internal/gpu/released`
+  `{request_id:"*", holder:"*", reason:"restart"}`. Jeder Lease-Client verwirft daraufhin eine gehaltene Lease
+  (vlm entlädt sein Modell) – auch nach Absturz/`docker kill` des alten Workers.
+
+**REST / Auth**
+- `/api/docs` und `/api/openapi.json` verlangen Anmeldung (Cookie oder API-Key, Scope `read`); Env
+  `VG_PUBLIC_DOCS=1` (Backend) schaltet auf das alte, offene Verhalten zurück.
+- `PUT /settings` mit API-Key: die Felder `push_targets`, `notify_routes`, `llm_provider`, `llm_base_url`,
+  `weather_location`, `report_channels`, `public_base_url` → **403** „Nur mit Anmeldung im Browser änderbar: …“.
+  `GET/PUT /settings` mit API-Key liefert `push_targets`, `weather_location`, `llm_base_url` und `report_channels`
+  nicht mit.
+- Push-Ziele: `topic` gehört zu den maskierten Feldern (`token`, `topic`, `user_key`, `app_token` → `"***"`).
+  `"***"` wird nur durch den gespeicherten Wert ersetzt, wenn `id`, `type` **und** `server` (ohne `/` am Ende, ohne
+  Groß-/Kleinschreibung) unverändert sind; sonst **422** „Server oder Art des Push-Ziels geändert – Zugangsdaten …
+  bitte neu eingeben“ (gilt für `PUT /settings` und `POST /settings/push_test`).
+- `POST /cameras/{id}/ask`: zusätzlich global höchstens 20 Fragen/min (alle Aufrufer) und über API-Keys/MCP global
+  höchstens 12 Fragen je Stunde (429 mit `Retry-After`) – jede lokale Frage pausiert das Inventar bis zu
+  `vlm_idle_unload_s` + 60 s.
+- `GET /reports/preview?template=1`: nur Satzbausteine, nie ein Sprachmodell (MCP `get_daily_report` nutzt das für
+  die Vorschau; vorher Zeitüberschreitung nach 20 s und ggf. bezahlte Wiederholungen).
+
+**Events / Regeln über Neustarts**
+- Beim Start werden aktive Events wie bisher beendet, aber gemerkt: meldet der Worker in den ersten 120 s ein
+  `update` für denselben (Kamera, Track), wird **dasselbe Event** fortgesetzt (`active` wieder `true`, `end_ts`
+  null); Regeln aus `event.rules` gelten als bereits ausgelöst (kein zweiter Alarm). Offene Wiederholungen (C1)
+  stehen in `kv.rule_repeats` und laufen weiter (Quittierung wirkt wie gewohnt). Geplante verzögerte
+  Bedingungsprüfungen (`condition_delay_s`) stehen in `kv.rule_cond_delayed`; fallen sie in einen Neustart, werden
+  sie nicht nachgeholt, sondern als Warnung geloggt und als Hinweis (ohne Push) angezeigt.
+- Tagesbericht: schlägt die Erzeugung fehl, wird sie nach 5, 15 und 60 min erneut versucht, danach nicht mehr
+  automatisch (vorher alle 20 s bis zum Ende des Nachhol-Fensters).
+- Rückfragen der Art `inventory_label`: je Label höchstens eine pro 24 h (DB-geprüft, übersteht Neustarts).
+
+**Inventar / Aufbewahrung**
+- Worker: Übersichtsbild (`snapshot_path`) höchstens alle 5 min je Kamera, außer ein Gegenstand erscheint, der in
+  dieser Session noch auf keinem Übersichtsbild war (dann höchstens 1/min); Breite höchstens 1280 px (vorher 1920).
+- Aufbewahrung: Übersichtsbilder `inventory/*/cam*.jpg`, auf die nichts zeigt (Gegenstand, Historie, offene
+  Rückfrage, Beispiel, Hinweis), werden nach 2 Tagen gelöscht (übrige Inventar-Dateien wie bisher nach
+  `retention_days_inventory`). Abgeschlossene Rückfragen (`yes|no|skipped|expired`) älter als
+  `retention_days_inventory` werden gelöscht; `inventory_examples` je (Label, Kamera) auf die neuesten 200 begrenzt.
+- `cleanup_orphans` löscht nie Identitäten der Art `item` (eigene Exemplare).
+
+**go2rtc**
+- `log.streams: error` – die Warnungen des Moduls `streams` enthalten die Quell-URL samt Zugangsdaten.
+- `DELETE /api/streams` antwortet wegen der read-only eingebundenen `go2rtc.yaml` mit 400 „read-only file
+  system“, obwohl der Stream gelöscht ist; das Backend wertet das als Erfolg.

@@ -645,3 +645,68 @@ gelöscht. ReID ist im Haupt-Stack an keiner Kamera aktiv (Standard), `cam_3` un
 - go2rtc-Warnung beim Löschen einer Kamera (`400` auf `DELETE /api/streams`) untersuchen.
 - `COMPOSE_PROFILES` in `.env` enthält nur `demo`; der Haupt-Stack wurde mit `--profile demo --profile vlm`
   gestartet (`.env` nicht geändert – Nutzerentscheidung, s. W3).
+
+## Refinement 1 (25.10., Umsetzung der Prüfberichte Robustheit, Bedienung, Sicherheit/Leistung)
+
+Alle hohen und mittleren Funde behoben, dazu die meisten niedrigen. Vertrag: `CONTRACT.md` „Nachträge:
+Refinement 1“.
+
+### Behoben
+
+| Fund | Umsetzung |
+|---|---|
+| **S1/S12 hoch** – ntfy-Token/Pushover-Schlüssel per geändertem `server` ausleitbar | `notifications.unmask_target`: `"***"` nur bei gleichem `type`+`server`, sonst 422 (auch `push_test`) |
+| **S2 hoch** – `VG_LLM_API_KEY` per `llm_base_url` an fremden Host | `PUT /settings` mit API-Key: `push_targets`, `notify_routes`, `llm_provider`, `llm_base_url`, `weather_location`, `report_channels`, `public_base_url` → 403 |
+| S3 – Key `read` sieht Topic/Standort | `topic` maskiert; `push_targets`, `weather_location`, `llm_base_url`, `report_channels` fehlen bei API-Keys |
+| S4 – anonymes MQTT von außen schreibbar | zwei Listener: 1883 nur Docker-Netz, extern → 1884 nur lesen (ACL); Image per Digest gepinnt |
+| S5/S11 – `read`-Key legt Inventar per Fragen lahm | `ask`: global 20/min, über API-Keys/MCP global 12/h |
+| S6/R1 – Übersichtsbilder ≈ 0,6 GB/Tag | Worker: ≤ 1 Bild/5 min je Kamera (neue Gegenstände ≤ 1/min), 1280 px; Aufräumen unverknüpfter `cam*`-Bilder nach 2 Tagen |
+| S8 – Kamera-Passwort in go2rtc-Logs | `log.streams: error`; go2rtc-Container neu erstellt (alte Logs mit Passwort verworfen) |
+| S10 – Swagger offen | `/api/docs`, `/api/openapi.json` nur mit Anmeldung; `VG_PUBLIC_DOCS=1` = alt |
+| R2 – retained Reste gelöschter Kameras | `drop_camera` leert Zähler-Topics, nach 10 s `status/health/inventory`; Reste unbekannter Kameras beim Verbinden gelöscht |
+| R3 – MCP-Tagesbericht > 20 s mit LLM | `GET /reports/preview?template=1`, MCP nutzt es |
+| R4 – Wiederholung/Quittierung/verzögerte Prüfung bei Neustart verloren | Track wird nach Neustart als dasselbe Event fortgesetzt (keine Doppel-Alarme), Wiederholungen in `kv.rule_repeats`, verlorene verzögerte Prüfungen als Hinweis |
+| R5 – GPU-Lease nach Worker-Absturz | Worker sendet beim Start `released {holder:"*", reason:"restart"}`, vlm entlädt |
+| R6 – langsames Fachmodul bremst Event-Ticks | drei getrennte Takte (Events/Inventar, Fachmodule, vlm-HTTP) |
+| R7 – Aufräumen löscht eigene Exemplare | `kind != "item"` |
+| R8 – Rückfragen/Beispiele ohne Grenze | abgeschlossene Rückfragen nach `retention_days_inventory` gelöscht, Beispiele ≤ 200 je Label+Kamera |
+| R10 – Tagesbericht-Fehler alle 20 s | Wiederholung nach 5/15/60 min, dann Schluss |
+| R11 – go2rtc 400 beim Löschen | „read-only file system“ = Erfolg (Stream ist weg) |
+| R12 – Rückfragen-Flut nach Neustart | je Label ≤ 1 Rückfrage/24 h (DB) |
+| B1 hoch – Kamera-Dialog mobil ohne „Speichern“ | `.tabs` scrollt waagrecht, `.dialog`/`.backdrop` begrenzt |
+| B2 hoch – Navigation | 5 Hauptpunkte + „Mehr“ + Administration mit Beschriftung; < 1000 px ein Menü mit allen Punkten und aktuellem Seitennamen; Admin-Untermenü bricht um |
+| B3/B4 – waagrechtes Scrollen (Reiter, Bitte bestätigen) | wie B1; Bildfelder `min(200px,100%)` |
+| B5 – lange Einstellungen | Sprungmarken, Kopfzeile mit Speichern/Verwerfen klebt bei Änderungen, Warnung beim Verlassen der Seite (Browser; `useBlocker` geht mit `BrowserRouter` nicht), „Wiedererkennung (Gesicht, Kennzeichen, Tier)“ |
+| B6/B7 – README veraltet | Funktionen, Dienste (`mcp`, `vlm`), Architektur, 21 MCP-Tools mit Scope; Seitenliste `frontend/README.md` |
+| B8–B12 | System-Seite deutsch, „Stand unklar“, „Gelöschte Kamera (ID n)“, „Sicherheit/Ähnlichkeit … (nötig …)“, Tastenhinweis nicht auf Touch, „In der letzten Stunde“, Kamerakarte bricht um |
+
+### Bewusst nicht (oder nur teilweise) behoben
+
+- **S7 Lasttest/Kennzahl:** nicht neu gemessen (keine Änderung im Pipeline-Takt). Richtigstellung: Welle 0 nannte
+  die *gleitende* Summe (80 fps), ab Welle 2 steht hier die *Summary*-Zahl. Vergleichbar ist gleitend 80 → 74,9 fps
+  (−6 %), Batch 31,7 → 46,3 ms; die Ursache (vermutlich ReID-/History-/Health-Hooks im Takt, CPU 86–99 %) ist offen.
+- **S9 Altersgrenze für alle Medienordner:** nicht umgesetzt – `health/` enthält Referenzbilder, die bleiben
+  müssen; eine generische Grenze bräuchte eine Ausnahmeliste je Modul.
+- **R9 vlm nach Host-Neustart:** `.env` nicht geändert (Regel). Empfehlung: `COMPOSE_PROFILES=demo,vlm`
+  (README ergänzt).
+- `inventory_confirm_n`/`miss_m`: stehen in der laufenden Installation bereits auf 3/10.
+- B9 Standardfilter „Aktuell sichtbar“ auf der Gegenstände-Seite nicht eingeführt (würde gewohnte Ansicht ändern).
+
+### Belege (Haupt-Stack, Test-API-Key read+write, am Ende widerrufen)
+
+| Prüfung | Ergebnis |
+|---|---|
+| `/api/docs`, `/api/openapi.json` ohne Login | 401; mit Cookie 200, mit Bearer 200 |
+| `GET /settings` mit Key | `push_targets`, `weather_location`, `llm_base_url`, `report_channels` fehlen |
+| `PUT /settings` mit Key: `llm_base_url` / `push_targets` / `retention_days_events` | 403 / 403 / 200 |
+| Testziel ntfy: Topic/Token maskiert; `push_test` mit geändertem Server + `***` | 422 (Cookie und Key); gleicher Server → Versuch (ConnectError wie erwartet); `PUT` mit geändertem Server + `***` → 422; Ziel wieder entfernt |
+| MQTT: Publish über Listener 1884 / 1883 | 1884 verworfen, 1883 zugestellt; Lesen über 1884 ok |
+| MCP `selftest.py` über nginx | „Selbsttest OK“; `get_daily_report` 0,2 s (`template`) |
+| Neustart Backend mit laufendem Track (synthetisch, Regel mit `repeat_s` 20) | „Track … nach Neustart fortgesetzt“, dasselbe Event, Wiederholung 2 nach dem Neustart; nach Quittieren + zweitem Neustart: „keine weiteren Wiederholungen (quittiert)“, kein neuer Alarm |
+| `docker kill` Worker mit vlm-Lease | vlm: „Worker neu gestartet – GPU-Lease verfällt“, Modell entladen |
+| Kamera löschen | `visionguard/r1_test/person`, `vg/internal/status|health/9` danach leer; kein go2rtc-400 im Log |
+| Aufräumen | Test-`cam99_*.jpg` (3 Tage alt, unverknüpft) gelöscht, gleich alter Item-Crop behalten |
+| Übersichtsbilder `cam_3` | vorher ≈ 100/h à 250–350 KiB; nachher ≈ 180 KiB, Abstände ≥ 5 min außer bei Worker-Neustarts (danach zusätzlich ≥ 1 min Abstand) |
+| Oberfläche 18 Seiten, 1440 px und 390 px | keine Seite breiter als der Bildschirm; Kamera-Dialog mobil: „Speichern“ bei x 250–359 von 390; Tastenhinweis auf Touch ausgeblendet; keine Konsolenfehler |
+
+Aufgeräumt: Testkamera 9 samt 35 Events und Regel, Test-Push-Ziel, Test-API-Key (widerrufen), temporäre Dateien.

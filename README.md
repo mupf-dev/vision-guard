@@ -2,8 +2,9 @@
 
 Selbst gehostete, Docker-basierte Videoanalyse für Netzwerkkameras. Kamerastreams werden **nicht dauerhaft
 aufgezeichnet**, sondern live per KI ausgewertet: Objekte, Personen, Tiere und Fahrzeuge werden erkannt, verfolgt
-und – optional – identifiziert (Gesichter, Kennzeichen, Haustiere). Regeln entscheiden, was passiert: Snapshot,
-Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
+und – optional – identifiziert (Gesichter, Kennzeichen, Haustiere). Dazu merkt sich VisionGuard, wo Gegenstände
+liegen („Wo ist meine Fernbedienung?“). Regeln entscheiden, was passiert: Snapshot, Videoclip aus dem
+RAM-Ringpuffer, Push aufs Handy, MQTT-Nachricht oder Webhook.
 
 ## Funktionen
 
@@ -17,9 +18,22 @@ Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
   Referenzbilder, Gegenstände zählen, Füllstand, Frage ans Bildmodell: Ja/Nein, Anzahl bis 3 oder „leer“) – als
   Regel-Auslöser und -Bedingung,
   per MQTT und MCP; knappe Vorräte landen automatisch auf der Einkaufsliste
+- **Gegenstände (Inventar):** offenes Vokabular (YOLOE, 50 Alltagsgegenstände, eigene ergänzbar), Lage
+  („vermutlich auf dem Tisch“), Veränderungen seit gestern, eigene Exemplare („mein Schlüsselbund“), Suche auf Deutsch
+- **Hinweise mit Push** an ntfy oder Pushover (mit Bild, Antwort-Links), Regeln mit Bedingungen (Gegenstand
+  fehlt, Wetter, Sensor), Notfälle mit Wiederholung bis zur Quittierung
+- **Bitte bestätigen:** bei unsicheren Erkennungen fragt VisionGuard nach (Oberfläche, Push, MCP) und lernt daraus
+- **Haltung, Sturz und Gesten** (Pose-Modell): „liegt am Boden“ als Auslöser, Handzeichen als Schalter
+- **Tiere:** Haustier-Tagebuch (Fressen, Trinken, Katzenklo je Zone)
+- **Anwesenheit:** wer ist gerade wo, auch ohne Gesicht über mehrere Kameras (Wiedererkennung, nur im Speicher)
+- **Tagesbericht** (Satzbausteine, optional mit Sprachmodell über eine OpenAI-kompatible Adresse) per Push,
+  MQTT, Webhook oder Mail
+- **Frag die Kamera:** Fragen zum aktuellen Bild an ein lokales Bildmodell (Moondream, Dienst `vlm`, optional)
+- **Kamera-Gesundheit:** verdeckt, unscharf, zu dunkel, eingefroren oder verschoben – mit Hinweis
 - **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
 - **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
-- **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse
+- **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse, Sensoren;
+  von außen nur lesend (eigener Listener, siehe unten)
 - **Zeitmaschine:** je Kamera zuschaltbar ein Bildgedächtnis (Bild-Embeddings + 256-px-Vorschau, kein Video);
   Suche mit eigenen Worten („roter Karton im Flur“) liefert Zeiträume mit Filmstreifen – auch per MCP
 
@@ -30,10 +44,13 @@ Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
                       │                         ▲  REST + WebSocket
                       │ RTSP (Sub-Stream)       │
                       ▼                         │
-                 worker (GPU) ──MQTT──▶ mosquitto ◀──▶ backend (FastAPI) ──▶ PostgreSQL
-                 YOLO11, ByteTrack,                    Regeln, Events,       Medien-Volume
-                 Gesicht/Kennzeichen/Tier,             Identitäten, Auth     (Snapshots/Clips)
-                 RAM-Ringpuffer für Clips
+                 worker (GPU) ──MQTT──▶ mosquitto ◀──▶ backend (FastAPI) ──▶ PostgreSQL (pgvector)
+                 YOLO11, ByteTrack,        ▲           Regeln, Events,       Medien-Volume
+                 Gesicht/Kennzeichen/Tier, │ GPU-Lease Identitäten, Inventar, (Snapshots/Clips)
+                 YOLOE-Inventar, Pose,     │           Hinweise/Push, Auth
+                 RAM-Ringpuffer für Clips  │                ▲
+                                     vlm (Bildmodell)       │ REST
+                                                        mcp (KI-Agenten, /mcp)
 ```
 
 | Dienst | Verzeichnis | Technik |
@@ -41,8 +58,10 @@ Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
 | `frontend` | [`frontend/`](frontend/README.md) | React 19, TypeScript, Vite, nginx (Reverse-Proxy) |
 | `backend` | [`backend/`](backend/README.md) | Python 3.12, FastAPI, SQLAlchemy, paho-mqtt |
 | `worker` | [`worker/`](worker/README.md) | PyTorch 2.5 / CUDA 12.4, Ultralytics YOLO11, supervision, InsightFace, fast-alpr, timm |
+| `mcp` | [`mcp/`](#mcp-server-für-ki-agenten) | MCP-Server für KI-Agenten (Streamable HTTP unter `/mcp`) |
+| `vlm` | `vlm/` | lokales Bildmodell für „Frag die Kamera“ und Bild-Sensoren (Compose-Profil `vlm`, leiht sich die GPU vom Worker) |
 | `go2rtc` | `go2rtc/` | Restreaming der Kameras (eine Verbindung pro Kamera) |
-| `mosquitto` | `mosquitto/` | MQTT-Broker (intern und extern) |
+| `mosquitto` | `mosquitto/` | MQTT-Broker: intern 1883 (Docker-Netz, voller Zugriff), extern Host-Port `MQTT_PORT` → 1884 (anonym, nur lesen) |
 | `db` | – | PostgreSQL 17 |
 | `testcam` | `testcam/` | Simulierte RTSP-Kameras (Compose-Profil `demo`) |
 
@@ -94,8 +113,9 @@ Administration → Kameras → „Kamera hinzufügen“:
 | `SECRET_KEY` | `change-me-please` | Signatur der Session-Cookies, API-Key-Hashes, Medien-Links. **Pflicht:** ≥ 32 Zeichen, sonst startet das Backend nicht |
 | `POSTGRES_PASSWORD` | `vg` | Datenbank |
 | `DEMO_CAMERAS` | `1` | Demo-Kameras beim ersten Start anlegen |
-| `COMPOSE_PROFILES` | `demo` | startet den `testcam`-Dienst |
-| `MQTT_PORT` | `1883` | externer MQTT-Port |
+| `COMPOSE_PROFILES` | `demo` | startet den `testcam`-Dienst; `demo,vlm` startet zusätzlich das Bildmodell (sonst fehlen „Frag die Kamera“ und Bild-Sensoren nach einem Neustart) |
+| `MQTT_PORT` | `1883` | externer MQTT-Port (anonym, **nur lesen**; Schreiben nur im Docker-Netz) |
+| `VG_PUBLIC_DOCS` | `0` | `1` = API-Doku `/api/docs` ohne Anmeldung (Standard: nur mit Login oder API-Key) |
 | `BUFFER_SIZE` | `1g` | RAM (tmpfs) für den Clip-Ringpuffer |
 | `TZ` | `Europe/Berlin` | Zeitzone für Zeitpläne |
 | `MCP_ALLOWED_HOSTS` | leer | erlaubte Host-Namen für `/mcp` (kommagetrennt, z. B. `vg.example.org,localhost`); leer = keine Prüfung |
@@ -108,9 +128,10 @@ Der Dienst `mcp` stellt VisionGuard als [MCP](https://modelcontextprotocol.io)-S
 damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten können.
 
 - **URL:** `http://<host>:8080/mcp` (über nginx; intern `http://mcp:8100/mcp`).
-- **API-Key:** unter **Administration → API-Zugänge** erzeugen (Scope `read` genügt). Der Key wird nur einmal
-  angezeigt und kann dort jederzeit widerrufen werden. Ohne gültigen Key antwortet `/mcp` mit 401.
-- **Tools** (alle nur lesend, Antworten auf Deutsch):
+- **API-Key:** unter **Administration → API-Zugänge** erzeugen. Scope `read` genügt für alle lesenden Tools;
+  die drei Tools mit Wirkung (unten mit ✎) brauchen `write`. Der Key wird nur einmal angezeigt und kann dort
+  jederzeit widerrufen werden. Ohne gültigen Key antwortet `/mcp` mit 401.
+- **Tools** (21, Antworten auf Deutsch):
 
 | Tool | Zweck |
 |---|---|
@@ -121,6 +142,16 @@ damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten könne
 | `get_camera_snapshot(camera_id? \| camera_name?)` | aktuelles Kamerabild (JPEG, max. 1600 px breit) |
 | `who_is_where()` | welche Personen/Tiere gerade wo zu sehen sind |
 | `search_history(query, since?, until?, camera?, limit?, include_image?)` | Zeitmaschine: „Am Di 14:03–14:21 in Raum Flur, Übereinstimmung 71 %“ mit signierter Vorschau |
+| `what_changed(since?, until?, …)` | was ist seit … neu aufgetaucht, verschwunden, verschoben |
+| `list_notifications(since?, limit?)` | letzte Hinweise |
+| `get_camera_health(camera_id? \| camera_name?)` | Bildzustand der Kameras (verdeckt, dunkel, …) |
+| `list_alerts(active_only?)` / `acknowledge_alert(event_id)` ✎ | Notfälle (z. B. Sturz) anzeigen / quittieren |
+| `list_open_questions()` / `answer_question(id, answer)` ✎ | Rückfragen „Bitte bestätigen“ |
+| `get_pet_diary(pet?, days?)` | Haustier-Tagebuch |
+| `get_daily_report(date?)` | gespeicherter Tagesbericht bzw. Vorschau (Vorschau immer ohne Sprachmodell) |
+| `ask_camera(question, camera_id? \| camera_name?)` | Frage zum aktuellen Bild (lokales Bildmodell; global höchstens 12 Fragen/h über API-Keys) |
+| `list_sensors(…)` / `get_sensor(…)` | virtuelle Sensoren und Vorräte |
+| `get_shopping_list()` / `add_to_shopping_list(name)` ✎ | Einkaufsliste |
 
 Beispiel Claude Code:
 
@@ -144,14 +175,16 @@ Beispiel für Clients mit JSON-Konfiguration (`mcpServers`):
 ```
 
 Selbsttest im Container: `docker compose exec -e VG_API_KEY=vgt_… mcp python selftest.py`
-(prüft 401 ohne Key, `list_tools`, `list_cameras`, `find_object`, `list_visible_objects`, `who_is_where`).
+(prüft 401 ohne Key, ob alle Tools angeboten werden, und ruft u. a. `list_cameras`, `find_object`,
+`list_visible_objects`, `who_is_where`, `what_changed`, `list_alerts` und `search_history` auf).
 
 **Zugriff von außen:** Port 8080 nicht direkt ins Internet freigeben, sondern einen Reverse-Proxy mit TLS
 (z. B. Caddy, Traefik, nginx mit Let's Encrypt) oder einen Tunnel (z. B. Cloudflare Tunnel, Tailscale Funnel)
 davorsetzen. Dann `MCP_ALLOWED_HOSTS` auf den öffentlichen Host-Namen setzen und unter Einstellungen
 `public_base_url` (z. B. `https://vg.example.org`) eintragen, damit Bild-Links in den Antworten absolut sind.
 API-Keys nur über HTTPS verwenden, für Agenten eigene Keys mit Scope `read` anlegen und nicht mehr benötigte
-widerrufen. Hinweis: Kamerabilder und Gegenstands-Crops gehen dabei an den Anbieter des KI-Modells.
+widerrufen. Auch ein Key mit `write` kann Push-Ziele, LLM-Adresse, Standort, Berichtsversand und
+`public_base_url` nicht ändern (nur mit Anmeldung im Browser) und sieht diese Werte nicht. Hinweis: Kamerabilder und Gegenstands-Crops gehen dabei an den Anbieter des KI-Modells.
 
 ## Leistung (gemessen, RTX 4080 Laptop)
 

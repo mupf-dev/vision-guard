@@ -42,7 +42,7 @@ In einer WSL-Sandbox ohne systemd muss der Docker-Daemon ggf. manuell gestartet 
 | Was | Wie |
 |---|---|
 | Oberfläche | http://localhost:8080 (admin/admin) |
-| API-Doku | http://localhost:8080/api/docs |
+| API-Doku | http://localhost:8080/api/docs (nur nach Anmeldung im Browser oder mit API-Key; `VG_PUBLIC_DOCS=1` = offen) |
 | Backend direkt | `docker compose exec backend python -c "import httpx; ..."` (Port 8000 nur intern) |
 | MQTT mitlesen | `docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -v -C 20` |
 | Frontend ohne Backend | `cd frontend && corepack pnpm install && corepack pnpm dev:mock` (Port 5173) |
@@ -113,7 +113,12 @@ Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](wo
   sie kennt (TTL `media_link_ttl_h`). `VG_MEDIA_PUBLIC=1` schaltet auf das alte, ungeschützte Verhalten zurück.
 - `VG_SECRET_KEY` ist zugleich Pepper der API-Key-Hashes und Schlüssel der Medien-Signaturen: ein Wechsel macht
   alle Sitzungen, API-Keys und signierten Links ungültig.
-- API-Keys (Admin → „API-Zugänge“) öffnen kein go2rtc-Live-Video und können keine Keys verwalten.
+- API-Keys (Admin → „API-Zugänge“) öffnen kein go2rtc-Live-Video und können keine Keys verwalten. Auch mit
+  `write` ändern/sehen sie keine Push-Ziele, LLM-Adresse, Standort, Berichtsversand oder `public_base_url`
+  (`routers/misc.py::SESSION_ONLY_SETTINGS`).
+- MQTT von außen (Host-Port `MQTT_PORT`) ist **nur lesend** (Listener 1884 mit ACL); schreiben können nur Dienste
+  im Docker-Netz (Listener 1883). Testnachrichten daher per `docker compose exec mosquitto mosquitto_pub …`.
+- go2rtc loggt das Modul `streams` nur ab `error`, weil dessen Warnungen die Kamera-URL mit Passwort enthalten.
 
 ## Commits
 
