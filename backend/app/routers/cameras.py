@@ -45,7 +45,7 @@ def _check_inventory_labels(labels: list[str], previous: list[str] | None = None
 # Später hinzugekommene Felder: bei PUT nur übernehmen, wenn der Client sie mitschickt (ältere/externe API-Clients
 # setzen sonst Raum und Inventar still auf die Defaults zurück).
 OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "inventory_labels",
-                          "inventory_min_score", "inventory_tiling")
+                          "inventory_min_score", "inventory_tiling", "health_enabled")
 
 
 def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:

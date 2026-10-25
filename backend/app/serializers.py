@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import state
-from .models import Camera, Event, Identity, IdentitySample, Rule
+from .models import Camera, Event, Identity, IdentitySample, Notification, Rule
 from .schemas import iso, media_url
 from .secrets_mask import mask_url
 
@@ -30,6 +30,7 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "inventory_labels": list(c.inventory_labels or []),
         "inventory_min_score": c.inventory_min_score if c.inventory_min_score is not None else 0.35,
         "inventory_tiling": True if c.inventory_tiling is None else bool(c.inventory_tiling),
+        "health_enabled": True if c.health_enabled is None else bool(c.health_enabled),
         "status": state.status_for(c.id, c.enabled),
     }
 
@@ -46,9 +47,12 @@ def rule_json(r: Rule) -> dict[str, Any]:
         "min_score": r.min_score,
         "identity": {"mode": ident.get("mode", "any"), "identity_ids": list(ident.get("identity_ids") or [])},
         "trigger": r.trigger,
+        "trigger_options": dict(r.trigger_options or {}),
         "min_dwell_s": r.min_dwell_s,
         "schedule": r.schedule,
         "cooldown_s": r.cooldown_s,
+        "conditions": list(r.conditions or []),
+        "condition_delay_s": float(r.condition_delay_s or 0),
         "actions": list(r.actions or []),
     }
 
@@ -132,4 +136,23 @@ def event_json(e: Event) -> dict[str, Any]:
         "clip_url": media_url(e.clip_path),
         "rules": list(e.rules or []),
         "active": bool(e.active),
+    }
+
+
+def notification_json(n: Notification) -> dict[str, Any]:
+    return {
+        "id": n.id,
+        "ts": iso(n.ts),
+        "source": n.source,
+        "level": n.level,
+        "rule_id": n.rule_id,
+        "rule": n.rule_name,
+        "title": n.title,
+        "message": n.message,
+        "camera_id": n.camera_id,
+        "event_id": n.event_id,
+        "item_ids": list(n.item_ids or []),
+        "image_url": media_url(n.image_path),
+        "data": dict(n.data or {}),
+        "delivery": list(n.delivery or []),
     }

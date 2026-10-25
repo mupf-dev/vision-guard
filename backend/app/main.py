@@ -22,7 +22,9 @@ from .routers import inventory as inventory_router
 from .inventory import memory as inventory_memory
 from .routers import media as media_router
 from .routers import tokens as tokens_router
+from .routers import notifications as notifications_router
 from .rules import reload as reload_rules
+from . import rule_conditions  # noqa: F401  – registriert die Bedingungs-Auswertungen (A1)
 from .sync import load_cameras
 from .util import ensure_media_dirs
 from .ws import hub
@@ -135,6 +137,7 @@ for r in (tokens_router.router, media_router.router):
     app.include_router(r)
 
 app.include_router(inventory_router.router)
+app.include_router(notifications_router.router)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):

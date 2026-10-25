@@ -42,6 +42,8 @@ class Camera(Base):
     inventory_labels: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     inventory_min_score: Mapped[float] = mapped_column(Float, default=0.35, server_default=text("0.35"))
     inventory_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # W1 C5 Kamera-Gesundheit (Worker prüft dunkel/unscharf/verdeckt/eingefroren/verschoben)
+    health_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
 
 
 class Rule(Base):
@@ -60,6 +62,10 @@ class Rule(Base):
     cooldown_s: Mapped[float] = mapped_column(Float, default=30)
     actions: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # W1 Regel-Engine v2 (Spalten auch in db.ADDITIVE_COLUMNS)
+    trigger_options: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    conditions: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    condition_delay_s: Mapped[float] = mapped_column(Float, default=0, server_default=text("0"))
 
 
 class Identity(Base):
@@ -181,3 +187,34 @@ class InventoryHistory(Base):
     zones: Mapped[list] = mapped_column(JSONB, default=list)
     score: Mapped[float] = mapped_column(Float, default=0)
     crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class Notification(Base):
+    """Zentrale Sammelstelle aller proaktiven Meldungen (Regeln, Kamera-Gesundheit, später Tiere, Rückfragen …)."""
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    source: Mapped[str] = mapped_column(String(16), default="rule", index=True)   # rule|health|pet|review|report|sensor
+    level: Mapped[str] = mapped_column(String(16), default="info")                # info|warning|alarm
+    rule_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    rule_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    event_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    item_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)          # quellenspezifische Zusatzdaten
+    delivery: Mapped[list] = mapped_column(JSONB, default=list)      # [{target, ok, error, ts}]
+    dedup_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, index=True)
+
+
+class CameraHealthLog(Base):
+    """Zeitleiste der Kamera-Probleme (C5): eine Zeile je Problem-Episode."""
+    __tablename__ = "camera_health_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    type: Mapped[str] = mapped_column(String(16))          # dark|blur|covered|frozen|moved
+    start_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    end_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

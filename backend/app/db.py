@@ -48,6 +48,11 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("cameras", "inventory_min_score", "double precision NOT NULL DEFAULT 0.35"),
     ("cameras", "inventory_tiling", "boolean NOT NULL DEFAULT false"),
     ("cameras", "room", "varchar(100) NULL"),
+    # Welle 1 (K1)
+    ("rules", "trigger_options", "jsonb NOT NULL DEFAULT '{}'::jsonb"),
+    ("rules", "conditions", "jsonb NOT NULL DEFAULT '[]'::jsonb"),
+    ("rules", "condition_delay_s", "double precision NOT NULL DEFAULT 0"),
+    ("cameras", "health_enabled", "boolean NOT NULL DEFAULT true"),
 ]
 
 
@@ -56,7 +61,8 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
 # gleicher Name, dann bleibt es idempotent). Wird nach ADDITIVE_COLUMNS ausgeführt (Spalten existieren).
 ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
     # (Indexname, Tabelle, Spaltenliste bzw. Ausdruck), z. B.
-    # ("ix_inventory_history_cam_ts", "inventory_history", "camera_id, ts"),
+    # Welle 1 (B2 „Was hat sich verändert?“): Zustand je Kamera zu einem Zeitpunkt
+    ("ix_inventory_history_camera_ts", "inventory_history", "camera_id, ts"),
 ]
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")

@@ -55,13 +55,15 @@ def internal_cameras(db: Session = Depends(get_db)):
             "inventory_min_score": c.inventory_min_score if c.inventory_min_score is not None else 0.35,
             "inventory_tiling": True if c.inventory_tiling is None else bool(c.inventory_tiling),
             "inventory_vocab": resolve_inventory_vocab(c.inventory_labels, c.id),
+            "health_enabled": True if c.health_enabled is None else bool(c.health_enabled),
         })
     return out
 
 
 @router.get("/settings")
 def internal_settings():
-    return settings_store.get()
+    from ..notifications import mask_settings
+    return mask_settings(settings_store.get())   # Push-Zugangsdaten braucht der Worker nicht
 
 
 def _identify(body: IdentifyIn) -> dict:

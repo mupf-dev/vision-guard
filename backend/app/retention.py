@@ -73,7 +73,29 @@ def run_once() -> dict:
     except Exception as e:  # noqa: BLE001
         log.warning("Aufräumen der Gegenstände fehlgeschlagen: %s", e)
         inv = {}
-    return {"events": removed_events, "files": removed_files, "inventory": inv}
+    try:
+        w1 = _w1_retention(now, int(st.get("retention_days_notifications") or 30), ev_days)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Aufräumen der Hinweise/Gesundheits-Zeitleiste fehlgeschlagen: %s", e)
+        w1 = {}
+    return {"events": removed_events, "files": removed_files, "inventory": inv, **w1}
+
+
+def _w1_retention(now: datetime, notif_days: int, health_days: int) -> dict:
+    """W1: Notifications älter als `retention_days_notifications`; abgeschlossene Einträge der
+    Kamera-Gesundheit (`camera_health_log`) älter als `retention_days_events`. Bilder der Hinweise sind
+    Snapshots/Crops und folgen deren Aufbewahrung."""
+    from .models import CameraHealthLog, Notification
+
+    with SessionLocal() as s:
+        n = s.execute(delete(Notification).where(Notification.ts < now - timedelta(days=notif_days))).rowcount or 0
+        h = s.execute(delete(CameraHealthLog).where(CameraHealthLog.end_ts.is_not(None),
+                                                    CameraHealthLog.end_ts < now - timedelta(days=health_days))
+                      ).rowcount or 0
+        s.commit()
+    if n or h:
+        log.info("Aufräumen: %d Hinweise, %d Gesundheits-Einträge entfernt", n, h)
+    return {"notifications": n, "health_log": h}
 
 
 def _inventory_retention(now: datetime, days: int) -> dict:

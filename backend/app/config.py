@@ -131,10 +131,19 @@ DEFAULT_SETTINGS = {
     # Gegenstände (Inventar)
     "inventory_vocabulary": DEFAULT_INVENTORY_VOCABULARY,
     "inventory_synonyms": {},
-    "inventory_confirm_n": 2,
-    "inventory_miss_m": 3,
+    # W0-Messung (A1-Flackertest): 3/10 statt 2/3 senkt present↔missing-Wechsel deutlich
+    "inventory_confirm_n": 3,
+    "inventory_miss_m": 10,
     "retention_days_inventory": 30,
     # API-Keys / signierte Medien-Links
     "media_link_ttl_h": 24,
     "public_base_url": None,
+    # Welle 1: Hinweise, Push, Veränderungen, Kamera-Gesundheit
+    "push_targets": [],
+    "notify_routes": {"health": [], "pet": [], "review": [], "report": [], "sensor": []},
+    "push_max_per_rule_per_day": 3,
+    "weather_location": None,
+    "retention_days_notifications": 30,
+    "inventory_change_min_s": 120,
+    "health_alert_after_s": 60,
 }

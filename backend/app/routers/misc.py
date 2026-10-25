@@ -11,6 +11,7 @@ from ..auth import require_user
 from ..config import VERSION
 from ..db import get_db
 from ..models import Camera, Event, Identity
+from ..notifications import mask_settings, unmask_push_targets
 from ..schemas import SettingsPatch, iso
 from ..sync import settings_changed
 
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(require_u
 
 @router.get("/settings")
 def get_settings():
-    return settings_store.get()
+    return mask_settings(settings_store.get())   # Push-Zugangsdaten nur als "***"
 
 
 @router.put("/settings")
@@ -27,7 +28,10 @@ def put_settings(body: SettingsPatch, db: Session = Depends(get_db)):
     from ..mqtt_bus import bus
 
     cur = settings_store.get()
-    cur.update(body.model_dump(exclude_unset=True, exclude_none=True))
+    patch = body.model_dump(exclude_unset=True, exclude_none=True)
+    if "push_targets" in patch:   # "***" → gespeicherter Wert desselben Ziels (gleiche id)
+        patch["push_targets"] = unmask_push_targets(patch["push_targets"], list(cur.get("push_targets") or []))
+    cur.update(patch)
     try:
         new = settings_store.save(db, cur)
     except ValidationError as e:
@@ -35,7 +39,7 @@ def put_settings(body: SettingsPatch, db: Session = Depends(get_db)):
                                   for err in e.errors()]) from None
     bus.set_prefix(new["mqtt_prefix"])
     settings_changed()
-    return new
+    return mask_settings(new)
 
 
 @router.get("/stats")

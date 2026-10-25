@@ -13,11 +13,14 @@ from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
 from .config import config
 from .db import SessionLocal
 from .models import Rule
+from .schemas import (CondInventory, CondInventoryUntouched, CondTrackCameFrom, CondWeather, TimeTriggerOptions,
+                      TriggerOptionsNone)
 
 log = logging.getLogger("vg.rules")
 
@@ -39,6 +42,144 @@ def reload() -> None:
 def all_rules() -> list[dict[str, Any]]:
     with _lock:
         return list(_rules)
+
+
+# ------------------------------------------------------------------ Registry (Regel-Engine v2)
+#
+# Trigger und Bedingungen werden hier registriert statt fest verdrahtet. Fach-Module registrieren beim Import
+# eigene Typen (W2: Trigger posture/gesture, W3: Trigger/Bedingung sensor) bzw. reichen den Evaluator einer hier
+# angelegten Bedingung nach (A1: rule_conditions.py). Erneutes Registrieren desselben Namens überschreibt.
+
+
+@dataclass(frozen=True)
+class TriggerSpec:
+    name: str
+    track_based: bool                    # True: aus Track-Nachrichten (Event-Bezug); False: Regel ohne Event → Notification
+    options_model: type[BaseModel]       # validiert rules.trigger_options
+    label_de: str = ""
+
+
+@dataclass
+class CondContext:
+    """Kontext für die Auswertung einer Bedingung (zum Zeitpunkt der Prüfung, ggf. nach condition_delay_s)."""
+    rule: dict[str, Any]
+    now: datetime                                 # UTC
+    camera_id: Optional[int] = None               # auslösende Kamera (None bei trigger=time)
+    track: Optional["TrackState"] = None          # nur bei Track-Triggern
+    event_id: Optional[str] = None
+
+
+@dataclass
+class CondResult:
+    ok: bool
+    ctx: dict[str, Any] = field(default_factory=dict)     # zusätzliche Platzhalter, z. B. items/item_place/weather
+    item_ids: list[int] = field(default_factory=list)      # betroffene Gegenstände (→ Notification.item_ids)
+    image_path: Optional[str] = None                      # passendes Bild (z. B. Crop des Gegenstands)
+    reason: str = ""                                      # Klartext fürs Log, warum (nicht) erfüllt
+
+
+ConditionEvaluator = Callable[[dict[str, Any], CondContext], CondResult]
+
+
+@dataclass
+class ConditionSpec:
+    name: str
+    model: type[BaseModel]               # validiert einen Eintrag in rules.conditions (Feld `type` = name)
+    track_only: bool = False             # nur bei Track-Triggern sinnvoll (z. B. track_came_from)
+    evaluate: Optional[ConditionEvaluator] = None
+    label_de: str = ""
+
+
+TRIGGERS: dict[str, TriggerSpec] = {}
+CONDITIONS: dict[str, ConditionSpec] = {}
+
+
+def register_trigger(name: str, *, track_based: bool, options_model: type[BaseModel] = TriggerOptionsNone,
+                     label_de: str = "") -> TriggerSpec:
+    spec = TriggerSpec(name=name, track_based=track_based, options_model=options_model, label_de=label_de or name)
+    TRIGGERS[name] = spec
+    return spec
+
+
+def register_condition(name: str, model: type[BaseModel], *, evaluate: Optional[ConditionEvaluator] = None,
+                       track_only: bool = False, label_de: str = "") -> ConditionSpec:
+    prev = CONDITIONS.get(name)
+    spec = ConditionSpec(name=name, model=model, track_only=track_only,
+                         evaluate=evaluate or (prev.evaluate if prev else None), label_de=label_de or name)
+    CONDITIONS[name] = spec
+    return spec
+
+
+def is_track_trigger(name: Optional[str]) -> bool:
+    spec = TRIGGERS.get(name or "enter")
+    return spec.track_based if spec else True
+
+
+def validate_rule_parts(trigger: str, options: dict[str, Any], conditions: list[dict[str, Any]]
+                        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Prüft trigger/trigger_options/conditions gegen die Registry (für schemas.RuleIn). ValueError → 422."""
+    spec = TRIGGERS.get(trigger)
+    if spec is None:
+        raise ValueError(f"Unbekannter Trigger: {trigger} (erlaubt: {', '.join(TRIGGERS)})")
+    try:
+        opts = spec.options_model(**(options or {})).model_dump(mode="json")
+    except ValidationError as e:
+        raise ValueError(f"trigger_options für {trigger}: {_first_error(e)}") from None
+    out: list[dict[str, Any]] = []
+    for i, c in enumerate(conditions or []):
+        typ = (c or {}).get("type") if isinstance(c, dict) else None
+        cs = CONDITIONS.get(str(typ))
+        if cs is None:
+            raise ValueError(f"Bedingung {i + 1}: unbekannter Typ {typ!r} (erlaubt: {', '.join(CONDITIONS)})")
+        if cs.track_only and not spec.track_based:
+            raise ValueError(f"Bedingung {i + 1} ({typ}) geht nur mit Track-Triggern, nicht mit {trigger}")
+        try:
+            out.append(cs.model(**c).model_dump(mode="json"))
+        except ValidationError as e:
+            raise ValueError(f"Bedingung {i + 1} ({typ}): {_first_error(e)}") from None
+    return opts, out
+
+
+def _first_error(e: ValidationError) -> str:
+    err = e.errors()[0] if e.errors() else {}
+    loc = ".".join(str(x) for x in err.get("loc") or [])
+    return f"{loc}: {err.get('msg')}" if loc else str(err.get("msg") or e)
+
+
+def evaluate_conditions(rule: dict[str, Any], ctx: CondContext) -> CondResult:
+    """UND-Verknüpfung aller Bedingungen der Regel. Fehlt ein Evaluator oder wirft er, gilt die Bedingung als
+    NICHT erfüllt (lieber kein Hinweis als ein falscher). Platzhalter/Item-IDs der Einzelergebnisse werden vereint."""
+    total = CondResult(ok=True)
+    for c in rule.get("conditions") or []:
+        spec = CONDITIONS.get(str(c.get("type")))
+        if spec is None or spec.evaluate is None:
+            log.warning("Regel '%s': Bedingung %s ohne Auswertung – gilt als nicht erfüllt",
+                        rule.get("name"), c.get("type"))
+            return CondResult(ok=False, reason=f"{c.get('type')}: nicht verfügbar")
+        try:
+            r = spec.evaluate(c, ctx)
+        except Exception:
+            log.exception("Regel '%s': Bedingung %s fehlgeschlagen", rule.get("name"), c.get("type"))
+            return CondResult(ok=False, reason=f"{c.get('type')}: Fehler")
+        if not r.ok:
+            return r
+        total.ctx.update(r.ctx)
+        total.item_ids += [i for i in r.item_ids if i not in total.item_ids]
+        total.image_path = total.image_path or r.image_path
+    return total
+
+
+# Eingebaute Trigger
+register_trigger("enter", track_based=True, label_de="betritt")
+register_trigger("leave", track_based=True, label_de="verlässt")
+register_trigger("dwell", track_based=True, label_de="verweilt")
+register_trigger("time", track_based=False, options_model=TimeTriggerOptions, label_de="zu einer Uhrzeit")
+
+# W1-Bedingungen (Auswertung: A1 in rule_conditions.py per register_condition(..., evaluate=…))
+register_condition("inventory", CondInventory, label_de="Gegenstand da/weg")
+register_condition("inventory_untouched", CondInventoryUntouched, label_de="Gegenstand unberührt")
+register_condition("weather", CondWeather, label_de="Wetter")
+register_condition("track_came_from", CondTrackCameFrom, track_only=True, label_de="kam aus Zone")
 
 
 # ------------------------------------------------------------------ Track-Zustand

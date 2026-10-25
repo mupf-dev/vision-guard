@@ -7,13 +7,14 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from . import go2rtc, media_sign, registry, rules, settings_store, state
+from . import go2rtc, media_sign, notifications, registry, rules, settings_store, state
 from .db import SessionLocal
 from .models import Event, Identity, utcnow
 from .rules import TrackState
@@ -26,6 +27,53 @@ log = logging.getLogger("vg.events")
 SNAPSHOT_FALLBACK_S = 5.0
 PENDING_TTL_S = 900.0
 WORKER_GONE_S = 60.0
+
+
+# ------------------------------------------------------------------ Hook-API (W1, genutzt von C3/C1/C2)
+
+
+@dataclass(frozen=True)
+class TrackHook:
+    """Ein verarbeiteter Track-Schritt. `msg` ist die Worker-Nachricht (zones, entered_zones, left_zones, identity,
+    attributes, ts, …; bei nachträglich aufgelöster Identität nur `{"identity": …}`), `track` der aktuelle
+    Zustand – beides nur lesen."""
+    phase: str                  # "start" | "update" | "end"
+    camera_id: int
+    track_id: int
+    event_id: str
+    label: str
+    msg: dict[str, Any]
+    track: TrackState
+
+
+TrackCallback = Callable[[TrackHook], None]
+_track_hooks: list[TrackCallback] = []
+
+
+def on_track(callback: TrackCallback) -> Callable[[], None]:
+    """Registriert einen Callback für jeden Track-Schritt (nach Event-Speicherung und Regelauswertung).
+
+    Läuft im Track-Thread unter `processor.lock`: schnell bleiben, eigene DB-Session öffnen, nichts blockieren
+    (Längeres per Thread/`rules.submit_async`). Ausnahmen werden geloggt und stoppen nichts. Liefert eine
+    Funktion zum Abmelden."""
+    _track_hooks.append(callback)
+
+    def off() -> None:
+        if callback in _track_hooks:
+            _track_hooks.remove(callback)
+    return off
+
+
+def _run_track_hooks(phase: str, tr: TrackState, msg: dict[str, Any]) -> None:
+    if not _track_hooks:
+        return
+    hook = TrackHook(phase=phase, camera_id=tr.camera_id, track_id=tr.track_id, event_id=tr.event_id,
+                     label=tr.label, msg=msg or {}, track=tr)
+    for cb in list(_track_hooks):
+        try:
+            cb(hook)
+        except Exception:
+            log.exception("Track-Hook %s fehlgeschlagen", getattr(cb, "__name__", cb))
 
 
 class Processor:
@@ -157,6 +205,7 @@ class Processor:
             if tr is None:
                 return
             self._evaluate(s, tr, msg, now, phase="start")
+            _run_track_hooks("start", tr, msg)
             return
 
         ev = self._apply_msg(s, tr, msg, now)
@@ -164,6 +213,7 @@ class Processor:
             s.commit()
             self._emit(s, ev, "update")
         self._evaluate(s, tr, msg, now, phase="update")
+        _run_track_hooks("update", tr, msg)
 
     def _start_track(self, s: Session, camera_id: int, track_id: int, msg: dict[str, Any],
                      now: float) -> Optional[TrackState]:
@@ -244,6 +294,7 @@ class Processor:
             s.commit()
             self._emit(s, ev, "end")
         self._publish_counts(tr.camera_id)
+        _run_track_hooks("end", tr, msg)
 
     # ---------------------------------------------------------- Regeln
 
@@ -377,8 +428,32 @@ class Processor:
             self._pub(topic, body, retain=bool(action.get("retain")), qos=1)
         elif typ == "webhook":
             rules.submit_async(self.loop, rules.run_webhook(action, ctx, event_data))
+        elif typ == "push":
+            self._run_push(action, rule, tr, ev, ctx, date)
         else:
             log.warning("Unbekannte Aktion: %s", typ)
+
+    def _run_push(self, action: dict[str, Any], rule: dict[str, Any], tr: TrackState, ev: Event,
+                  ctx: dict[str, Any], date: str, cond: Optional[rules.CondResult] = None) -> Optional[dict]:
+        """Aktion `push`: je Aktion eine Notification (source "rule") mit Push an `target` (None = alle Ziele).
+        `cond` (A1): Ergebnis der Bedingungen – liefert item_ids und ggf. das Bild des Gegenstands."""
+        mode = action.get("image") or "snapshot"
+        has_snap = any(a.get("type") == "snapshot" for a in rule.get("actions") or [])
+        if mode == "snapshot":
+            image = ev.snapshot_path or (f"snapshots/{date}/{ev.id}_{rule['id']}.jpg" if has_snap else ev.thumb_path)
+        elif mode == "crop":
+            image = (cond.image_path if cond else None) or ev.thumb_path
+        else:
+            image = None
+        priority = action.get("priority") or "default"
+        target = action.get("target")
+        return notifications.create(
+            source="rule", level="alarm" if priority == "high" else "info",
+            title=rules.render(action.get("title") or "{rule}", ctx),
+            message=rules.render(action.get("message") or "", ctx),
+            rule_id=int(rule["id"]), rule_name=rule.get("name"), camera_id=tr.camera_id, event_id=ev.id,
+            item_ids=list(cond.item_ids) if cond else [], image_path=image,
+            targets=[target] if target else None, priority=priority)
 
     # ---------------------------------------------------------- Snapshot/Clip-Ergebnisse
 
@@ -452,6 +527,7 @@ class Processor:
                     if tr is not None and tr.event_id == ev.id and data.get("identity"):
                         tr.identity = data["identity"]
                         self._evaluate(s, tr, {}, time.time(), phase="update")
+                        _run_track_hooks("update", tr, {"identity": data["identity"]})
             except Exception:
                 log.exception("Event-Aktualisierung fehlgeschlagen")
 

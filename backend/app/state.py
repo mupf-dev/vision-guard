@@ -14,11 +14,21 @@ camera_status: dict[int, dict[str, Any]] = {}   # camera_id -> letzte Statusnach
 LOCAL_WORKER_ID = "local"
 worker_systems: dict[str, dict[str, Any]] = {}   # worker_id -> letzte system-Nachricht + _rx
 mqtt_connected: bool = False
+# W1 C5: Gesundheitsstatus je Kamera ({state:"ok|warn|unknown", problems:[{type, since, text}]}), gesetzt von health.py
+camera_health: dict[int, dict[str, Any]] = {}
 
 
 def set_camera_status(camera_id: int, msg: dict[str, Any]) -> None:
     with _lock:
         camera_status[camera_id] = {**msg, "_rx": time.time()}
+
+
+def set_camera_health(camera_id: int, health: Optional[dict[str, Any]]) -> None:
+    with _lock:
+        if health is None:
+            camera_health.pop(camera_id, None)
+        else:
+            camera_health[camera_id] = dict(health)
 
 
 def worker_id_of(msg: dict[str, Any], topic_worker_id: Optional[str] = None) -> str:
@@ -46,7 +56,9 @@ def status_for(camera_id: int, enabled: bool = True) -> dict[str, Any]:
     """Status-Objekt laut Contract für eine Kamera."""
     with _lock:
         s = dict(camera_status.get(camera_id) or {})
-    base = {"state": "offline", "fps": 0.0, "width": None, "height": None, "inference_ms": None, "last_seen": None}
+        health = camera_health.get(camera_id)
+    base = {"state": "offline", "fps": 0.0, "width": None, "height": None, "inference_ms": None, "last_seen": None,
+            "health": dict(health) if health else None}
     if s:
         rx = s.pop("_rx", 0)
         ts = s.get("ts") or rx
