@@ -1,14 +1,15 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import embed_client, item_identity, settings_store
 from .. import identity as ident_svc
 from ..auth import require_user
 from ..db import get_db
-from ..models import Identity, IdentitySample
-from ..schemas import IdentityPatch, MergeIn, iso, media_url
+from ..models import Identity, IdentitySample, InventoryItem, utcnow
+from ..schemas import IdentityCreateIn, IdentityPatch, MergeIn, SampleFromInventoryIn, iso, media_url
 from ..serializers import identities_json, identity_json
 from ..util import safe_remove
 from ..ws import hub
@@ -45,6 +46,70 @@ def list_identities(db: Session = Depends(get_db), kind: Optional[str] = None, n
     return data
 
 
+@router.post("", status_code=201)
+def create_identity(body: IdentityCreateIn, db: Session = Depends(get_db)):
+    """W2 (B4): eigenes Exemplar anlegen (nur `kind:"item"`); Fotos danach über `/samples`."""
+    vocab = {e.get("label") for e in (settings_store.get().get("inventory_vocabulary") or [])}
+    if body.item_label not in vocab:
+        raise HTTPException(422, f"Unbekannter Gegenstand: {body.item_label}")
+    now = utcnow()
+    i = Identity(kind="item", item_label=body.item_label, name=body.name.strip() or None,
+                 auto_number=ident_svc._next_number(db, "item"), first_seen=now, last_seen=now, notes="")
+    db.add(i)
+    db.commit()
+    db.refresh(i)
+    item_identity.changed()
+    data = identity_json(db, i)
+    hub.broadcast({"type": "identity", "identity": data})
+    return data
+
+
+def _parse_bbox(v: Optional[str]) -> Optional[list[float]]:
+    if v is None or not v.strip():
+        return None
+    try:
+        b = [float(x) for x in v.split(",")]
+    except ValueError:
+        raise HTTPException(422, "bbox muss \"x1,y1,x2,y2\" (normiert) sein") from None
+    if len(b) != 4 or not all(0.0 <= x <= 1.0 for x in b) or b[2] <= b[0] or b[3] <= b[1]:
+        raise HTTPException(422, "bbox muss \"x1,y1,x2,y2\" (normiert) sein")
+    return b
+
+
+def _sample_call(fn, db: Session, i: Identity, *args):
+    try:
+        out = fn(db, i, *args)
+    except embed_client.EmbedUnavailable as e:
+        raise HTTPException(503, "Analyse-Dienst nicht erreichbar" if "ausgelastet" not in str(e) else str(e)) from None
+    except embed_client.EmbedError as e:
+        raise HTTPException(422, f"Bild nicht auswertbar: {e}") from None
+    except item_identity.SampleError as e:
+        raise HTTPException(422, str(e)) from None
+    db.refresh(i)
+    hub.broadcast({"type": "identity", "identity": identity_json(db, i)})
+    return out
+
+
+@router.post("/{iid}/samples", status_code=201)
+def upload_sample(iid: int, file: UploadFile = File(...), bbox: Optional[str] = Form(None),
+                  db: Session = Depends(get_db)):
+    """W2 (B4): Foto (jpeg/png/webp ≤ 10 MB) als Sample eines eigenen Gegenstands; optional `bbox` „x1,y1,x2,y2“."""
+    i = _get(db, iid)
+    box = _parse_bbox(bbox)
+    data = file.file.read(item_identity.MAX_UPLOAD_BYTES + 1)
+    return _sample_call(item_identity.add_upload_sample, db, i, data, box)
+
+
+@router.post("/{iid}/samples/from-inventory", status_code=201)
+def sample_from_inventory(iid: int, body: SampleFromInventoryIn, db: Session = Depends(get_db)):
+    """W2 (B4): aktuellen Crop eines erkannten Gegenstands als Sample übernehmen."""
+    i = _get(db, iid)
+    item = db.get(InventoryItem, body.inventory_item_id)
+    if item is None:
+        raise HTTPException(404, "Gegenstand nicht gefunden")
+    return _sample_call(item_identity.add_inventory_sample, db, i, item)
+
+
 @router.get("/{iid}")
 def get_identity(iid: int, db: Session = Depends(get_db)):
     return identity_json(db, _get(db, iid))
@@ -62,6 +127,8 @@ def patch_identity(iid: int, body: IdentityPatch, db: Session = Depends(get_db))
     if "learning_locked" in fields and body.learning_locked is not None:
         i.learning_locked = bool(body.learning_locked)
     db.commit()
+    if i.kind == "item":
+        item_identity.invalidate()
     data = identity_json(db, i)
     hub.broadcast({"type": "identity", "identity": data})
     return data
@@ -71,10 +138,16 @@ def patch_identity(iid: int, body: IdentityPatch, db: Session = Depends(get_db))
 def delete_identity(iid: int, db: Session = Depends(get_db)):
     i = _get(db, iid)
     kind = i.kind
+    if kind == "item":   # Zuordnungen der Gegenstände lösen
+        from sqlalchemy import update
+        db.execute(update(InventoryItem).where(InventoryItem.identity_id == iid)
+                   .values(identity_id=None, identity_score=None))
     db.delete(i)
     db.commit()
     ident_svc.delete_identity_files(iid)
     ident_svc.invalidate(kind)
+    if kind == "item":
+        item_identity.changed()
     hub.broadcast({"type": "identity", "identity": {"id": iid, "kind": kind, "deleted": True}})
     return Response(status_code=204)
 
@@ -92,6 +165,12 @@ def merge_identity(iid: int, body: MergeIn, db: Session = Depends(get_db)):
     except ident_svc.MergeError as e:
         db.rollback()
         raise HTTPException(422, str(e)) from e
+    if dst.kind == "item":
+        if src_deleted:
+            from sqlalchemy import update
+            db.execute(update(InventoryItem).where(InventoryItem.identity_id == iid).values(identity_id=dst.id))
+            db.commit()
+        item_identity.changed()
     data = identity_json(db, dst)
     if src_deleted:
         hub.broadcast({"type": "identity", "identity": {"id": iid, "kind": data["kind"], "deleted": True,
@@ -130,6 +209,8 @@ def delete_sample(iid: int, sid: int, db: Session = Depends(get_db)):
     db.commit()
     safe_remove(path)
     ident_svc.invalidate(i.kind)
+    if i.kind == "item":
+        item_identity.changed()
     hub.broadcast({"type": "identity", "identity": identity_json(db, i)})
     return Response(status_code=204)
 

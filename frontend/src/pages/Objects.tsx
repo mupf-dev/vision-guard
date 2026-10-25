@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Camera as CamIcon, Clock, History, Home, MapPin, MessageSquareText, MonitorPlay, Package, RotateCcw, Search, Trash2,
+  BadgeCheck, Camera as CamIcon, Clock, History, Home, MapPin, MessageSquareText, MonitorPlay, Package, RotateCcw, Search, Trash2,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { InventoryItem, InventorySearchHit, InventoryState } from "../lib/types";
@@ -10,6 +10,8 @@ import { fmtAgo, fmtDateTime, fmtTime } from "../lib/format";
 import { ConfirmDialog, Dialog, Empty, Img, Loading } from "../components/ui";
 import { toast, useLive } from "../lib/store";
 import { ObjectChanges } from "./ObjectChanges";
+import { MyItems } from "./MyItems";
+import { ItemTeachDialog } from "../components/ItemTeachDialog";
 
 const STATE_NAME: Record<InventoryState, string> = { present: "sichtbar", missing: "nicht mehr gesehen", stale: "unbestätigt" };
 const STATE_HINT: Record<InventoryState, string> = {
@@ -77,7 +79,9 @@ function ItemCard({ it, index, onPick }: { it: InventoryItem; index: number; onP
         </div>
       </div>
       <div className="body">
-        <div className="who"><Package size={15} color={it.visible ? "var(--accent)" : "var(--text-3)"} />{it.name_de}</div>
+        <div className="who"><Package size={15} color={it.visible ? "var(--accent)" : "var(--text-3)"} />{it.identity?.display_name ?? it.name_de}
+          {it.identity && <span className="badge outline" title={`eigener Gegenstand (${it.name_de})`} style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}><BadgeCheck size={11} />{it.name_de}</span>}
+        </div>
         <div className="meta">
           <span className="row" style={{ gap: 4, minWidth: 0 }}><CamIcon />{it.camera_name}</span>
           {place && <span className="row" style={{ gap: 4, minWidth: 0 }}><Home />{place}</span>}
@@ -112,6 +116,7 @@ function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => voi
   const qc = useQueryClient();
   const nav = useNavigate();
   const [confirm, setConfirm] = useState(false);
+  const [teach, setTeach] = useState(false);
   const fresh = useQuery({ queryKey: ["inventory", "item", item.id], queryFn: () => api.inventoryItem(item.id), initialData: item });
   const [it] = useLiveOverlay(fresh.data ? [fresh.data] : [item]);
   const hist = useQuery({ queryKey: ["inventory", "history", item.id], queryFn: () => api.inventoryHistory(item.id, 50) });
@@ -127,9 +132,10 @@ function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => voi
   });
   if (!it) return null;
   return (
-    <Dialog size="lg" onClose={onClose} icon={<Package size={18} />} title={it.name_de} footer={<>
+    <Dialog size="lg" onClose={onClose} icon={<Package size={18} />} title={it.identity?.display_name ?? it.name_de} footer={<>
       <button className="btn btn-ghost" onClick={() => setConfirm(true)}><Trash2 size={15} />Fehlerkennung entfernen</button>
       <span className="spacer" />
+      {!it.identity && it.crop_url && <button className="btn" onClick={() => setTeach(true)}><BadgeCheck size={15} />Als eigenen Gegenstand merken</button>}
       <button className="btn" onClick={() => nav(`/live/${it.camera_id}`)}><MonitorPlay size={15} />Live ansehen</button>
       <button className="btn btn-primary" onClick={onClose}>Schließen</button>
     </>}>
@@ -139,6 +145,7 @@ function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => voi
             : <Img src={it.crop_url} className="avatar lg" fallback={<div className="avatar lg" style={{ display: "grid", placeItems: "center" }}><Package size={40} /></div>} />}
           <dl className="kv">
             {it.snapshot_url && it.crop_url && <><dt>Ausschnitt</dt><dd><Img src={it.crop_url} className="avatar" /></dd></>}
+            {it.identity && <><dt>Exemplar</dt><dd>{it.identity.display_name}{it.identity_score != null && <span className="muted"> · Ähnlichkeit {Math.round(it.identity_score * 100)} %</span>}</dd></>}
             <dt>Status</dt><dd><StateBadge state={it.state} /> <span className="dim" style={{ marginLeft: 6 }}>{seenText(it)}</span></dd>
             <dt>Kamera</dt><dd>{it.camera_name}</dd>
             <dt>Raum</dt><dd>{it.room ?? <span className="muted">–</span>}</dd>
@@ -174,6 +181,7 @@ function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => voi
       {confirm && <ConfirmDialog title="Gegenstand entfernen?" busy={del.isPending} confirmLabel="Entfernen"
         text={<>„{it.name_de}“ wird samt Verlauf gelöscht (z. B. bei einer Fehlerkennung). Wird er erneut erkannt, erscheint er wieder.</>}
         onConfirm={() => del.mutate()} onClose={() => setConfirm(false)} />}
+      {teach && <ItemTeachDialog fromItem={it} onClose={() => setTeach(false)} />}
     </Dialog>
   );
 }
@@ -255,10 +263,11 @@ export function ObjectsPage() {
     return [...m.entries()].sort(([a], [b]) => (a === NO_ROOM ? 1 : b === NO_ROOM ? -1 : a.localeCompare(b, "de")));
   }, [items, f.q]);
 
-  const tab = sp.get("tab") === "changes" ? "changes" : "overview";
+  const tabParam = sp.get("tab");
+  const tab = tabParam === "changes" || tabParam === "mine" ? tabParam : "overview";
   const setTab = (t: string) => {
     const n = new URLSearchParams(sp);
-    if (t === "changes") n.set("tab", t); else n.delete("tab");
+    if (t === "changes" || t === "mine") n.set("tab", t); else n.delete("tab");
     setSp(n, { replace: true });
   };
   const hasFilter = [f.q, f.camera, f.room, f.state, f.label].some(Boolean);
@@ -280,9 +289,10 @@ export function ObjectsPage() {
       <div className="tabs">
         <button className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}><Package size={15} />Übersicht</button>
         <button className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}><History size={15} />Veränderungen</button>
+        <button className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")}><BadgeCheck size={15} />Meine Gegenstände</button>
       </div>
 
-      {tab === "changes" ? <ObjectChanges cams={cams.data ?? []} rooms={rooms} onPick={setPicked} /> : <>
+      {tab === "mine" ? <MyItems onPickItem={setPicked} /> : tab === "changes" ? <ObjectChanges cams={cams.data ?? []} rooms={rooms} onPick={setPicked} /> : <>
       <div className="card filters">
         <div className="field" style={{ flex: "1 1 280px" }}><label>Suche</label>
           <div className="input-group">

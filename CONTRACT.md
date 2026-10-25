@@ -978,6 +978,27 @@ Zonen (JSON in `cameras.zones`) haben zusätzlich `"purpose": "food"|"water"|"li
   höchstens 1 Crop/10 min). Exemplar-Abgleich bei neuem Gegenstand, `moved`, sonst höchstens alle 10 min, nur für
   Labels mit `instances > 0`. Treffer in einer Unterdrückungsfläche (gleiches Label, IoU ≥ 0,5) verwirft der Worker.
 
+**Ergänzungen der Umsetzung (B4/D2, additiv):**
+- `POST /api/internal/identify` (`kind:"item"`) nimmt zusätzlich `crop_px: int | null` (kürzere Seite des Gegenstands im
+  analysierten Bild, px). Unter `item_min_px` nie Zuordnung und nie Lernen, aber Rückfrage im Band. Ohne Treffer liefert
+  die Antwort `identity_id: null` mit dem besten `score`. Automatisches Lernen zusätzlich nur, wenn das Bild keinem
+  gespeicherten fast gleicht (Score < 0,95) und höchstens 1 Sample je Exemplar und 10 min.
+- Worker-Items enthalten `identity`/`identity_score` erst nach einem Abgleich; fehlen die Schlüssel, lässt das Backend
+  die Zuordnung unverändert. Je Kamera bekommt höchstens ein Gegenstand ein Exemplar (bester Score). Nach jeder
+  `vg/internal/config` gleicht der Worker die sichtbaren Gegenstände neu ab (Exemplar/Samples geändert → Backend sendet
+  `config`). `perf.inventory.items = {embeds, identify, matched, errors}`.
+- `GET /review/thresholds` liefert zusätzlich `name_de`. Welche Kamera-Schwellen automatisch gesetzt wurden, steht in
+  `kv["review_tune:{camera_id}"]`; weicht der Kamera-Wert davon ab, gilt er als von Hand gesetzt (`auto:false`).
+- Rückfrage-Gründe in `data.reason`: `uncertain` | `low_score` | `new_label`; `inventory_identity` zusätzlich
+  `data.embedding` (für das Sample bei der Antwort), `data.crop_px`, `data.small`; `identity_match` zusätzlich
+  `data.source_name`, `data.target_name` (Bilder: `crop_url` = Quelle, `snapshot_url` = Ziel).
+- `inventory_label` „Nein“ mit `correct_label`: Unterdrückungsfläche für das falsche Label, die Zeile wird umetikettiert
+  und von der Worker-ID gelöst (danach „zuletzt gesehen“), Beispiele für beide Labels.
+- Notification `source:"review"` entsteht nur, wenn `notify_routes.review` Ziele hat; ntfy bekommt die Aktionen Ja/Nein
+  (HTTP-POST auf die signierten Antwort-Links, nur mit `public_base_url`). `notifications.create(…, actions=, click_path=)`
+  und `push.PushMessage.actions` sind dafür additiv ergänzt.
+- `POST /review/a/{id}` mit `Accept: text/html` antwortet mit einer kleinen Danke-Seite, sonst mit dem ReviewRequest.
+
 ### W2.E Embedding-Dienst (gemeinsam, K2) – `vg/internal/embed`
 
 Ein Topic-Paar für alle Bild-/Text-Embeddings (ersetzt B4 `embed` und B1 `history/encode`). Der Worker nutzt das

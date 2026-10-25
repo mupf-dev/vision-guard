@@ -412,7 +412,7 @@ export interface InventoryItem {
 }
 
 export interface InventorySearchHit extends InventoryItem {
-  match: { score: number; via: "label" | "name" | "synonym" | "prompt" | "fuzzy" };
+  match: { score: number; via: "label" | "name" | "synonym" | "prompt" | "fuzzy" | "identity" };
 }
 
 export interface InventorySearchResult {
@@ -637,6 +637,8 @@ export interface ReviewAnswerInput {
 export interface ReviewThreshold {
   camera_id: number;
   label: string;
+  /** Anzeige-Name aus dem Vokabular */
+  name_de?: string;
   base: number;
   current: number;
   auto: boolean;

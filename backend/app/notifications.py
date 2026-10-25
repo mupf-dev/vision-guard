@@ -99,13 +99,17 @@ def create(*, source: str, title: str, message: str, level: str = "info",
            item_ids: Optional[list[int]] = None, image_path: Optional[str] = None,
            data: Optional[dict[str, Any]] = None, targets: Optional[list[str]] = None,
            push_enabled: bool = True, priority: str = "default",
-           dedup_key: Optional[str] = None, dedup_s: float = 0) -> Optional[dict[str, Any]]:
+           dedup_key: Optional[str] = None, dedup_s: float = 0,
+           actions: Optional[list[dict[str, Any]]] = None,
+           click_path: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Legt eine Notification an und stellt sie zu. Liefert Notification-JSON oder None (Dedup).
 
     Threadsicher und synchron schnell (DB-Insert); Push läuft im Hintergrund. `dedup_key` + `dedup_s`:
     gab es in den letzten `dedup_s` Sekunden schon eine Meldung mit diesem Schlüssel, passiert nichts.
     Tageslimit `push_max_per_rule_per_day` (nur `source="rule"` mit `rule_id`): Meldung wird gespeichert,
-    Push aber übersprungen (`delivery[].status = "skipped"`)."""
+    Push aber übersprungen (`delivery[].status = "skipped"`).
+    `actions` (W2, D2): Knöpfe für ntfy (`{action:"http", label, url, method, clear}`), werden nicht gespeichert;
+    `click_path`: Ziel beim Antippen (relativ zu `public_base_url`, Default `/hinweise`)."""
     if source not in NOTIFY_SOURCES:
         raise ValueError(f"unbekannte Quelle: {source}")
     if level not in LEVELS:
@@ -144,11 +148,12 @@ def create(*, source: str, title: str, message: str, level: str = "info",
     hub.broadcast({"type": "notification", "action": "new", "notification": out})
     _publish_external(out)
     if tgts and not skip_reason:
-        _pool.submit(_deliver, out["id"], tgts, _push_message(out, priority))
+        _pool.submit(_deliver, out["id"], tgts, _push_message(out, priority, actions, click_path))
     return out
 
 
-def _push_message(n: dict[str, Any], priority: str) -> push.PushMessage:
+def _push_message(n: dict[str, Any], priority: str, actions: Optional[list[dict[str, Any]]] = None,
+                  click_path: Optional[str] = None) -> push.PushMessage:
     base = (settings_store.get().get("public_base_url") or "").rstrip("/")
     rel = media_sign.normalize_path(n["image_url"]) if n.get("image_url") else None
     image_url = None
@@ -157,8 +162,9 @@ def _push_message(n: dict[str, Any], priority: str) -> push.PushMessage:
     tags = {"alarm": ["rotating_light"], "warning": ["warning"]}.get(n.get("level") or "", [])
     return push.PushMessage(title=n.get("title") or "VisionGuard", message=n.get("message") or "",
                             priority=priority if priority in push.NTFY_PRIORITY else "default",
-                            click_url=f"{base}/hinweise" if base else None,
-                            image_url=image_url, image_path=None if image_url else rel, tags=tags)
+                            click_url=f"{base}{click_path or '/hinweise'}" if base else None,
+                            image_url=image_url, image_path=None if image_url else rel, tags=tags,
+                            actions=list(actions or []))
 
 
 def _deliver(notification_id: int, targets: list[dict[str, Any]], msg: push.PushMessage) -> None:

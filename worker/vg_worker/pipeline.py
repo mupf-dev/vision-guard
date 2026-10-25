@@ -92,7 +92,9 @@ class Pipeline:
         self._wake = threading.Event()
         # Inventar (Gegenstände): eigener Thread, GPU abwechselnd mit _infer_loop
         self.gpu = GpuTurn()
-        self.inventory = InventoryEngine(publish, self.gpu, lambda cid: self.cams.get(cid))
+        # W2 (B4): Exemplar-Abgleich mit dem geteilten DINOv2 der Tiererkennung + /api/internal/identify
+        self.inventory = InventoryEngine(publish, self.gpu, lambda cid: self.cams.get(cid),
+                                         pet_model=self.identifier.pet, identify_fn=identify_fn)
         # Kamera-Gesundheit (C5): eigener CPU-Thread, Prüfbilder aus dem Ingest
         self.health = HealthMonitor(publish, self._cams_snapshot)
         # W2 (K2): Embedding-Dienst vg/internal/embed mit dem geteilten DINOv2 der Tiererkennung

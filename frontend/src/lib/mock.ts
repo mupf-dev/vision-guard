@@ -527,6 +527,12 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
       events = events.map((e) => (e.identity?.id === id ? { ...e, identity: { id: target.id, kind: target.kind, display_name: target.display_name, name: target.name } } : e));
       identities.splice(idx, 1); return json(target);
     }
+    if ((sub === "/samples" || sub === "/samples/from-inventory") && method === "POST") {   // W2 B4
+      const s: Sample = { id: nextId++, image_url: sceneSvg(ident.display_name, 120, 160, 160), created_at: now(), quality: 1,
+        manual: true, negative: false, source: "upload" };
+      samples[id] = [...(samples[id] ?? []), s]; ident.sample_count = samples[id].length; ident.cover_url = ident.cover_url ?? s.image_url;
+      return json(s, 201);
+    }
     if (sub === "/samples") return json(samples[id] ?? []);
     if ((m = sub.match(/^\/samples\/(\d+)$/))) { samples[id] = samples[id].filter((s) => s.id !== Number(m![1])); ident.sample_count--; return json(undefined, 204); }
     if (sub === "/events") return json(filterEvents(p, events.filter((e) => e.identity?.id === id)));
@@ -623,7 +629,9 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     const list = reviews.filter((r) => !st.length || st.includes(r.status));
     return json({ items: list, total: list.length, open_count: reviews.filter((r) => r.status === "open").length, asked_today: 2, max_per_day: settings.review_max_per_day });
   }
-  if (path === "/review/thresholds") return json([]);
+  if (path === "/review/thresholds") return json([
+    { camera_id: 3, label: "remote", name_de: "Fernbedienung", base: 0.35, current: 0.3, auto: true, yes: 3, no: 1 },
+  ]);
   if ((m = path.match(/^\/review\/(\d+)(\/answer)?$/))) {
     const id = Number(m[1]); const r = reviews.find((x) => x.id === id);
     if (!r) return json({ detail: "Rückfrage nicht gefunden" }, 404);

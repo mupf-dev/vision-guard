@@ -74,8 +74,52 @@ def list_inventory(
     return {"items": items[offset:offset + limit], "total": len(items)}
 
 
+def _identity_matches(q: str) -> list[tuple[int, int]]:
+    """W2 (B4): Exemplare, deren Name zur Suchanfrage passt → [(score 0..100, identity_id)] absteigend."""
+    from rapidfuzz import fuzz
+
+    from .. import item_identity
+    nq = names.strip_fillers(names.normalize(q))
+    if not nq:
+        return []
+    out = []
+    for iid, d in item_identity.summaries().items():
+        if not d.get("name"):
+            continue
+        nn = names.strip_fillers(names.normalize(d["name"]))
+        if not nn:
+            continue
+        if nn == nq:
+            sc = 100
+        elif f" {nn} " in f" {nq} ":
+            sc = 95   # ganzer Name in der Frage („wo ist annas rucksack“); „rucksack“ allein bleibt Label-Suche
+        else:
+            sc = int(fuzz.ratio(nq, nn))   # Tippfehler
+        if sc >= 85:
+            out.append((sc, iid))
+    out.sort(reverse=True)
+    return out
+
+
 def _search(db: Session, q: str, limit: int, signed: bool) -> dict:
     vocab, vmap = _vocab()
+    ident_hits = _identity_matches(q)
+    if ident_hits:
+        from .. import item_identity
+        best_sc = ident_hits[0][0]
+        iids = [iid for sc, iid in ident_hits if sc >= best_sc]
+        rows = list(db.scalars(select(InventoryItem).where(InventoryItem.identity_id.in_(iids))).all())
+        rows.sort(key=lambda r: (0 if r.state == "present" else 1, -(r.last_seen.timestamp() if r.last_seen else 0)))
+        info = item_identity.summaries()[iids[0]]
+        title = info["display_name"]
+        answer = answer_sentence(db, rows, q, info.get("item_label") or "item", vmap, title=title)
+        cams: dict[int, dict] = {}
+        items = []
+        for r in rows[:limit]:
+            d = item_json(r, vocab=vmap, cam=cams.setdefault(r.camera_id, camera_info(r.camera_id)))
+            d["match"] = {"score": best_sc, "via": "identity"}
+            items.append(d)
+        return {"query": q, "answer": answer, "items": items}
     custom = settings_store.get().get("inventory_synonyms") or {}
     db_labels = list(db.scalars(select(InventoryItem.label).distinct()).all())
     matches = names.match_labels(q, vocab, custom, extra_labels=db_labels)

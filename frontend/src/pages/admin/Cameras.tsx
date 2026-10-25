@@ -102,7 +102,7 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
           </div>
         </div>
       ) : tab === "inventory" ? (
-        <CameraInventoryTab f={f} set={set} />
+        <CameraInventoryTab f={f} set={set} cameraId={cam?.id} />
       ) : tab === "health" ? (
         <CameraHealthTab cam={cam} f={f} set={set} />
       ) : (

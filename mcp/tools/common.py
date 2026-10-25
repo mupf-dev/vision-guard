@@ -205,12 +205,16 @@ def compact_item(it: dict) -> dict:
         "first_seen": it.get("first_seen"),
         "last_seen": it.get("last_seen"),
         "crop_url": it.get("crop_url"),
+        # W2 (B4): Name des eigenen Exemplars („Annas Rucksack“) oder None
+        "identity_name": (it.get("identity") or {}).get("display_name") if isinstance(it.get("identity"), dict) else None,
     }
 
 
 def item_sentence(c: dict) -> str:
     """„Fernbedienung: aktuell sichtbar in Kamera Wohnzimmer (Raum Wohnzimmer), vermutlich auf dem Tisch, seit 14:02“."""
     name = c.get("name_de") or c.get("label") or "Gegenstand"
+    if c.get("identity_name"):
+        name = f"{c['identity_name']} ({name})"
     place = where(c.get("camera_name"), c.get("room"))
     if c.get("state") == "present":
         parts = [f"{name}: aktuell sichtbar in {place}"]
