@@ -33,6 +33,26 @@ function refreshPresence(qc: QueryClient) {
   }, 1000);
 }
 
+// Identitäten 07 (Paket A): Sammelaktionen senden eine gebündelte `identities`-Nachricht plus `identity` fürs Ziel –
+// Listen (inkl. teurer Vorschläge) nur einmal, entprellt neu laden.
+let identTimer: number | undefined;
+let identBulk = false;
+function refreshIdentities(qc: QueryClient, bulk: boolean) {
+  identBulk ||= bulk;
+  window.clearTimeout(identTimer);
+  identTimer = window.setTimeout(() => {
+    const all = identBulk;
+    identTimer = undefined;
+    identBulk = false;
+    qc.invalidateQueries({ queryKey: ["identities"] });
+    if (all) {
+      for (const k of ["identity", "samples", "identity-events", "identity-suggestions", "identity-merges", "events"]) {
+        qc.invalidateQueries({ queryKey: [k] });
+      }
+    }
+  }, 400);
+}
+
 function handle(msg: WsMessage, qc: QueryClient) {
   const s = useLive.getState();
   switch (msg.type) {
@@ -82,8 +102,11 @@ function handle(msg: WsMessage, qc: QueryClient) {
       refreshInventory(qc);
       break;
     case "identity":
-      qc.invalidateQueries({ queryKey: ["identities"] });
       qc.setQueryData(["identity", msg.identity.id], msg.identity);
+      refreshIdentities(qc, false);
+      break;
+    case "identities":       // Identitäten 07: gebündelt (merged|deleted)
+      refreshIdentities(qc, true);
       break;
     case "notification": {
       qc.invalidateQueries({ queryKey: ["notifications"] });

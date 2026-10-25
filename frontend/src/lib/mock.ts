@@ -104,6 +104,9 @@ const identities: Identity[] = [
   { id: 13, kind: "face", name: null, display_name: "Person #13", plate_text: null, notes: "", sample_count: 2, cover_url: faceSvg(13), first_seen: ago(5000), last_seen: ago(4000), event_count: 3, learning_locked: false },
   { id: 20, kind: "plate", name: "Familienauto", display_name: "Familienauto", plate_text: "B-VG 120", notes: "", sample_count: 9, cover_url: faceSvg(20, "plate"), first_seen: ago(86400 * 30), last_seen: ago(3600), event_count: 54, learning_locked: false },
   { id: 21, kind: "plate", name: null, display_name: "Kennzeichen M-XY 421", plate_text: "M-XY 421", notes: "", sample_count: 3, cover_url: faceSvg(21, "plate"), first_seen: ago(9000), last_seen: ago(8000), event_count: 2, learning_locked: false },
+  // Identitäten 07 (Paket A): weitere Fragmente zum Testen der Mehrfachauswahl (14–16 ähneln Anna, 17 dem Paketboten)
+  ...[14, 15, 16, 17, 18, 19].map((id, k): Identity => ({ id, kind: "face", name: null, display_name: `Person #${id}`, plate_text: null, notes: "",
+    sample_count: 1 + (k % 3), cover_url: faceSvg(id), first_seen: ago(3600 * (k + 2)), last_seen: ago(900 * (k + 1)), event_count: k % 4, learning_locked: false })),
   { id: 30, kind: "pet", name: "Bello", display_name: "Bello", plate_text: null, notes: "Hund der Nachbarn", sample_count: 11, cover_url: faceSvg(30, "pet"), first_seen: ago(86400 * 5), last_seen: ago(600), event_count: 31, learning_locked: false },
   { id: 31, kind: "pet", name: null, display_name: "Tier #3", plate_text: null, notes: "", sample_count: 4, cover_url: faceSvg(31, "pet"), first_seen: ago(86400 * 2), last_seen: ago(20000), event_count: 6, learning_locked: false },
 ];
@@ -114,7 +117,8 @@ function mockSuggestions(src: Identity, limit: number): IdentitySuggestion[] {
   const thr = src.kind === "face" ? settings.face_match_threshold : settings.pet_match_threshold;
   return identities.filter((t) => t.kind === src.kind && t.id !== src.id && !!t.name)
     .map((t) => {
-      const score = Math.round((src.id === 12 && t.id === 1 ? 0.41 : 0.15 + ((src.id * 7 + t.id * 13) % 20) / 100) * 1000) / 1000;
+      const fixed: Record<string, number> = { "12:1": 0.41, "14:1": 0.58, "15:1": 0.52, "16:1": 0.47, "17:2": 0.49 };
+      const score = Math.round((fixed[`${src.id}:${t.id}`] ?? 0.15 + ((src.id * 7 + t.id * 13) % 20) / 100) * 1000) / 1000;
       return { identity_id: t.id, display_name: t.display_name, name: t.name, cover_url: t.cover_url, score, likely: score >= thr - 0.1 };
     })
     .sort((a, b) => b.score - a.score).slice(0, limit);
@@ -528,6 +532,7 @@ let nextId = 100;
 
 // Identitäten 07: Zusammenführungs-Verlauf und Nachtlauf (Mock, minimal – Pakete A/D erweitern)
 const merges: IdentityMerge[] = [];
+const mockMergeUndo = new Map<number, { ident: Identity; samples: Sample[]; events: string[] }>();
 const nightlyReports: NightlyReport[] = [{
   id: 1, mode: "preview", trigger: "schedule", status: "done", started_at: ago(6 * 3600), finished_at: ago(6 * 3600 - 4),
   error: null, applied_report_id: null, applied_at: null,
@@ -650,6 +655,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     const ids: number[] = [...new Set<number>(body?.ids ?? [])];
     const missing = ids.filter((x) => !identities.some((i) => i.id === x));
     if (missing.length) return json({ detail: `Identität(en) nicht gefunden: ${missing.join(", ")}` }, 404);
+    if (!ids.length || ids.length > 500) return json({ detail: "1 bis 500 IDs" }, 422);
     for (const x of ids) { identities.splice(identities.findIndex((i) => i.id === x), 1); delete samples[x]; }
     events = events.map((e) => (e.identity && ids.includes(e.identity.id) ? { ...e, identity: null } : e));
     return json({ deleted: ids });
@@ -657,30 +663,60 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/identities/bulk-merge" && method === "POST") {
     const target = identities.find((i) => i.id === body?.into_id);
     const ids: number[] = [...new Set<number>(body?.ids ?? [])].filter((x) => x !== body?.into_id);
-    if (!target) return json({ detail: "Identität nicht gefunden" }, 404);
+    if ((body?.ids ?? []).length > 500) return json({ detail: "max. 500 IDs" }, 422);
+    if (!target) return json({ detail: `Identität(en) nicht gefunden: ${body?.into_id}` }, 404);
     if (!ids.length) return json({ detail: "Keine Quellen ausgewählt" }, 422);
-    const srcs = ids.map((x) => identities.find((i) => i.id === x));
-    if (srcs.some((x) => !x)) return json({ detail: "Identität(en) nicht gefunden" }, 404);
-    if (srcs.some((x) => x!.kind !== target.kind)) return json({ detail: "Nur Identitäten gleicher Art können zusammengeführt werden" }, 422);
+    const missing = ids.filter((x) => !identities.some((i) => i.id === x));
+    if (missing.length) return json({ detail: `Identität(en) nicht gefunden: ${missing.join(", ")}` }, 404);
+    const srcs = ids.map((x) => identities.find((i) => i.id === x)!);
+    if (srcs.some((x) => x.kind !== target.kind)) return json({ detail: "Nur Identitäten gleicher Art können zusammengeführt werden" }, 422);
+    const limit = target.kind === "face" && (target.name || srcs.some((x) => x.name)) ? 40 : 20;
+    const manual = [target, ...srcs].reduce((n, x) => n + (samples[x.id] ?? []).filter((s) => s.manual).length, 0);
+    if (manual > limit) return json({ detail: `max. ${limit} Bilder – erst alte löschen` }, 422);
     const mergeIds: number[] = [];
-    for (const src of srcs as Identity[]) {
-      samples[target.id] = [...(samples[target.id] ?? []), ...(samples[src.id] ?? [])];
-      target.sample_count = samples[target.id].length; target.event_count += src.event_count;
-      events = events.map((e) => (e.identity?.id === src.id ? { ...e, identity: { id: target.id, kind: target.kind, display_name: target.display_name, name: target.name } } : e));
+    for (const src of srcs) {
       const mid = nextId++; mergeIds.push(mid);
+      const evIds = events.filter((e) => e.identity?.id === src.id).map((e) => e.id);
+      mockMergeUndo.set(mid, { ident: { ...src }, samples: [...(samples[src.id] ?? [])], events: evIds });
       merges.unshift({ id: mid, ts: now(), kind: src.kind, actor: "bulk", src_id: src.id, src_display_name: src.display_name, into_id: target.id,
         into_display_name: target.display_name, score: null, sample_count: src.sample_count, event_count: src.event_count,
-        nightly_report_id: null, undone_at: null, undoable: false });
+        nightly_report_id: null, undone_at: null, undoable: true });
+      if (src.name && !target.name) { target.name = src.name; target.display_name = src.name; }
+      else if (src.name && src.name !== target.name) target.notes = `${target.notes ? `${target.notes}\n` : ""}früher: ${src.name}`;
+      samples[target.id] = [...(samples[target.id] ?? []), ...(samples[src.id] ?? [])];
+      target.sample_count = Math.min(target.sample_count + src.sample_count, limit); target.event_count += src.event_count;
+      events = events.map((e) => (e.identity?.id === src.id ? { ...e, identity: { id: target.id, kind: target.kind, display_name: target.display_name, name: target.name } } : e));
       identities.splice(identities.indexOf(src), 1); delete samples[src.id];
     }
     return json({ target, merged: ids, merge_ids: mergeIds });
   }
   if (path === "/identities/merges") {
-    const iid = Number(p.get("identity_id") ?? 0);
-    const list = iid ? merges.filter((x) => x.src_id === iid || x.into_id === iid) : merges;
-    return json({ items: list, total: list.length });
+    const iid = Number(p.get("identity_id") ?? 0); const actor = p.get("actor");
+    let list = iid ? merges.filter((x) => x.src_id === iid || x.into_id === iid) : merges;
+    if (actor) list = list.filter((x) => actor.split(",").includes(x.actor));
+    list = list.map((x) => {
+      const tgt = identities.find((i) => i.id === x.into_id);
+      return { ...x, into_display_name: tgt?.display_name ?? null, undoable: !x.undone_at && !!tgt && !identities.some((i) => i.id === x.src_id) };
+    });
+    const limit = Number(p.get("limit") ?? 50), offset = Number(p.get("offset") ?? 0);
+    return json({ items: list.slice(offset, offset + limit), total: list.length });
   }
-  if (path.match(/^\/identities\/merges\/\d+\/undo$/)) return json({ detail: "Im Mock nicht verfügbar" }, 409);
+  if ((m = path.match(/^\/identities\/merges\/(\d+)\/undo$/)) && method === "POST") {
+    const mg = merges.find((x) => x.id === Number(m![1])); const snap = mockMergeUndo.get(Number(m[1]));
+    if (!mg || !snap) return json({ detail: "Zusammenführung nicht gefunden" }, 404);
+    if (mg.undone_at) return json({ detail: "Diese Zusammenführung wurde bereits zurückgesetzt" }, 409);
+    const target = identities.find((i) => i.id === mg.into_id);
+    if (!target) return json({ detail: "Ziel existiert nicht mehr – zuerst die spätere Zusammenführung zurücksetzen" }, 409);
+    const restored = { ...snap.ident };
+    identities.push(restored); samples[restored.id] = snap.samples;
+    const back = new Set(snap.samples.map((s) => s.id));
+    samples[target.id] = (samples[target.id] ?? []).filter((s) => !back.has(s.id));
+    target.sample_count = Math.max(0, target.sample_count - restored.sample_count); target.event_count = Math.max(0, target.event_count - restored.event_count);
+    if (restored.name) target.notes = target.notes.split("\n").filter((l) => l !== `früher: ${restored.name}`).join("\n");
+    events = events.map((e) => (snap.events.includes(e.id) ? { ...e, identity: { id: restored.id, kind: restored.kind, display_name: restored.display_name, name: restored.name } } : e));
+    mg.undone_at = now(); mg.undoable = false;
+    return json({ restored, target });
+  }
   if (path === "/nightly/status") {
     const last = nightlyReports[0];
     return json({ mode: settings.nightly_mode, time: settings.nightly_time, running: false, running_report_id: null,

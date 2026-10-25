@@ -481,7 +481,7 @@ def _answer_match(s: Session, r: ReviewRequest, answer: str, correct_label: Opti
         raise review.ReviewError(422, "Nur Identitäten gleicher Art können zusammengeführt werden")
     src_id, kind = src.id, src.kind
     try:
-        dst, _ = ident_svc.merge(s, src, dst, None)   # committet selbst (inkl. Status der Rückfrage)
+        dst, _ = ident_svc.merge(s, src, dst, None, actor="review")   # committet selbst (inkl. Status der Rückfrage)
     except ident_svc.MergeError as e:
         raise review.ReviewError(422, str(e)) from None
     hub.broadcast({"type": "identity", "identity": {"id": src_id, "kind": kind, "deleted": True,

@@ -61,8 +61,39 @@ Beobachtungszeitraum ≈ 0,5 Tage, Schwelle `face_match_threshold` 0,30.
 | Paket | Stand |
 |---|---|
 | Kickoff (CONTRACT, Gerüste, Messskript, Messung vorher) | erledigt |
-| A Mehrfachauswahl (Backend + UI) | offen |
+| A Mehrfachauswahl (Backend + UI) | erledigt (Zweig `id/a-mehrfachauswahl`) |
 | B Worker-Gesichter (Qualität, Track-Sammlung, volle Auflösung) | offen |
 | C Zuordnungslogik (Backend) | offen |
 | D Nachtlauf | offen |
 | Integration, Messung „nachher“ | offen |
+
+## Paket A – Mehrfachauswahl (Stand 2026-10-25)
+
+**Backend** (`backend/app/identity_bulk.py`):
+- `bulk_delete`, `bulk_merge`, `log_merge`, `list_merges`, `undo_merge` wie CONTRACT ID.B/ID.C. Eine Transaktion unter
+  `identity._lock`, Zeilen `FOR UPDATE` in ID-Reihenfolge, Dateien erst nach dem Commit (Verschieben, gekürzte
+  Galerie-Bilder löschen, Quellordner entfernen). Fehlgeschlagenes Verschieben → alter Pfad wird zurückgeschrieben,
+  der Quellordner bleibt dann stehen; `bulk_delete` löscht solche „fremden“ Pfade gezielt mit.
+- `bulk_merge(score=…)` nimmt eine Zahl oder `{src_id: score}` (für den Nachtlauf, Paket D).
+- `identity.prune_samples(s, id, limit=None, defer_remove=None)` – optionales Limit (`face_match.sample_limit`) und
+  verzögertes Löschen der Dateien; gibt die IDs der entfernten Bilder zurück. Einzel-Merge (`identity.merge`) prüft das
+  Bildlimit jetzt mit `sample_limit` und protokolliert vollständige Merges (`actor` `user`, Rückfrage „Ja“: `review`).
+- `GET /identities/merges?actor=` akzeptiert auch eine kommagetrennte Liste.
+
+**Grenzen beim Zurücksetzen** (bewusst, nicht protokolliert): Bilder, die beim Kürzen der Galerie nach dem Merge
+entfallen sind, kommen nicht zurück; Haustier-Tagebuch-Besuche und Gegenstands-Zuordnungen bleiben beim Ziel; ein
+beim Merge vom Ziel übernommener Name bleibt (die Notiz „früher: …“ wird wieder entfernt).
+
+**Oberfläche** (`frontend/src/pages/Identities.tsx`, neue Datei `IdentityBulk.tsx`): Schalter „Auswählen“, Häkchen
+(auch per Hover ohne Auswahlmodus), Umschalt-Klick-Bereich, „Alle (N) auswählen“ (berücksichtigt Suche/Ansicht),
+„Ähnliche auswählen“ (Vorschläge `with_suggestion` + Merge/Rückfrage-Paare des letzten Nachtlauf-Berichts),
+Aktionsleiste mit Zähler (inkl. „nicht in dieser Ansicht“), Dialog „Zusammenführen“ (Ziel: Ausgewählte oder andere
+Identität gleicher Art; Vorschlag benannt > Ereignisse > Bilder; Vorschau „5 Identitäten, 15 Bilder, 29 Ereignisse →
+Anna“), Dialog „Löschen“ (Anzahl, „Ereignisse bleiben … ohne Person“), Verlauf mit „Zurücksetzen“. Esc beendet die
+Auswahl, beim Wechsel der Art wird die Auswahl geleert. WS: `identities`/`identity` lösen ein entprelltes (400 ms)
+Neuladen aus (`useLiveSocket.ts`).
+
+**Tests** (Wegwerf-Container `vg-ida-*` mit leerer DB, synthetische Identitäten): 47 API-Prüfungen
+(Fehlerfälle 404/422/409, gemischte Arten, 500er-Limit, kumulatives Bildlimit, Rücksetzen inkl. Dateien, gebündelte
+WS-Nachricht, 500er-Merge in < 1 s mit Galerie-Kürzung) und ein simuliertes Verschiebe-Problem; 22 UI-Prüfungen per
+headless Chromium gegen `dev:mock` (Desktop und 390 px).

@@ -792,3 +792,43 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .settings-toc a { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--text-2); }
 .settings-toc a:hover { color: var(--text-1); border-color: var(--line-2); text-decoration: none; }
 #s-aufbewahrung, #s-wiedererkennung, #s-mqtt, #s-zugriff, .settings-anchor { scroll-margin-top: calc(var(--nav-h) + 80px); }
+
+/* Identitäten 07 (Paket A): Mehrfachauswahl */
+.id-card .sel-check {
+  position: absolute; top: 8px; right: 8px; z-index: 2; width: 24px; height: 24px; border-radius: 7px;
+  display: grid; place-items: center; background: rgba(10,15,23,.72); border: 1.5px solid var(--line-2); color: #0a0f17;
+  opacity: 0; transition: opacity .15s, background .15s; cursor: pointer;
+}
+.id-card:hover .sel-check, .id-card:focus-visible .sel-check, .id-card.selecting .sel-check { opacity: 1; }
+.id-card.selected .sel-check { background: var(--accent); border-color: var(--accent); }
+.id-card.selecting .cover .badge[title="Lernen gesperrt"] { right: 40px !important; }
+.id-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset, 0 12px 30px -16px rgba(45,212,191,.45); }
+.id-card.selecting:not(.selected) .cover img { opacity: .82; }
+@media (hover: none), (pointer: coarse) { .id-card .sel-check { opacity: 1; } }
+.sel-bar {
+  position: sticky; bottom: 12px; z-index: 30; margin-top: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-2);
+  background: color-mix(in srgb, var(--bg-2) 94%, transparent); backdrop-filter: blur(10px);
+  box-shadow: 0 18px 40px -16px rgba(0,0,0,.6);
+}
+.sel-bar .sel-count { font-size: 13.5px; margin-right: 4px; }
+@media (max-width: 640px) { .sel-bar .spacer { display: none; } .sel-bar { bottom: 8px; } }
+.merge-preview {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid rgba(45,212,191,.35); background: var(--accent-soft); font-size: 14px;
+}
+.target-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+.target-opt {
+  display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg-1); cursor: pointer; min-width: 0;
+}
+.target-opt.on { border-color: var(--accent); background: var(--accent-soft); }
+.target-opt input { accent-color: var(--accent); }
+.target-opt .t-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.target-opt .t-sub { font-size: 12px; white-space: nowrap; }
+@media (max-width: 640px) { .target-opt .t-sub { display: none; } }
+.merge-hist { display: flex; flex-direction: column; gap: 6px; }
+.merge-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-1); }
+.merge-row.undone { opacity: .6; }
+.merge-row .m-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.merge-row .m-sub { font-size: 12px; }
