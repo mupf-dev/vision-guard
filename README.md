@@ -13,6 +13,9 @@ Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
   Unbekannte bekommen automatisch eine ID („Person #12“) und lassen sich später benennen oder zusammenführen.
 - **Regel-Engine:** Kamera, Zone, Objektklasse, Konfidenz, Identität (bekannt/unbekannt/bestimmt),
   Auslöser (betritt/verlässt/verweilt), Zeitplan, Cooldown → Snapshot, Clip, MQTT, Webhook
+- **Virtuelle Sensoren und Vorräte:** Bildbereiche als Schalter (Licht an/aus per Helligkeit, Blinken,
+  Referenzbilder, Gegenstände zählen, Füllstand, Ja/Nein-Frage ans Bildmodell) – als Regel-Auslöser und -Bedingung,
+  per MQTT und MCP; knappe Vorräte landen automatisch auf der Einkaufsliste
 - **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
 - **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
 - **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse
