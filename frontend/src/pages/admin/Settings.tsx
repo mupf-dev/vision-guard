@@ -7,6 +7,11 @@ import { Loading, Range, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
 import { InventorySettingsCard } from "./InventorySettings";
 import { NotificationSettingsCard, targetProblem } from "./NotificationSettings";
+import { ReviewSettingsCard } from "./ReviewSettings";
+import { PersonSettingsCard } from "./PersonSettings";
+import { PetSettingsCard } from "./PetSettings";
+import { ReportSettingsCard } from "./ReportSettings";
+import { AiSettingsCard } from "./AiSettings";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -63,6 +68,12 @@ export function SettingsPage() {
         </div>
         <InventorySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <NotificationSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        {/* W2: je Thema eine Karte (Fach-Agenten ändern nur ihre Datei) */}
+        <ReviewSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <PersonSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <PetSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <ReportSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <AiSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <div className="card">
           <div className="card-head"><Radio size={18} color="var(--accent)" /><h3>MQTT</h3></div>
           <div className="card-body form-grid">

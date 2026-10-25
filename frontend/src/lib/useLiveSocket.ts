@@ -55,7 +55,8 @@ function handle(msg: WsMessage, qc: QueryClient) {
     case "identity":
       qc.invalidateQueries({ queryKey: ["identities"] });
       qc.setQueryData(["identity", msg.identity.id], msg.identity);
-      break;    case "notification": {
+      break;
+    case "notification": {
       qc.invalidateQueries({ queryKey: ["notifications"] });
       if (msg.action === "new" && "title" in msg.notification && useUi.getState().eventToasts) {
         const n = msg.notification;
@@ -63,6 +64,18 @@ function handle(msg: WsMessage, qc: QueryClient) {
       }
       break;
     }
+    // W2 (K2): Grundverhalten – Fach-Agenten ergänzen Toasts/Overlay (D2, C1, C3, B3)
+    case "review":
+      qc.invalidateQueries({ queryKey: ["reviews"] });
+      break;
+    case "gesture":
+      break;   // C1/D1: Gesten-Toast im Live-Bild
+    case "pet_visit":
+      qc.invalidateQueries({ queryKey: ["pets"] });
+      break;
+    case "report":
+      qc.invalidateQueries({ queryKey: ["reports"] });
+      break;
   }
 }
 

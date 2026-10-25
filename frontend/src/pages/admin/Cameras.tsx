@@ -19,6 +19,7 @@ const EMPTY: CameraInput = {
   face_recognition: true, plate_recognition: true, pet_recognition: true, zones: [],
   room: null, inventory_enabled: false, inventory_interval_s: 3, inventory_labels: [], inventory_min_score: 0.35,
   inventory_tiling: false, health_enabled: true,
+  pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {}, inventory_suppress: [],
 };
 
 function strip(c: Camera): CameraInput {

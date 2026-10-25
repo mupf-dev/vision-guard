@@ -10,6 +10,7 @@ import type { ApiToken, TokenScope } from "./types";
 import type { IdentitySuggestion } from "./types";
 import type { CameraHealth, InventoryChange, InventoryChanges, PushTarget, VGNotification } from "./types";
 import type { RuleAction, RuleInput } from "./types";
+import type { PetSummary, PetVisit, Report, ReviewRequest } from "./types";
 
 const now = () => new Date().toISOString();
 const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
@@ -42,6 +43,9 @@ function faceSvg(seed: number, kind: IdentityKind = "face"): string {
 const INV_OFF = {
   room: null, inventory_enabled: false, inventory_interval_s: 3, inventory_labels: [] as string[],
   inventory_min_score: 0.35, inventory_tiling: false, health_enabled: true,
+  // W2
+  pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {} as Record<string, number>,
+  inventory_suppress: [] as Camera["inventory_suppress"],
 };
 
 const cameras: Camera[] = [
@@ -126,7 +130,42 @@ let settings: Settings = {
   notify_routes: { health: ["handy"], pet: [], review: [], report: [], sensor: [] },
   push_max_per_rule_per_day: 3, weather_location: { lat: 50.11, lon: 8.68 }, retention_days_notifications: 30,
   inventory_change_min_s: 120, health_alert_after_s: 60,
+  // W2
+  item_match_threshold: 0.55, item_min_px: 90, review_enabled: true, review_max_per_day: 10, review_max_open: 20,
+  review_expire_h: 48, review_band: 0.1, review_auto_tune: true,
+  gesture_hold_s: 1, fall_default_dwell_s: 60, fall_track_grace_s: 30,
+  pet_diary_labels: ["dog", "cat"], pet_diary_min_visit_s: { food: 5, water: 3, litter: 10 }, pet_diary_notify: true,
+  pet_diary_single_pet_fallback: true,
+  report_enabled: false, report_time: "21:00", report_days: [0, 1, 2, 3, 4, 5, 6], report_generator: "template",
+  report_channels: { mqtt: true, webhook_url: null, mail_to: [] },
+  llm_provider: "none", llm_base_url: null, llm_model: null, llm_timeout_s: 60,
+  llm_key_configured: { openai_compat: false, anthropic: false },
 };
+
+/* ---------- W2: Rückfragen, Haustier-Tagebuch, Berichte ---------- */
+let reviews: ReviewRequest[] = [
+  { id: 41, kind: "inventory_label", status: "open", question: "Ist das eine Fernbedienung?", camera_id: 3, camera_name: "Wohnzimmer",
+    label: "remote", name_de: "Fernbedienung", inventory_item_id: null, identity_id: null, source_identity_id: null, score: 0.31,
+    threshold: 0.35, bbox: [0.41, 0.55, 0.47, 0.6], crop_url: sceneSvg("Fernbedienung?", 30, 320, 240), snapshot_url: null, data: {},
+    created_at: ago(900), answered_at: null, answer_source: null, expires_at: new Date(Date.now() + 47 * 3600e3).toISOString(), correct_label: null },
+  { id: 42, kind: "identity_match", status: "open", question: "Ist Person #12 dieselbe Person wie Anna?", camera_id: null, camera_name: null,
+    label: null, name_de: null, inventory_item_id: null, identity_id: 1, source_identity_id: 12, score: 0.41, threshold: 0.45, bbox: null,
+    crop_url: faceSvg(12), snapshot_url: null, data: {}, created_at: ago(3600), answered_at: null, answer_source: null,
+    expires_at: new Date(Date.now() + 45 * 3600e3).toISOString(), correct_label: null },
+];
+const petVisits: PetVisit[] = [
+  { id: 1, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
+    zone_id: "z2", zone_name: "Terrasse", purpose: "water", event_id: null, start_ts: ago(5400), end_ts: ago(5380), duration_s: 20, thumb_url: faceSvg(30, "pet") },
+];
+const petSummary: PetSummary[] = [
+  { identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog",
+    purposes: { water: { today: 1, normal: [2, 5], last_ts: ago(5400), daily: [{ day: new Date().toISOString().slice(0, 10), count: 1 }] } } },
+];
+let reports: Report[] = [
+  { id: 1, kind: "daily", period_start: ago(86400 + 3600 * 3), period_end: ago(3600 * 3), created_at: ago(3600 * 3),
+    text: "Gestern: 12 Personen (Anna 17:10), 3 Fahrzeuge, Bello 4× im Garten. Schlüssel liegt seit 18:05 auf der Kommode.",
+    generator: "template", delivery: { mqtt: { ok: true, ts: ago(3600 * 3) } } },
+];
 
 /* ---------- W1: Hinweise, Veränderungen, Kamera-Gesundheit ---------- */
 let notifications: VGNotification[] = [
@@ -436,6 +475,13 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     if (method === "DELETE") { events = events.filter((e) => e.id !== m![1]); return json(undefined, 204); }
     return json(events.find((e) => e.id === m![1]));
   }
+  if (path === "/identities" && method === "POST") {   // W2 B4: Exemplar anlegen
+    const i: Identity = { id: nextId++, kind: "item", name: body?.name ?? null, display_name: body?.name ?? "Gegenstand", plate_text: null,
+      notes: "", sample_count: 0, cover_url: null, first_seen: now(), last_seen: now(), event_count: 0, learning_locked: false,
+      item_label: body?.item_label ?? null };
+    identities.push(i);
+    return json(i, 201);
+  }
   if (path === "/identities") {
     let list = identities;
     const kind = p.get("kind"); if (kind) list = list.filter((i) => i.kind === kind);
@@ -571,6 +617,40 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     return json(n);
   }
   if (path === "/inventory/changes") return json(mockChanges(p));
+  // W2: Rückfragen
+  if (path === "/review") {
+    const st = (p.get("status") ?? "open").split(",").filter(Boolean);
+    const list = reviews.filter((r) => !st.length || st.includes(r.status));
+    return json({ items: list, total: list.length, open_count: reviews.filter((r) => r.status === "open").length, asked_today: 2, max_per_day: settings.review_max_per_day });
+  }
+  if (path === "/review/thresholds") return json([]);
+  if ((m = path.match(/^\/review\/(\d+)(\/answer)?$/))) {
+    const id = Number(m[1]); const r = reviews.find((x) => x.id === id);
+    if (!r) return json({ detail: "Rückfrage nicht gefunden" }, 404);
+    if (m[2] && method === "POST") {
+      if (r.status !== "open") return json({ detail: "Frage ist nicht mehr offen" }, 409);
+      const st = ({ yes: "yes", no: "no", skip: "skipped" } as const)[body?.answer as "yes" | "no" | "skip"];
+      reviews = reviews.map((x) => (x.id === id ? { ...x, status: st, answered_at: now(), answer_source: "ui", correct_label: body?.correct_label ?? null } : x));
+      return json(reviews.find((x) => x.id === id));
+    }
+    return json(r);
+  }
+  // W2: Quittieren, Haustier-Tagebuch, Berichte
+  if ((m = path.match(/^\/events\/([^/]+)\/ack$/))) {
+    events = events.map((e) => (e.id === m![1] ? { ...e, acknowledged_at: e.acknowledged_at ?? now() } : e));
+    return json(events.find((e) => e.id === m![1]));
+  }
+  if (path === "/pets/visits") return json({ items: petVisits, total: petVisits.length });
+  if (path === "/pets/summary") return json(petSummary);
+  if (path === "/reports") return json({ items: reports, total: reports.length });
+  if (path === "/reports/preview" || path === "/reports/generate") return json({ detail: "Tagesbericht ist noch nicht umgesetzt" }, 501);
+  if ((m = path.match(/^\/reports\/(\d+)$/))) {
+    const id = Number(m[1]);
+    if (method === "DELETE") { reports = reports.filter((r) => r.id !== id); return json(undefined, 204); }
+    const r = reports.find((x) => x.id === id);
+    return r ? json({ ...r, html: `<p>${r.text}</p>`, facts: {} }) : json({ detail: "Bericht nicht gefunden" }, 404);
+  }
+  if (path === "/settings/llm_test") return json({ ok: false, error: "Kein Sprachmodell eingerichtet (Mock)", text: null, model: null, ms: null });
   if ((m = path.match(/^\/cameras\/(\d+)\/health(\/reference)?$/))) {
     if (m[2]) return json({ request_id: "mock", ok: true, error: null, path: `health/cam${m[1]}_day.jpg` }, 202);
     return json(mockHealth(Number(m[1])));
@@ -662,7 +742,7 @@ export function installMock() {
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.origin);
     if (url.pathname.startsWith("/api/")) {
-      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      const body = init?.body instanceof FormData ? {} : init?.body ? JSON.parse(String(init.body)) : undefined;
       return route((init?.method ?? "GET").toUpperCase(), url.pathname.slice(4), url.searchParams, body);
     }
     return realFetch(input, init);

@@ -16,6 +16,8 @@ export interface Zone {
   name: string;
   color: string;
   polygon: [number, number][];
+  /** W2 C3: Zweck fürs Haustier-Tagebuch */
+  purpose?: ZonePurpose | null;
 }
 
 export interface Camera {
@@ -39,6 +41,13 @@ export interface Camera {
   inventory_tiling: boolean;
   /** W1 C5: Bildprüfung (dunkel/unscharf/verdeckt/eingefroren/verschoben); PTZ-Kameras: aus */
   health_enabled: boolean;
+  /** W2 C1/D1: Haltung/Sturz bzw. Gesten auswerten */
+  pose_enabled: boolean;
+  gesture_enabled: boolean;
+  /** W2 D2: Schwelle je Gegenstands-Label (überschreibt Vokabular/Kamera-Schwelle) */
+  inventory_label_min_scores: Record<string, number>;
+  /** W2 D2: unterdrückte Fehlerkennungen (gleiches Label, IoU ≥ 0,5) */
+  inventory_suppress: InventorySuppress[];
   status?: CameraStatus | null;
 }
 
@@ -46,11 +55,16 @@ export type CameraInput = Omit<Camera, "id" | "status">;
 
 export type IdentityMode = "any" | "known" | "unknown" | "specific";
 /** Registry im Backend (rules.TRIGGERS); W1: time = Regel ohne Track/Event → Notification */
-export type Trigger = "enter" | "leave" | "dwell" | "time";
+export type Trigger = "enter" | "leave" | "dwell" | "time" | "posture" | "gesture";
 
-/** trigger_options je Trigger: time → { at: "HH:MM" }; enter/leave/dwell → {} */
+/** trigger_options je Trigger: time → { at: "HH:MM" }; posture → PostureTriggerOptions; gesture →
+ *  GestureTriggerOptions; enter/leave/dwell → {} */
 export interface TriggerOptions {
   at?: string;
+  posture?: Posture;
+  max_motion?: number | null;
+  exclude_zone_ids?: string[];
+  gestures?: GestureName[];
   [k: string]: unknown;
 }
 
@@ -95,11 +109,14 @@ export interface Rule {
   /** Sekunden bis zur Prüfung der Bedingungen (0..600) */
   condition_delay_s: number;
   actions: RuleAction[];
+  /** W2 C1: erneut auslösen alle repeat_s (0 = aus), höchstens repeat_max-mal (0 = unbegrenzt), bis quittiert */
+  repeat_s?: number;
+  repeat_max?: number;
 }
 
 export type RuleInput = Omit<Rule, "id">;
 
-export type IdentityKind = "face" | "plate" | "pet";
+export type IdentityKind = "face" | "plate" | "pet" | "item";
 
 export interface Identity {
   id: number;
@@ -114,6 +131,8 @@ export interface Identity {
   last_seen: string | null;
   event_count: number;
   learning_locked: boolean;
+  /** W2 B4: nur bei kind "item" – Vokabular-Schlüssel des Exemplars */
+  item_label?: string | null;
   /** nur bei GET /identities?with_suggestion=1 */
   suggestion?: IdentitySuggestion | null;
 }
@@ -146,6 +165,9 @@ export interface Sample {
   created_at: string;
   quality: number;
   manual: boolean;
+  /** W2 B4/D2 */
+  negative?: boolean;
+  source?: "auto" | "merge" | "upload" | "review";
 }
 
 export interface VGEvent {
@@ -165,6 +187,8 @@ export interface VGEvent {
   clip_url: string | null;
   rules: string[];
   active: boolean;
+  /** W2 C1: quittiert (stoppt Wiederholungen) */
+  acknowledged_at?: string | null;
 }
 
 export interface Paged<T> {
@@ -219,6 +243,38 @@ export interface Settings {
   // W1: B2 Veränderungen, C5 Kamera-Gesundheit
   inventory_change_min_s: number;
   health_alert_after_s: number;
+  // W2: Exemplare und Rückfragen (B4/D2)
+  item_match_threshold: number;
+  item_min_px: number;
+  review_enabled: boolean;
+  review_max_per_day: number;
+  review_max_open: number;
+  review_expire_h: number;
+  review_band: number;
+  review_auto_tune: boolean;
+  // W2: Pose und Gesten (C1/D1)
+  gesture_hold_s: number;
+  fall_default_dwell_s: number;
+  fall_track_grace_s: number;
+  // W2: Haustier-Tagebuch (C3)
+  pet_diary_labels: string[];
+  pet_diary_min_visit_s: Record<ZonePurpose, number>;
+  pet_diary_notify: boolean;
+  pet_diary_single_pet_fallback: boolean;
+  // W2: Tagesbericht (B3)
+  report_enabled: boolean;
+  report_time: string;
+  report_days: number[];
+  report_generator: "template" | "llm";
+  report_channels: ReportChannels;
+  // W2: gemeinsamer LLM-Client (Schlüssel nur per Env)
+  llm_provider: LlmProvider;
+  /** PUT mit "" setzt auf null zurück */
+  llm_base_url: string | null;
+  llm_model: string | null;
+  llm_timeout_s: number;
+  /** read-only: Schlüssel per Env gesetzt? */
+  llm_key_configured?: Record<Exclude<LlmProvider, "none">, boolean>;
 }
 
 export interface InventoryVocabEntry {
@@ -256,7 +312,11 @@ export type WsMessage =
   | { type: "identity"; identity: Identity }
   | { type: "identity"; identity: IdentityDeleted }
   | InventoryMsg
-  | NotificationMsg;
+  | NotificationMsg
+  | ReviewMsg
+  | GestureMsg
+  | PetVisitMsg
+  | ReportMsg;
 
 export interface IdentityDeleted {
   id: number;
@@ -346,6 +406,9 @@ export interface InventoryItem {
   snapshot_url: string | null;
   /** z. B. „aktuell sichtbar“, „zuletzt gesehen vor 2 h“ (vom Backend) */
   status_text?: string;
+  /** W2 B4: zugeordnetes Exemplar */
+  identity?: IdentityRef | null;
+  identity_score?: number | null;
 }
 
 export interface InventorySearchHit extends InventoryItem {
@@ -528,4 +591,192 @@ export interface CameraHealth {
   }) | null;
   reference_urls: { day: string | null; night: string | null };
   log: CameraHealthLogEntry[];
+}
+
+// ---------------------------------------------------------------- W2: Rückfragen (D2) und Exemplare (B4)
+
+export type ReviewKind = "inventory_label" | "inventory_identity" | "identity_match" | (string & {});
+export type ReviewStatus = "open" | "yes" | "no" | "skipped" | "expired";
+
+export interface ReviewRequest {
+  id: number;
+  kind: ReviewKind;
+  status: ReviewStatus;
+  question: string;
+  camera_id: number | null;
+  camera_name: string | null;
+  label: string | null;
+  name_de: string | null;
+  inventory_item_id: number | null;
+  identity_id: number | null;
+  source_identity_id: number | null;
+  score: number | null;
+  threshold: number | null;
+  bbox: [number, number, number, number] | null;
+  crop_url: string | null;
+  snapshot_url: string | null;
+  data: Record<string, unknown>;
+  created_at: string;
+  answered_at: string | null;
+  answer_source: "ui" | "push" | "mcp" | "api" | null;
+  expires_at: string | null;
+  correct_label: string | null;
+}
+
+export interface ReviewList extends Paged<ReviewRequest> {
+  open_count: number;
+  asked_today: number;
+  max_per_day: number;
+}
+
+export interface ReviewAnswerInput {
+  answer: "yes" | "no" | "skip";
+  correct_label?: string | null;
+}
+
+export interface ReviewThreshold {
+  camera_id: number;
+  label: string;
+  base: number;
+  current: number;
+  auto: boolean;
+  yes: number;
+  no: number;
+}
+
+export interface ReviewMsg {
+  type: "review";
+  action: "new" | "answered" | "expired";
+  review: ReviewRequest;
+}
+
+export interface InventorySuppress {
+  label: string;
+  bbox: [number, number, number, number];
+  review_id: number | null;
+}
+
+/** POST /identities (nur kind "item") */
+export interface ItemIdentityInput {
+  kind: "item";
+  item_label: string;
+  name: string;
+}
+
+// ---------------------------------------------------------------- W2: Pose und Gesten (C1/D1)
+
+export type Posture = "standing" | "sitting" | "lying" | "unknown";
+export type GestureName = "arms_up" | "arm_left" | "arm_right" | "arms_cross";
+
+export interface PostureTriggerOptions {
+  posture: Exclude<Posture, "unknown">;
+  max_motion: number | null;
+  exclude_zone_ids: string[];
+}
+
+export interface GestureTriggerOptions {
+  gestures: GestureName[];
+}
+
+export interface GestureMsg {
+  type: "gesture";
+  camera_id: number;
+  camera_name?: string;
+  track_id: number;
+  gesture: GestureName;
+  score: number;
+  held_s: number;
+  ts: number;
+  zones: string[];
+  identity: IdentityRef | null;
+}
+
+// ---------------------------------------------------------------- W2: Haustier-Tagebuch (C3)
+
+export type ZonePurpose = "food" | "water" | "litter";
+
+export interface PetVisit {
+  id: number;
+  identity: IdentityRef | null;
+  label: string;
+  camera_id: number;
+  camera_name: string;
+  zone_id: string;
+  zone_name: string;
+  purpose: ZonePurpose;
+  event_id: string | null;
+  start_ts: string;
+  end_ts: string | null;
+  duration_s: number | null;
+  thumb_url: string | null;
+}
+
+export interface PetPurposeStats {
+  today: number;
+  normal: [number, number] | null;
+  last_ts: string | null;
+  daily: { day: string; count: number }[];
+}
+
+export interface PetSummary {
+  identity: IdentityRef | null;
+  label: string;
+  purposes: Partial<Record<ZonePurpose, PetPurposeStats>>;
+}
+
+export interface PetVisitMsg {
+  type: "pet_visit";
+  action: "new" | "update";
+  visit: PetVisit;
+}
+
+// ---------------------------------------------------------------- W2: Tagesbericht (B3) und LLM
+
+export type LlmProvider = "none" | "openai_compat" | "anthropic";
+
+export interface ReportChannels {
+  mqtt: boolean;
+  webhook_url: string | null;
+  mail_to: string[];
+}
+
+export interface ReportDelivery {
+  ok: boolean;
+  error?: string | null;
+  ts?: string | null;
+}
+
+export interface Report {
+  id: number;
+  kind: "daily" | "manual";
+  period_start: string;
+  period_end: string;
+  created_at: string;
+  text: string;
+  generator: string;
+  delivery: Record<string, ReportDelivery>;
+  /** nur GET /reports/{id} und preview */
+  html?: string;
+  facts?: Record<string, unknown>;
+}
+
+export type ReportList = Paged<Report>;
+
+export interface ReportGenerateInput {
+  since?: string | null;
+  until?: string | null;
+  deliver?: boolean;
+}
+
+export interface ReportMsg {
+  type: "report";
+  report: Report;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  error: string | null;
+  text: string | null;
+  model: string | null;
+  ms: number | null;
 }

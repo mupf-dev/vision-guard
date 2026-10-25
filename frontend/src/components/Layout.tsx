@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Bell, BellOff, BellRing, History, LogOut, MonitorPlay, Settings2, ShieldCheck, Users } from "lucide-react";
-import { Package } from "lucide-react";
+import { CircleHelp, FileText, Package, PawPrint } from "lucide-react";
 import { api } from "../lib/api";
 import { useLive, useUi } from "../lib/store";
 import { useLiveSocket } from "../lib/useLiveSocket";
@@ -13,6 +13,18 @@ export function Brand() {
       <span className="brand-logo"><ShieldCheck size={18} /></span>
       <span className="bt">VisionGuard<small>Security Ops</small></span>
     </span>
+  );
+}
+
+/** W2: offene Rückfragen („Bitte bestätigen“) als Zähler in der Kopfzeile; WS `review` aktualisiert. */
+function ReviewCounter() {
+  const q = useQuery({ queryKey: ["reviews", "count"], queryFn: () => api.reviews({ status: "open", limit: 1 }), refetchInterval: 120_000 });
+  const n = q.data?.open_count ?? 0;
+  return (
+    <NavLink to="/bestaetigen" className="btn btn-ghost btn-icon btn-sm" title={n ? `${n} offene Rückfrage(n)` : "Bitte bestätigen"} style={{ position: "relative" }}>
+      <CircleHelp size={17} />
+      {n > 0 && <span className="badge warn" style={{ position: "absolute", top: -4, right: -6, fontSize: 10, padding: "0 5px" }}>{n}</span>}
+    </NavLink>
   );
 }
 
@@ -39,6 +51,8 @@ export function Layout() {
     { to: "/identitaeten", label: "Identitäten", icon: <Users size={17} /> },
     { to: "/gegenstaende", label: "Gegenstände", icon: <Package size={17} /> },
     { to: "/hinweise", label: "Hinweise", icon: <BellRing size={17} /> },
+    { to: "/tiere", label: "Tiere", icon: <PawPrint size={17} /> },
+    { to: "/berichte", label: "Berichte", icon: <FileText size={17} /> },
     { to: "/statistik", label: "Statistik", icon: <BarChart3 size={17} /> },
     { to: "/admin", label: "Administration", icon: <Settings2 size={17} /> },
   ];
@@ -57,6 +71,7 @@ export function Layout() {
         <div className="nav-right">
           {isMock && <span className="badge warn">Mock</span>}
           <WsIndicator />
+          <ReviewCounter />
           <button className="btn btn-ghost btn-icon btn-sm" title={eventToasts ? "Alarm-Benachrichtigungen aus" : "Alarm-Benachrichtigungen an"}
             onClick={() => set({ eventToasts: !eventToasts })}>
             {eventToasts ? <Bell size={17} /> : <BellOff size={17} />}

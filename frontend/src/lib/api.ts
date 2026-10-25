@@ -10,6 +10,10 @@ import type {
   CameraHealth, HealthReferenceResult, InventoryChanges, NotificationLevel, NotificationSource, PushTestInput, PushTestResult, VGNotification,
 } from "./types";
 import type { RuleCheckResult } from "./types";
+import type {
+  ItemIdentityInput, LlmTestResult, PetSummary, PetVisit, Report, ReportGenerateInput, ReportList, ReviewAnswerInput,
+  ReviewList, ReviewRequest, ReviewStatus, ReviewThreshold, ZonePurpose,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -67,6 +71,41 @@ const post = <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {});
 const put = <T>(p: string, b: unknown) => request<T>("PUT", p, b);
 const patch = <T>(p: string, b: unknown) => request<T>("PATCH", p, b);
 const del = <T = void>(p: string) => request<T>("DELETE", p);
+
+/** W2 B4: Datei-Upload (multipart) – gleiche Fehlerbehandlung wie request() */
+async function upload<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`/api${path}`, { method: "POST", credentials: "include", body: form });
+  if (res.status === 401) onUnauthorized?.();
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const j = await res.json();
+      if (typeof j?.detail === "string") msg = j.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, msg);
+  }
+  return (await res.json()) as T;
+}
+
+export interface ReviewQuery extends Query {
+  status?: ReviewStatus | string;
+  kind?: string;
+  camera_id?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface PetVisitQuery extends Query {
+  identity_id?: number;
+  purpose?: ZonePurpose;
+  camera_id?: number;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
 
 export interface EventQuery extends Query {
   camera_id?: number | string;
@@ -181,6 +220,35 @@ export const api = {
   cameraHealth: (id: number, hours = 168) => get<CameraHealth>(`/cameras/${id}/health`, { hours }),
   setHealthReference: (id: number, mode: "day" | "night" | "auto" = "auto") =>
     post<HealthReferenceResult>(`/cameras/${id}/health/reference`, { mode }),
+
+  // W2 D2: Rückfragen
+  reviews: (q: ReviewQuery = {}) => get<ReviewList>("/review", q),
+  review: (id: number) => get<ReviewRequest>(`/review/${id}`),
+  answerReview: (id: number, b: ReviewAnswerInput) => post<ReviewRequest>(`/review/${id}/answer`, b),
+  reviewThresholds: (camera_id?: number) => get<ReviewThreshold[]>("/review/thresholds", { camera_id }),
+  // W2 C1: Ereignis quittieren
+  ackEvent: (id: string) => post<VGEvent>(`/events/${id}/ack`),
+  // W2 B4: Exemplare
+  createItemIdentity: (b: ItemIdentityInput) => post<Identity>("/identities", b),
+  uploadSample: (id: number, file: Blob, bbox?: [number, number, number, number]) => {
+    const fd = new FormData();
+    fd.append("file", file, "foto.jpg");
+    if (bbox) fd.append("bbox", bbox.map((v) => v.toFixed(4)).join(","));
+    return upload<Sample>(`/identities/${id}/samples`, fd);
+  },
+  sampleFromInventory: (id: number, inventory_item_id: number) =>
+    post<Sample>(`/identities/${id}/samples/from-inventory`, { inventory_item_id }),
+  // W2 C3: Haustier-Tagebuch
+  petVisits: (q: PetVisitQuery = {}) => get<Paged<PetVisit>>("/pets/visits", q),
+  petSummary: (days = 14) => get<PetSummary[]>("/pets/summary", { days }),
+  // W2 B3: Tagesberichte
+  reports: (limit = 30, offset = 0) => get<ReportList>("/reports", { limit, offset }),
+  report: (id: number) => get<Report>(`/reports/${id}`),
+  deleteReport: (id: number) => del(`/reports/${id}`),
+  reportPreview: (since?: string, until?: string) => get<Report>("/reports/preview", { since, until }),
+  generateReport: (b: ReportGenerateInput = {}) => post<Report>("/reports/generate", b),
+  // W2: LLM-Verbindung testen (gespeicherte Einstellungen)
+  llmTest: () => post<LlmTestResult>("/settings/llm_test"),
 };
 
 /** Antwort von /identities/{id}/events darf laut Vertrag "wie /events" sein – tolerant auch für Arrays. */
