@@ -1,20 +1,27 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Camera as CamIcon, Clapperboard, Clock, Copy, Globe, Image as ImageIcon, ListChecks, Pencil, Plus, Radio, Trash2, Wand2, Workflow, X } from "lucide-react";
+import { BellRing, Camera as CamIcon, Clapperboard, Clock, Copy, Globe, Image as ImageIcon, ListChecks, Pencil, Plus, Radio, Repeat, Trash2, Wand2, Workflow, X } from "lucide-react";
 import { api } from "../../lib/api";
-import type { Camera, Identity, Rule, RuleAction, RuleInput } from "../../lib/types";
+import type { Camera, GestureName, Identity, Posture, Rule, RuleAction, RuleInput } from "../../lib/types";
 import { ALL_LABELS, DAYS, KIND_NAME, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, LabelIcon, Loading, Range, SearchSelect, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
 import { ConditionsBlock, RULE_TEMPLATES, useConditionSummary } from "../../components/RuleConditions";
+import { ALL_GESTURES, GESTURE_HINT, GESTURE_NAME, POSTURE_TRIGGER_NAME, fmtDuration } from "../../lib/pose";
+import { GestureIcon } from "../../components/GestureIcon";
 
-const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}"];
+const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}", "{posture}", "{gesture}", "{repeat}"];
 
 const EMPTY: RuleInput = {
   name: "", enabled: true, camera_ids: [], zone_ids: [], labels: ["person"], min_score: 0.6,
   identity: { mode: "any", identity_ids: [] }, trigger: "enter", trigger_options: {}, min_dwell_s: 0, schedule: null, cooldown_s: 30,
   conditions: [], condition_delay_s: 0,
   actions: [{ type: "snapshot" }],
+  repeat_s: 0, repeat_max: 0,
+};
+
+const TRIGGER_NAME: Record<RuleInput["trigger"], string> = {
+  enter: "Betreten", leave: "Verlassen", dwell: "Verweilen", posture: "Haltung", gesture: "Geste", time: "Uhrzeit",
 };
 
 const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactNode }> = {
@@ -47,8 +54,13 @@ export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], co
   const zones = cams.flatMap((c) => c.zones).filter((z) => r.zone_ids.includes(z.id)).map((z) => z.name);
   const camNames = r.camera_ids.map((id) => cams.find((c) => c.id === id)?.name ?? `#${id}`);
   const where = zones.length ? <>in Zone <b>{joinOr(zones)}</b></> : camNames.length ? <>an <b>{joinOr(camNames)}</b></> : <>an <b>allen Kameras</b></>;
+  const gs = (r.trigger_options?.gestures ?? []) as GestureName[];
   const verb = r.trigger === "enter" ? "erscheint" : r.trigger === "leave" ? "verschwindet"
-    : r.trigger === "time" ? `– täglich um ${r.trigger_options?.at ?? "?"}` : `länger als ${r.min_dwell_s} s verweilt`;
+    : r.trigger === "time" ? `– täglich um ${r.trigger_options?.at ?? "?"}`
+    : r.trigger === "posture" ? `${POSTURE_TRIGGER_NAME[(r.trigger_options?.posture ?? "lying") as Exclude<Posture, "unknown">]} (≥ ${fmtDuration(r.min_dwell_s)}${r.trigger_options?.max_motion != null ? ", regungslos" : ""})`
+    : r.trigger === "gesture" ? `die Geste ${joinOr(gs.map((g) => `„${GESTURE_NAME[g]}“`)) || "?"} zeigt`
+    : `länger als ${r.min_dwell_s} s verweilt`;
+  const rep = r.repeat_s ? <span className="muted"> · wiederholt alle {fmtDuration(r.repeat_s)}{r.repeat_max ? ` (max. ${r.repeat_max}×)` : ""} bis quittiert</span> : null;
   const sched = r.schedule ? ` · ${r.schedule.days.length === 7 ? "täglich" : r.schedule.days.map((d) => DAYS[d]).join(", ")} ${r.schedule.start}–${r.schedule.end}` : "";
   const acts = r.actions.map((a) => ACTION_META[a.type].name);
   const cond = condText ? <> und <b>{condText}</b>{r.condition_delay_s ? <span className="muted"> (geprüft nach {r.condition_delay_s} s)</span> : null}</> : null;
@@ -66,6 +78,7 @@ export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], co
       Wenn <b>{who}{idTxt}</b> {where} {verb}{cond}
       <span className="arrow">→</span>{acts.length ? acts.join(", ") : <span className="muted">keine Aktion</span>}
       {sched && <span className="muted">{sched}</span>}
+      {rep}
     </span>
   );
 }
@@ -175,6 +188,67 @@ function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: 
   );
 }
 
+/** W2 (C1/D1): Optionen der Auslöser „Haltung“ und „Geste“ */
+function PoseTriggerFields({ f, setF, zones, poseCams }: {
+  f: RuleInput; setF: React.Dispatch<React.SetStateAction<RuleInput>>;
+  zones: { id: string; name: string; color: string; cam: string }[]; poseCams: number;
+}) {
+  const o = f.trigger_options ?? {};
+  const setO = (p: Partial<typeof o>) => setF((x) => ({ ...x, trigger_options: { ...x.trigger_options, ...p } }));
+  const camHint = !poseCams && (
+    <div className="hint" style={{ fontSize: 12, color: "var(--warn)" }}>
+      Auf keiner {f.camera_ids.length ? "gewählten " : ""}Kamera ist {f.trigger === "gesture" ? "„Gesten“" : "„Haltung/Sturz“"} eingeschaltet
+      (Administration → Kameras → Personenanalyse).
+    </div>
+  );
+  if (f.trigger === "gesture") {
+    const gs = (o.gestures ?? []) as GestureName[];
+    return (
+      <div className="field"><label>Gesten (mindestens eine) *</label>
+        <div className="gesture-pick">
+          {ALL_GESTURES.map((g) => {
+            const on = gs.includes(g);
+            return (
+              <button type="button" key={g} className={`gesture-opt ${on ? "on" : ""}`} title={GESTURE_HINT[g]}
+                onClick={() => setO({ gestures: on ? gs.filter((x) => x !== g) : [...gs, g] })}>
+                <GestureIcon g={g} size={30} /><span>{GESTURE_NAME[g]}</span>
+              </button>
+            );
+          })}
+        </div>
+        <span className="hint muted" style={{ fontSize: 12 }}>Die Geste muss so lange gehalten werden wie unter Einstellungen → Haltung &amp; Gesten eingestellt (Standard 1 s). Danach 5 s Pause je Person.</span>
+        {camHint}
+      </div>
+    );
+  }
+  const excl = (o.exclude_zone_ids ?? []) as string[];
+  return (
+    <>
+      <div className="form-grid">
+        <div className="field"><label>Haltung</label>
+          <div className="seg">
+            {(["lying", "sitting", "standing"] as const).map((p) => (
+              <button type="button" key={p} className={(o.posture ?? "lying") === p ? "on" : ""} onClick={() => setO({ posture: p })}>{POSTURE_TRIGGER_NAME[p]}</button>
+            ))}
+          </div>
+        </div>
+        <div className="field"><label>Nur wenn regungslos</label>
+          <Switch checked={o.max_motion != null} onChange={(v) => setO({ max_motion: v ? 0.05 : null })} label={o.max_motion != null ? "kaum Bewegung" : "egal"} />
+          {o.max_motion != null && <Range value={Number(o.max_motion)} min={0.01} max={0.3} step={0.01} format={(v) => `Bewegung ≤ ${v.toFixed(2)}`} onChange={(v) => setO({ max_motion: v })} />}
+        </div>
+      </div>
+      <div className="field"><label>Nicht auslösen in (z. B. Sofa, Bett, Yogamatte)</label>
+        {zones.length ? (
+          <ChipSelect options={zones.map((z) => z.id)} value={excl} onChange={(v) => setO({ exclude_zone_ids: v })}
+            color={(id) => zones.find((z) => z.id === id)?.color}
+            render={(id) => { const z = zones.find((x) => x.id === id)!; return <>{z.name} <span className="muted">· {z.cam}</span></>; }} />
+        ) : <span className="muted" style={{ fontSize: 13 }}>Keine Zonen – unter Kameras → Zonen z. B. „Sofa“ anlegen und hier ausschließen.</span>}
+      </div>
+      {camHint}
+    </>
+  );
+}
+
 function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: Camera[]; idents: Identity[]; onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState<RuleInput>(() => {
@@ -191,20 +265,35 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
   const save = useMutation({
     mutationFn: () => {
       const zoneIds = new Set(availZones.map((z) => z.id));
-      const body: RuleInput = { ...f, name: f.name.trim(), zone_ids: f.zone_ids.filter((z) => zoneIds.has(z)), min_dwell_s: f.trigger === "dwell" ? f.min_dwell_s : 0 };
+      const keepDwell = f.trigger === "dwell" || f.trigger === "posture";
+      const opts = f.trigger === "posture"
+        ? { ...f.trigger_options, exclude_zone_ids: (f.trigger_options?.exclude_zone_ids ?? []).filter((z) => zoneIds.has(z)) }
+        : f.trigger_options;
+      const body: RuleInput = { ...f, name: f.name.trim(), zone_ids: f.zone_ids.filter((z) => zoneIds.has(z)), min_dwell_s: keepDwell ? f.min_dwell_s : 0,
+        trigger_options: opts, repeat_s: isTrack ? f.repeat_s ?? 0 : 0, repeat_max: isTrack ? f.repeat_max ?? 0 : 0 };
       return rule ? api.updateRule(rule.id, body) : api.createRule(body);
     },
     onSuccess: () => { toast.success("Regel gespeichert", f.name); qc.invalidateQueries({ queryKey: ["rules"] }); onClose(); },
     onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
   });
   const isTime = f.trigger === "time";
+  const isTrack = !isTime;
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const poseCams = cams.filter((c) => (f.trigger === "gesture" ? c.gesture_enabled : c.pose_enabled || c.gesture_enabled));
   const condText = useConditionSummary(f.conditions, cams);
   const valid = f.name.trim() && (isTime || f.identity.mode !== "specific" || f.identity.identity_ids.length > 0)
     && (!isTime || /^\d\d:\d\d$/.test(String(f.trigger_options?.at ?? "")))
+    && (f.trigger !== "gesture" || (f.trigger_options?.gestures ?? []).length > 0)
+    && (!f.repeat_s || f.repeat_s >= 10)
     && f.conditions.every((c) => (c.type === "track_came_from" ? c.zone_ids.length > 0 : c.type === "weather" || c.labels.length > 0));
   const setTrigger = (t: RuleInput["trigger"]) => setF((p) => ({
     ...p, trigger: t,
-    trigger_options: t === "time" ? { at: String(p.trigger_options?.at ?? "10:00") } : {},
+    trigger_options: t === "time" ? { at: String(p.trigger_options?.at ?? "10:00") }
+      : t === "posture" ? { posture: "lying", max_motion: null, exclude_zone_ids: [] }
+      : t === "gesture" ? { gestures: ["arms_up"] } : {},
+    // Haltung/Geste gibt es nur für Personen; Liegedauer-Vorschlag aus den Einstellungen
+    labels: t === "posture" || t === "gesture" ? ["person"] : p.labels,
+    min_dwell_s: t === "posture" ? (p.trigger === "posture" ? p.min_dwell_s : settings.data?.fall_default_dwell_s ?? 60) : p.min_dwell_s,
     // „kam aus Zone“ braucht einen Track
     conditions: t === "time" ? p.conditions.filter((c) => c.type !== "track_came_from") : p.conditions,
   }));
@@ -281,15 +370,17 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
           <div className="form-grid">
             <div className="field"><label>Auslöser</label>
               <div className="seg">
-                {(["enter", "leave", "dwell", "time"] as const).map((t) => (
+                {(["enter", "leave", "dwell", "posture", "gesture", "time"] as const).map((t) => (
                   <button type="button" key={t} className={f.trigger === t ? "on" : ""} onClick={() => setTrigger(t)}>
-                    {{ enter: "Betreten", leave: "Verlassen", dwell: "Verweilen", time: "Uhrzeit" }[t]}
+                    {TRIGGER_NAME[t]}
                   </button>
                 ))}
               </div>
             </div>
             {f.trigger === "dwell" ? (
               <div className="field"><label>Mindest-Verweildauer</label><Range value={f.min_dwell_s} min={1} max={600} step={1} format={(v) => `${v} s`} onChange={(v) => set("min_dwell_s", v)} /></div>
+            ) : f.trigger === "posture" ? (
+              <div className="field"><label>Haltung besteht mindestens</label><Range value={f.min_dwell_s} min={5} max={900} step={5} format={fmtDuration} onChange={(v) => set("min_dwell_s", v)} /></div>
             ) : isTime ? (
               <div className="field"><label><Clock size={13} style={{ verticalAlign: -2 }} /> Uhrzeit *</label>
                 <input type="time" className="input" style={{ width: 130 }} value={String(f.trigger_options?.at ?? "")}
@@ -298,6 +389,9 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
             ) : <div />}
             <div className="field"><label>Cooldown ({isTime ? "pro Regel" : "pro Kamera"})</label><Range value={f.cooldown_s} min={0} max={3600} step={5} format={(v) => (v >= 60 ? `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}` : `${v} s`)} onChange={(v) => set("cooldown_s", v)} /></div>
           </div>
+          {(f.trigger === "posture" || f.trigger === "gesture") && (
+            <PoseTriggerFields f={f} setF={setF} zones={availZones} poseCams={poseCams.length} />
+          )}
           {isTime ? (
             <div className="field"><label>An diesen Tagen</label>
               <ChipSelect options={[0, 1, 2, 3, 4, 5, 6]} value={f.schedule?.days ?? [0, 1, 2, 3, 4, 5, 6]}
@@ -318,6 +412,25 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
         </fieldset>
 
         <ConditionsBlock f={f} cams={cams} onChange={(p) => setF((x) => ({ ...x, ...p }))} />
+
+        {isTrack && (
+          <fieldset className="fieldset"><legend>Wiederholen bis quittiert</legend>
+            <Switch checked={!!f.repeat_s} onChange={(v) => setF((p) => ({ ...p, repeat_s: v ? 120 : 0, repeat_max: v ? 3 : 0 }))}
+              label="Aktionen wiederholen, solange das Ereignis läuft und nicht quittiert ist" />
+            {!!f.repeat_s && (
+              <div className="form-grid">
+                <div className="field"><label><Repeat size={13} style={{ verticalAlign: -2 }} /> Wiederholen alle</label>
+                  <Range value={f.repeat_s} min={10} max={1800} step={10} format={fmtDuration} onChange={(v) => set("repeat_s", v)} /></div>
+                <div className="field"><label>Höchstens</label>
+                  <Range value={f.repeat_max ?? 0} min={0} max={20} step={1} format={(v) => (v ? `${v}×` : "unbegrenzt")} onChange={(v) => set("repeat_max", v)} /></div>
+              </div>
+            )}
+            {!!f.repeat_s && <div className="hint muted" style={{ fontSize: 12 }}>
+              Stoppt, sobald das Ereignis quittiert wird (Ereignisse → „Quittieren“, MCP <code>acknowledge_alert</code>), endet
+              {f.trigger === "posture" ? " oder die Person die Haltung verlässt" : ""}. Platzhalter <code>{"{repeat}"}</code> = Nummer der Wiederholung.
+            </div>}
+          </fieldset>
+        )}
 
         <fieldset className="fieldset"><legend>Aktionen</legend>
           {f.actions.map((a, i) => (

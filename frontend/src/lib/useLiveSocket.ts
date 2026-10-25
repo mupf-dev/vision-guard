@@ -4,6 +4,10 @@ import { useLive, useUi, toast } from "./store";
 import type { Camera, WsMessage } from "./types";
 import { labelName } from "./labels";
 import { pushDetection } from "./overlaySync";
+import { GESTURE_NAME, POSTURE_NAME, eventAlert } from "./pose";
+
+// W2 C1: Notfall-Toast je Event und Wiederholung nur einmal
+const alertToasted = new Set<string>();
 
 function wsUrl(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -46,6 +50,16 @@ function handle(msg: WsMessage, qc: QueryClient) {
           e.thumb_url,
         );
       }
+      const al = eventAlert(msg.event);
+      if (al && msg.event.active && !msg.event.acknowledged_at && useUi.getState().eventToasts) {
+        const k = `${msg.event.id}:${al.repeat}`;
+        if (!alertToasted.has(k)) {
+          alertToasted.add(k);
+          const what = al.posture ? `Person ${POSTURE_NAME[al.posture]}` : al.rule;
+          toast.event(`Notfall: ${what}`, `Kamera ${msg.event.camera_name} · Regel „${al.rule}“${al.repeat ? ` · Wiederholung ${al.repeat}` : ""}`,
+            msg.event.snapshot_url ?? msg.event.thumb_url);
+        }
+      }
       break;
     }
     case "inventory":
@@ -68,8 +82,15 @@ function handle(msg: WsMessage, qc: QueryClient) {
     case "review":
       qc.invalidateQueries({ queryKey: ["reviews"] });
       break;
-    case "gesture":
-      break;   // C1/D1: Gesten-Toast im Live-Bild
+    case "gesture": {
+      // D1: kurz im Live-Overlay am Track einblenden + Toast (wenn Alarm-Benachrichtigungen an)
+      s.setGesture(msg);
+      if (useUi.getState().eventToasts) {
+        const who = msg.identity?.display_name ?? "Person";
+        toast.event(`Geste: ${GESTURE_NAME[msg.gesture] ?? msg.gesture}`, `${who} · Kamera ${msg.camera_name ?? msg.camera_id} · ${msg.held_s.toFixed(1)} s gehalten`);
+      }
+      break;
+    }
     case "pet_visit":
       qc.invalidateQueries({ queryKey: ["pets"] });
       break;

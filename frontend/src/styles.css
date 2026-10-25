@@ -642,3 +642,17 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .ht-axis { display: flex; justify-content: space-between; margin-left: 98px; font-size: 11px; color: var(--text-3); }
 .ht-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 @media (max-width: 640px) { .health-images { grid-template-columns: 1fr 1fr; } }
+
+/* ---------- W2 C1/D1: Notfall-Banner, Gesten-Auswahl ---------- */
+.alert-banner { display: flex; flex-direction: column; gap: 6px; margin: 0 0 16px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent); background: color-mix(in srgb, var(--bad) 12%, var(--bg-2)); box-shadow: 0 0 24px -8px color-mix(in srgb, var(--bad) 60%, transparent); animation: alert-pulse 2s ease-in-out infinite; }
+.alert-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.alert-ico { color: var(--bad); flex: none; }
+.alert-text { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 0; color: var(--text-1); font: inherit; font-size: 14px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alert-text:hover b { text-decoration: underline; }
+@keyframes alert-pulse { 0%, 100% { border-color: color-mix(in srgb, var(--bad) 45%, transparent); } 50% { border-color: var(--bad); } }
+@media (max-width: 640px) { .alert-row { flex-wrap: wrap; } .alert-text { white-space: normal; } }
+.gesture-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.gesture-opt { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--bg-1); color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer; text-align: center; transition: border-color .15s, background .15s, color .15s; }
+.gesture-opt:hover { color: var(--text-1); border-color: #3a4b66; }
+.gesture-opt.on { color: var(--text-1); border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-soft); }
+.gesture-opt.on svg { color: var(--accent); }
