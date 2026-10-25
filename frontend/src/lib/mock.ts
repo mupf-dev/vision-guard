@@ -10,7 +10,7 @@ import type { ApiToken, TokenScope } from "./types";
 import type { IdentitySuggestion } from "./types";
 import type { CameraHealth, InventoryChange, InventoryChanges, PushTarget, VGNotification } from "./types";
 import type { RuleAction, RuleInput } from "./types";
-import type { PetSummary, PetVisit, Report, ReviewRequest } from "./types";
+import type { PetSummary, PetVisit, Report, ReportFacts, ReviewRequest } from "./types";
 
 const now = () => new Date().toISOString();
 const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
@@ -161,6 +161,50 @@ const petSummary: PetSummary[] = [
   { identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog",
     purposes: { water: { today: 1, normal: [2, 5], last_ts: ago(5400), daily: [{ day: new Date().toISOString().slice(0, 10), count: 1 }] } } },
 ];
+function mockFacts(start: string, end: string): ReportFacts {
+  // Wie das Backend (B3, report/facts.py) – feste Beispielwerte
+  const sections = [
+    { key: "people", title: "Personen", text: "12× erkannt – bekannt: Anna 3× (07:12–17:10); 2 unbekannte Gesichter, davon 1 neu; 5× ohne erkanntes Gesicht." },
+    { key: "vehicles", title: "Fahrzeuge", text: "3 Autos (zuletzt 18:40) und 1 Fahrrad (zuletzt 08:05); Kennzeichen: Papa (B-AB 123) 18:40." },
+    { key: "animals", title: "Tiere", text: "Bello 4× (zuletzt 19:20, Garten); Näpfe/Klo: Bello Wassernapf 2× (zuletzt 18:02)." },
+    { key: "inventory", title: "Gegenstände", text: "1 neu (Schlüssel (Flur)), 1 verschoben (Fernbedienung: Tisch → Sofa)." },
+    { key: "rules", title: "Regeln", text: "„Person an Einfahrt nachts“ 07:12." },
+    { key: "system", title: "Hinweise", text: "1× Kamera-Zustand." },
+  ];
+  const p = (name: string, count: number, first: number, last: number, kind = "face") => ({
+    identity_id: count, kind, name, display_name: name, plate_text: kind === "plate" ? "B-AB 123" : null, label: kind === "pet" ? "dog" : kind === "plate" ? "car" : "person",
+    count, first: ago(first), last: ago(last), cameras: ["Einfahrt"], new: false });
+  return {
+    version: 1, period: { start, end, date: end.slice(0, 10), weekday: "Samstag", hours: 24 },
+    events: [], counts: { events: 20, person: 12, vehicle: 4, animal: 4, rules: 1, inventory: 2, notifications: 1 },
+    people: { events: 12, named: [p("Anna", 3, 40000, 14000)], unknown_faces: 2, new_faces: 1, without_face: 5, unknown: [] },
+    vehicles: { total: 4, plates: [p("Papa", 1, 9000, 9000, "plate")], plates_total: 1, by_label: [
+      { label: "car", name_de: "Autos", group: "vehicle", count: 3, first: ago(30000), last: ago(9000), cameras: [] },
+      { label: "bicycle", name_de: "Fahrräder", group: "vehicle", count: 1, first: ago(40000), last: ago(40000), cameras: [] }] },
+    animals: { total: 4, named: [p("Bello", 4, 30000, 6000, "pet")], unnamed: 0,
+      by_label: [{ label: "dog", name_de: "Hunde", group: "animal", count: 4, first: ago(30000), last: ago(6000), cameras: [] }],
+      visits: [{ identity_id: 30, pet: "Bello", label: "dog", purpose: "water", purpose_de: "Wassernapf", count: 2, last: ago(10000), total_s: 65 }] },
+    rules: [{ name: "Person an Einfahrt nachts", count: 1, first: ago(40000), last: ago(40000), snapshot_url: null }],
+    inventory: { summary: sections[3].text, counts: { appeared: 1, moved: 1 }, changes: [
+      { type: "appeared", at: ago(12000), text: "Schlüssel: neu seit 18:05 im Flur", item_id: 1, label: "keys", name_de: "Schlüssel",
+        camera_id: 1, camera_name: "Flur", room: "Flur", before: null, after: { ts: ago(12000), state: "present", zone_names: [], crop_url: null } },
+      { type: "moved", at: ago(20000), text: "Fernbedienung: vom Tisch aufs Sofa", item_id: 2, label: "remote", name_de: "Fernbedienung",
+        camera_id: 3, camera_name: "Wohnzimmer", room: "Wohnzimmer", before: { ts: ago(50000), state: "present", zone_names: [], crop_url: null },
+        after: { ts: ago(20000), state: "present", zone_names: [], crop_url: null } }] },
+    notifications: { by_source: { health: 1 }, items: [{ ts: ago(3600), source: "health", source_de: "Kamera-Zustand", level: "warning", title: "Kamera Garten: unscharf" }] },
+    system: { cameras: [], offline_cameras: [] },
+    sections,
+  };
+}
+
+function mockReport(id: number | null, kind: "daily" | "manual", start: string, end: string, deliver = false): Report {
+  const facts = mockFacts(start, end);
+  const head = new Date(end).toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit" });
+  const text = [`${kind === "daily" ? "Tagesbericht" : "Bericht"} ${head}`, ...facts.sections.map((x) => `${x.title}: ${x.text}`)].join("\n");
+  return { id, kind, period_start: start, period_end: end, created_at: now(), text, html: `<p>${text}</p>`, generator: "template",
+    delivery: deliver ? { mqtt: { ok: true, ts: now() }, push: { ok: true, ts: now(), targets: 1 } } : {}, facts };
+}
+
 let reports: Report[] = [
   { id: 1, kind: "daily", period_start: ago(86400 + 3600 * 3), period_end: ago(3600 * 3), created_at: ago(3600 * 3),
     text: "Gestern: 12 Personen (Anna 17:10), 3 Fahrzeuge, Bello 4× im Garten. Schlüssel liegt seit 18:05 auf der Kommode.",
@@ -643,12 +687,18 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/pets/visits") return json({ items: petVisits, total: petVisits.length });
   if (path === "/pets/summary") return json(petSummary);
   if (path === "/reports") return json({ items: reports, total: reports.length });
-  if (path === "/reports/preview" || path === "/reports/generate") return json({ detail: "Tagesbericht ist noch nicht umgesetzt" }, 501);
+  if (path === "/reports/preview") return json(mockReport(null, "manual", ago(3600 * 10), now()));
+  if (path === "/reports/generate") {
+    const b = (body ?? {}) as { deliver?: boolean };
+    const r = mockReport(Math.max(0, ...reports.map((x) => x.id ?? 0)) + 1, "manual", ago(3600 * 10), now(), !!b.deliver);
+    reports = [{ ...r, facts: undefined, html: undefined }, ...reports];
+    return json(r);
+  }
   if ((m = path.match(/^\/reports\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === "DELETE") { reports = reports.filter((r) => r.id !== id); return json(undefined, 204); }
     const r = reports.find((x) => x.id === id);
-    return r ? json({ ...r, html: `<p>${r.text}</p>`, facts: {} }) : json({ detail: "Bericht nicht gefunden" }, 404);
+    return r ? json({ ...r, html: `<p>${r.text}</p>`, facts: mockFacts(r.period_start, r.period_end) }) : json({ detail: "Bericht nicht gefunden" }, 404);
   }
   if (path === "/settings/llm_test") return json({ ok: false, error: "Kein Sprachmodell eingerichtet (Mock)", text: null, model: null, ms: null });
   if ((m = path.match(/^\/cameras\/(\d+)\/health(\/reference)?$/))) {

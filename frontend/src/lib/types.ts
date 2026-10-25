@@ -744,10 +744,73 @@ export interface ReportDelivery {
   ok: boolean;
   error?: string | null;
   ts?: string | null;
+  /** Zusatzangaben je Kanal (B3): topic, notification_id, targets, status, recipients, note */
+  [extra: string]: unknown;
+}
+
+/** B3: Fakten eines Berichts (GET /reports/{id}, preview) – Zeiten ISO-8601 UTC */
+export interface ReportIdentityFact {
+  identity_id: number;
+  kind: string;
+  name: string | null;
+  display_name: string;
+  plate_text: string | null;
+  label: string;
+  count: number;
+  first: string | null;
+  last: string | null;
+  cameras: string[];
+  new: boolean;
+}
+
+export interface ReportLabelFact {
+  label: string;
+  name_de: string;
+  group: "person" | "vehicle" | "animal" | "other";
+  count: number;
+  first: string | null;
+  last: string | null;
+  cameras: { camera_id: number; camera_name: string; count: number }[];
+}
+
+export interface ReportInventoryChange {
+  type: InventoryChangeType;
+  at: string;
+  text: string;
+  item_id: number;
+  label: string;
+  name_de: string;
+  camera_id: number;
+  camera_name: string;
+  room: string | null;
+  before: { ts: string; state: string; zone_names: string[]; crop_url: string | null } | null;
+  after: { ts: string; state: string; zone_names: string[]; crop_url: string | null } | null;
+}
+
+export interface ReportFacts {
+  version: number;
+  period: { start: string; end: string; date: string; weekday: string; hours: number };
+  events: ReportLabelFact[];
+  people: { events: number; named: ReportIdentityFact[]; unknown_faces: number; new_faces: number; without_face: number; unknown: ReportIdentityFact[] };
+  vehicles: { total: number; by_label: ReportLabelFact[]; plates: ReportIdentityFact[]; plates_total: number };
+  animals: {
+    total: number; by_label: ReportLabelFact[]; named: ReportIdentityFact[]; unnamed: number;
+    visits: { identity_id: number | null; pet: string | null; label: string; purpose: string; purpose_de: string; count: number; last: string | null; total_s: number }[];
+  };
+  rules: { name: string; count: number; first: string | null; last: string | null; snapshot_url: string | null }[];
+  inventory: { summary: string; counts: Partial<Record<InventoryChangeType, number>>; changes: ReportInventoryChange[] } | null;
+  inventory_error?: string;
+  notifications: { by_source: Record<string, number>; items: { ts: string; source: string; source_de: string; level: string; title: string }[] };
+  system: { cameras: { id: number; name: string; room: string | null }[]; offline_cameras: { id: number; name: string }[] };
+  counts: Record<string, number>;
+  sections: { key: string; title: string; text: string }[];
+  /** nur bei report_generator "llm": Ergebnis der Plausibilitätsprüfung */
+  generation?: { requested: "llm"; ok: boolean; model?: string; provider?: string; ms?: number; error?: string; problems?: string[]; rejected_text?: string };
 }
 
 export interface Report {
-  id: number;
+  /** null bei der Vorschau (nicht gespeichert) */
+  id: number | null;
   kind: "daily" | "manual";
   period_start: string;
   period_end: string;
@@ -757,7 +820,7 @@ export interface Report {
   delivery: Record<string, ReportDelivery>;
   /** nur GET /reports/{id} und preview */
   html?: string;
-  facts?: Record<string, unknown>;
+  facts?: ReportFacts;
 }
 
 export type ReportList = Paged<Report>;

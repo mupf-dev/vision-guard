@@ -642,3 +642,8 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .ht-axis { display: flex; justify-content: space-between; margin-left: 98px; font-size: 11px; color: var(--text-3); }
 .ht-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 @media (max-width: 640px) { .health-images { grid-template-columns: 1fr 1fr; } }
+
+/* ---------------- Berichte (B3) ---------------- */
+.reports-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.reports-grid details > summary::-webkit-details-marker { display: none; }
+@media (max-width: 900px) { .reports-grid { grid-template-columns: minmax(0, 1fr); } }
