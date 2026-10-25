@@ -9,6 +9,7 @@ import type {
 import type {
   CameraHealth, InventoryChanges, NotificationLevel, NotificationSource, PushTestInput, PushTestResult, VGNotification,
 } from "./types";
+import type { RuleCheckResult } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -172,6 +173,8 @@ export const api = {
   notification: (id: number) => get<VGNotification>(`/notifications/${id}`),
   deleteNotification: (id: number) => del(`/notifications/${id}`),
   pushTest: (b: PushTestInput) => post<PushTestResult>("/settings/push_test", b),
+  // A1: Bedingungen eines Regel-Entwurfs jetzt prüfen
+  checkRule: (b: RuleInput) => post<RuleCheckResult>("/rules/check", b),
   // W1 B2: Veränderungen
   inventoryChanges: (q: InventoryChangesQuery) => get<InventoryChanges>("/inventory/changes", q),
   // W1 C5: Kamera-Gesundheit
