@@ -235,3 +235,83 @@ Vertrag und Gerüst für B4+D2, C1+D1, C3 und B3 stehen in CONTRACT.md, Abschnit
   `.env.example`), `.env` unverändert.
 - **Offen für die Fach-Agenten:** siehe Bericht K2 bzw. CONTRACT.md W2.C–W2.I. MCP-Selbsttest erwartet die
   W2-Tools noch nicht (bei der Integration ergänzen).
+
+## Welle 2 – Integration (2026-10-25, nachts, autonom)
+
+### Ergebnis
+
+Alle vier Fach-Zweige sind per `git merge --no-ff` im Arbeitszweig `feature/inventar-gesichter-mcp`:
+`w2/b4-d2-lernen` (B4+D2), `w2/c1-d1-pose` (C1+D1), `w2/c3-tiere` (C3), `w2/b3-bericht` (B3). Konflikte gab es nur
+in `backend/app/routers/identities.py::delete_identity` (Exemplar-Zuordnungen lösen + Tier-Besuche behalten) und in
+`frontend/src/styles.css` (angehängte Blöcke); beide Seiten wurden jeweils vollständig übernommen. Die übrigen
+gemeinsamen Dateien (`main.py`, `events.py`, `types.ts`, `mock.ts`, CONTRACT.md W2.C–G) liefen ohne Konflikt
+zusammen. Nachgezogen: `mcp/selftest.py` erwartet jetzt auch `list_open_questions`, `answer_question`,
+`get_pet_diary`, `get_daily_report`. Worktrees der Agenten entfernt (`git worktree prune`), gemergte Zweige und
+die verwaisten `worktree-wf_*`-Zweige gelöscht, ein liegengebliebener Container `vg-c1-testcam-1` samt Netz
+entfernt. **Kein Feature musste abgeschaltet oder zurückgenommen werden.**
+
+Standardzustand nach der Welle (unverändert aus K2): Pose/Gesten je Kamera **aus**, Tagesbericht **aus**
+(Generator `template`, `llm_provider: none`), Rückfragen **an** (`review_enabled`, max. 10/Tag), Haustier-Tagebuch
+wirkt erst mit Zonen-Zweck Napf/Wasser/Klo, `notify_routes.*` leer (keine Pushes).
+
+### Ende-zu-Ende-Prüfung im Haupt-Stack (Test-API-Keys read und read+write, am Ende widerrufen → 401)
+
+- Build: `py_compile` aller Module, `corepack pnpm build` grün; `docker compose up -d --build` → backend/mcp
+  `healthy`, worker lädt Detektor, Gesicht, Kennzeichen, Tier, YOLOE (`yoloe-11m-seg`, 50 Labels) und Embedding;
+  keine Fehler/Tracebacks in den Logs von backend, worker, mcp, frontend.
+- **D2:** Nach dem Neustart erzeugt das Inventar von `cam_3` binnen 40 s 10 offene Rückfragen („Erkannt als
+  „Kissen“ – stimmt das?“ …), `asked_today 10/10` – Tageslimit greift. Die Seite „Bitte bestätigen“ zeigt sie mit
+  Crop und Übersichtsbild. Die Fragen sind **für den Nutzer stehen gelassen** (nicht beantwortet, um keine
+  Unterdrückungsflächen/Schwellen an der echten Kamera zu setzen).
+- **B4 an der echten Kamera `cam_3` (GPU):** Exemplar `W2-Integrationstest` (Stuhl) per
+  `POST /identities` + `samples/from-inventory` angelegt (Sample in 0,05 s). Der Worker ordnet es binnen Sekunden zu;
+  `GET /inventory/search?q=wo ist W2-Integrationstest` → „W2-Integrationstest: aktuell sichtbar in Wohnzimmer …“,
+  `match.via: "identity"`. Danach gelöscht (204), Zuordnung am Gegenstand wieder `null`, kein Ordner unter
+  `identities/` übrig.
+- **C1/D1:** Pose + Gesten an `cam_3` kurz eingeschaltet → `pose: ready (yolo11n-pose, CUDA fp16)` in 0,2 s geladen,
+  danach per PUT wieder ausgeschaltet (übrige Kamera-Felder unverändert geprüft). Sturz/Geste an der echten Kamera
+  nicht nachgestellt (nachts, niemand im Raum) – Nachweise siehe Bericht C1+D1 (posecheck, Live-Test im Projekt
+  `vg-c1`). `GET /events?alert=true` → 200, leer.
+- **B3:** `GET /reports/preview` → Satzbaustein-Bericht; `POST /reports/generate` mit Lese-Key → 403, mit
+  Schreib-Key → 200 (`generator: template`), danach gelöscht (Liste wieder 0).
+- **C3:** `/pets/summary`, `/pets/visits` → 200 (leer; im Haupt-Stack gibt es noch keine Zone mit Zweck).
+- **MCP:** `selftest.py` mit Lese-Key: ohne Key 401, alle 15 Tools vorhanden, Selbsttest OK. Zusätzlich
+  `get_daily_report` (Vorschau heute), `get_pet_diary` (Hinweis auf fehlende Zonen), `list_open_questions`
+  (10 offen, signierte Bild-Links), `answer_question` mit Lese-Key → `isError` „API-Key ohne Schreibrecht.“
+- **Oberfläche:** Screenshots (Live, Bitte bestätigen, Tiere, Berichte, Gegenstände, Ereignisse, Regeln,
+  Einstellungen, Kameras) gegen den echten Stack ohne JS-Fehler.
+
+### Messwerte
+
+| Messung | Ergebnis |
+|---|---|
+| Lasttest 16 Kameras (`--replicate 8`, 60 s), ohne Pose | 62,3 fps gesamt, Batch 32,4 ms, VRAM ganze GPU max. 4,14 GB (selftest-Spitze 4,28 GB) |
+| dto. mit `--pose --gestures --inventory` | 61,8 fps (**−0,8 %**, Grenze ±5 %), Batch 35,9 ms, VRAM max. 4,20 GB (selftest-Spitze 4,34 GB) – unter 4,5 GB; Pose 41,7 ms je Lauf, 247 Takte verworfen (Budget, Detektion unbeeinflusst) |
+| `cam_3` (2880×1616) im Haupt-Stack, Pose+Gesten an | 4,94 fps im Mittel (13 Statusmeldungen, 4,71–5,07), Batch 19,8 ms, Inventar 20 Läufe/min à 152 ms |
+| VRAM Haupt-Stack (nvidia-smi) | vor dem Merge 2,60 GB, danach 2,47 GB, mit Pose-Modell geladen 2,60 GB |
+
+Beide Lasttest-Läufe liefen unter `flock ~/vg-gpu.lock`, der Haupt-Worker lief parallel (VRAM-Zahlen = ganze GPU).
+Im Lasttest wurden 8 Personen kurz (0,2 s) als „liegt“ eingestuft – weit unter jeder Liegedauer, kein Alarm.
+Zwei vom Selbsttest ins Medien-Volume geschriebene Inventar-Bilder (`cam1_…`) wurden gelöscht.
+
+### Abweichungen und Entscheidungen
+
+- Nichts abgeschaltet, nichts zurückgenommen; die Standardwerte aus K2 bleiben (siehe oben).
+- Die 10 Rückfragen aus dem Start sind echte Fragen an den Nutzer und bleiben offen.
+- Die Merge-Commits tragen die Konfliktlösung in der Nachricht.
+
+### Offene Punkte
+
+- **D2:** Das Tageslimit ist nach einem Start in weniger als einer Minute aufgebraucht, darunter mehrere Fragen zum
+  gleichen Label („Kissen“ 3×). Kandidat für ein Refinement (z. B. je Label und Tag nur eine Frage, Fragen über den
+  Tag verteilen).
+- **Oberfläche „Bitte bestätigen“:** Bei Fragen ohne Übersichtsbild bleibt unter dem kleinen Crop eine leere Fläche
+  (kosmetisch).
+- **B4:** baugleiche Exemplare nicht unterscheidbar; Abnahme mit echten Handyfotos tagsüber steht aus.
+- **C1/D1:** eigene Aufnahmen (echter Sturz, Sofa, Haltegesten in 2–4 m) fehlen; `max_motion` unkalibriert; ein
+  Sturz kann zwei Notfälle erzeugen (zwei Tracks); Wiederholungen gehen bei Backend-Neustart verloren; ein einmaliger,
+  nicht reproduzierter Worker-Hänger im Agenten-Test (Diagnose: `docker compose kill --signal=USR1 worker`).
+- **C3:** nur mit nachgestellten Worker-Nachrichten getestet; im Haupt-Stack noch keine Zone mit Zweck.
+- **B3:** kein Test mit echtem lokalem Sprachmodell (Anteil plausibler Texte unbekannt) → Standard bleibt
+  `template`; die Oberfläche zeigt nicht an, ob SMTP eingerichtet ist.
+- Selftest-Läufe schreiben Inventar-Bilder in das echte Medien-Volume (bestand vor W2).

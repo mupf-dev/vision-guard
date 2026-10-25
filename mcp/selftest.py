@@ -24,6 +24,7 @@ EXPECTED = {"find_object", "list_visible_objects", "get_object_history", "list_c
             "get_camera_snapshot", "who_is_where"}
 EXPECTED |= {"what_changed", "list_notifications", "get_camera_health"}   # Welle 1 (B2, A1, C5)
 EXPECTED |= {"list_alerts", "acknowledge_alert"}   # Welle 2 (C1/D1)
+EXPECTED |= {"list_open_questions", "answer_question", "get_pet_diary", "get_daily_report"}   # Welle 2 (D2, C3, B3)
 
 
 def _text(result) -> str:
