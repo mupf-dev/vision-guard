@@ -5,7 +5,8 @@ Aufruf (API-Key aus Administration → API-Zugänge, nie ins Repo schreiben):
     VG_API_KEY=vgt_… python selftest.py [URL] [Suchbegriff]
 
 URL Standard `http://localhost:8100/mcp` (im Container) bzw. von außen `http://localhost:8080/mcp`.
-Prüft: ohne Key → 401, list_tools, list_cameras, find_object, list_visible_objects, who_is_where.
+Prüft: ohne Key → 401, list_tools, list_cameras, find_object, list_visible_objects, who_is_where,
+what_changed (W1 B2).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 
 EXPECTED = {"find_object", "list_visible_objects", "get_object_history", "list_cameras",
             "get_camera_snapshot", "who_is_where"}
+EXPECTED |= {"what_changed"}   # W1 B2
 
 
 def _text(result) -> str:
@@ -59,6 +61,10 @@ async def main() -> int:
             res = await client.call_tool(name, args)
             print(f"\n== {name} {args} {'(Fehler)' if res.is_error else ''}\n{_text(res)}")
             failed += bool(res.is_error)
+        # W1 B2: Veränderungen der letzten Stunde (Medien-URLs signiert)
+        res = await client.call_tool("what_changed", {"since": "1h"})
+        print(f"\n== what_changed {{'since': '1h'}} {'(Fehler)' if res.is_error else ''}\n{_text(res)}")
+        failed += bool(res.is_error)
     print("\nSelbsttest", "mit Fehlern" if failed else "OK")
     return 1 if failed else 0
 
