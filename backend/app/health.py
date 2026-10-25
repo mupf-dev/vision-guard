@@ -56,7 +56,7 @@ _lock = threading.RLock()
 _cams: dict[int, dict[str, Any]] = {}       # camera_id -> {msg, rx, problems:{type: {...}}, health}
 _pending: dict[str, dict[str, Any]] = {}    # request_id -> {event, result}
 _started = False
-# Log, Hinweis und Kamerabild (go2rtc, bis 8 s) nie im Track-Thread: ein Thread, Reihenfolge bleibt erhalten
+# Log, Hinweis und Kamerabild (go2rtc, bis 2 × 15 s) nie im Track-Thread: ein Thread, Reihenfolge bleibt erhalten
 _effects = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vg-health-fx")
 
 
@@ -278,9 +278,21 @@ def _grab_frame(camera_id: int) -> Optional[str]:
 
         from . import go2rtc
         from .util import local_date_str, media_path
-        r = httpx.get(f"{config.go2rtc_url}/api/frame.jpeg", params={"src": go2rtc.stream_name(camera_id)},
-                      timeout=8)
-        if r.status_code != 200 or not r.content.startswith(b"\xff\xd8"):
+        r = None
+        for attempt in range(2):           # go2rtc liefert direkt nach einem Quellwechsel gelegentlich HTTP 500
+            try:
+                r = httpx.get(f"{config.go2rtc_url}/api/frame.jpeg",
+                              params={"src": go2rtc.stream_name(camera_id)}, timeout=15)
+            except httpx.HTTPError as e:   # erster Abruf startet in go2rtc ggf. erst einen Transcoder
+                log.debug("frame.jpeg Kamera %s: %s", camera_id, e)
+                r = None
+                continue
+            if r.status_code == 200 and r.content.startswith(b"\xff\xd8"):
+                break
+            time.sleep(1.0)
+        else:
+            log.info("Bild für Gesundheits-Hinweis Kamera %s nicht verfügbar (%s)", camera_id,
+                     f"HTTP {r.status_code}" if r is not None else "Zeitüberschreitung")
             return None
         rel = f"snapshots/{local_date_str()}/health_cam{camera_id}_{int(_now())}.jpg"
         full = media_path(rel)
