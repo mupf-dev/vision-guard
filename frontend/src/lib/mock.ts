@@ -784,12 +784,21 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
   if ((m = path.match(/^\/cameras\/(\d+)\/ask$/)) && method === "POST") {
     const cam = cameras.find((c) => c.id === Number(m![1]));
     const r: AskResult = { id: nextId++, camera_id: Number(m[1]), camera_name: cam?.name ?? "?", question: body?.question ?? "",
-      region: body?.region ?? null, answer: "Yes, there is a person near the door. (Mock)", yes_no: "yes", engine: "local",
+      region: body?.region ?? null, answer: "Yes, there is a person near the door. (Mock)", yes_no: "yes", engine: body?.engine === "cloud" ? "cloud" : "local",
       model: "moondream2-int4", ms: 1012, snapshot_url: null, ts: now(), source: "ui" };
     askLog.unshift(r);
     return json(r);
   }
-  if (path === "/ask") return json({ items: askLog, total: askLog.length });
+  if ((m = path.match(/^\/ask\/(\d+)$/)) && method === "DELETE") {
+    const i = askLog.findIndex((a) => a.id === Number(m![1]));
+    if (i >= 0) askLog.splice(i, 1);
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/ask") {
+    const cid = p.get("camera_id");
+    const items = cid ? askLog.filter((a) => a.camera_id === Number(cid)) : askLog;
+    return json({ items, total: items.length });
+  }
   if (path === "/sensors" && method === "GET") return json(mockSensors);
   if ((m = path.match(/^\/sensors\/(\d+)(\/history)?$/))) {
     const s = mockSensors.find((x) => x.id === Number(m![1]));
