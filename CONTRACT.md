@@ -1406,6 +1406,9 @@ Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
   - Referenzbilder (`POST /sensors/{id}/references`) speichern das ganze aktuelle Kamerabild
     (`sensors/ref/sensor{id}_{state}_{ms}.jpg`); der Worker skaliert es auf die Detect-Auflösung und schneidet den
     Bereich selbst aus. `sensor_references.embedding` bleibt `NULL`.
+  - `fill`: Ähnlichkeit je Stufe = 0,5 × DINOv2-Kosinus + 0,5 × Farbähnlichkeit einer 16×16-Miniatur (DINOv2 allein
+    trennte gleichförmige Flächen nicht: „halb“ lag näher an „voll“); `value` = Softmax-gewichtetes Mittel (T 0,02)
+    der Stufen 1/0,5/0, mindestens zwei Stufen nötig. `reference`: P(an) = Sigmoid((cos_on − cos_off)/0,02).
   - `POST /sensors/{id}/evaluate` bewertet sofort **ohne** Hysterese (letzte Worker-Messung, neu zählen bzw.
     Bildmodell fragen).
   - `unknown` (deaktiviert, Kamera aus, keine Messwerte seit `max(5 × interval_s, 120 s)`, Referenzen fehlen,

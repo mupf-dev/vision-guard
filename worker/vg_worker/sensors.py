@@ -48,7 +48,17 @@ BLINK_TAP_S = 0.2           # Abtastung, solange ein Blink-Sensor aktiv ist (Det
 VLM_CHANGE_EVERY_S = 15.0   # Änderungsmaß für vlm-Sensoren
 SIM_T = 0.02                # Temperatur für P(an) bzw. Füllstand aus Kosinus-Ähnlichkeiten
 FILL_LEVELS = {"full": 1.0, "half": 0.5, "empty": 0.0}
+FILL_DINO_W = 0.5           # Anteil DINOv2 an der Füllstand-Ähnlichkeit (Rest: Farb-Miniatur)
 THUMB = 32
+
+
+def _thumb(img: np.ndarray) -> np.ndarray:
+    """16×16-Farbminiatur (leicht weichgezeichnet) für die Füllstand-Ähnlichkeit."""
+    return cv2.resize(cv2.GaussianBlur(img, (5, 5), 0), (16, 16), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
+def _pix_sim(a: np.ndarray, b: np.ndarray) -> float:
+    return 1.0 - float(np.abs(a - b).mean()) / 255.0
 
 
 class _Runtime:
@@ -71,7 +81,7 @@ class SensorEngine:
         self.lock = threading.Lock()
         self.cams: dict[int, list[dict]] = {}
         self.rt: dict[int, _Runtime] = {}
-        self.refs: dict[tuple, np.ndarray] = {}     # (ref_id, region, w, h) → Embedding
+        self.refs: dict[tuple, tuple] = {}          # (ref_id, region, w, h) → (Embedding, Farb-Miniatur)
         self._registered = False
         self.done: deque = deque(maxlen=5000)       # (ts, ms, n)
         self._warned: dict[str, float] = {}
@@ -239,8 +249,8 @@ class SensorEngine:
         return round(d, 4)
 
     # ------------------------------------------------------------------ DINOv2
-    def _ref_embeddings(self, s: dict, w: int, h: int) -> dict[str, list[np.ndarray]]:
-        out: dict[str, list[np.ndarray]] = {}
+    def _ref_embeddings(self, s: dict, w: int, h: int) -> dict[str, list[tuple]]:
+        out: dict[str, list[tuple]] = {}
         region = tuple(tuple(map(float, p)) for p in (s.get("region") or []))
         todo = []
         for r in s.get("references") or []:
@@ -273,9 +283,9 @@ class SensorEngine:
                 states.append(r["state"])
             if crops:
                 embs = self.pet.embed_batch(crops)
-                for key, st, e in zip(keys, states, embs):
-                    self.refs[key] = e
-                    out.setdefault(st, []).append(e)
+                for key, st, e, cr in zip(keys, states, embs, crops):
+                    self.refs[key] = (e, _thumb(cr))
+                    out.setdefault(st, []).append(self.refs[key])
         return out
 
     def _embed(self, jobs: list[tuple[dict, dict, np.ndarray]], w: int, h: int) -> None:
@@ -286,13 +296,20 @@ class SensorEngine:
             for _, entry, _ in jobs:
                 entry["value"] = None
             return
-        for (s, entry, _), e in zip(jobs, embs):
+        for (s, entry, crop), e in zip(jobs, embs):
             try:
                 refs = self._ref_embeddings(s, w, h)
             except Exception as ex:  # noqa: BLE001
                 self._warn("refs", f"reference embedding failed: {ex}")
                 continue
-            sims = {st: float(max(float(np.dot(e, r)) for r in lst)) for st, lst in refs.items() if lst}
+            if s.get("kind") == "fill":
+                # Füllstand: DINOv2 allein trennt gleichförmige Flächen (Balken, Schüttgut) schlecht – je zur
+                # Hälfte mit der Farbähnlichkeit einer 16×16-Miniatur mischen (W3-Test: halb ≠ voll erst damit)
+                th = _thumb(crop)
+                sims = {st: float(max(FILL_DINO_W * float(np.dot(e, r[0])) + (1 - FILL_DINO_W) * _pix_sim(th, r[1])
+                                      for r in lst)) for st, lst in refs.items() if lst}
+            else:
+                sims = {st: float(max(float(np.dot(e, r[0])) for r in lst)) for st, lst in refs.items() if lst}
             if s.get("kind") == "reference":
                 if "on" in sims and "off" in sims:
                     z = (sims["on"] - sims["off"]) / SIM_T

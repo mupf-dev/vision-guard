@@ -116,7 +116,8 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
   `GET /api/internal/cameras` (`sensors`, Arten `brightness|blink|reference|fill`, dazu `vlm` nur fürs Änderungsmaß).
 * Messung im Polygon auf dem Detect-Frame: `brightness` = mittlere Luma 0..1; `blink` = Std.-Abw. der Helligkeit über
   `window_s` (Abtastung ≈ 5/s, solange ein Blink-Sensor aktiv ist); `reference`/`fill` = DINOv2 (geteiltes Tiermodell,
-  wird bei Bedarf geladen) gegen Referenzbilder → P(an) bzw. Füllstand 0..1 (Softmax-gewichtete Stufen 1/0,5/0).
+  wird bei Bedarf geladen) gegen Referenzbilder → P(an) bzw. Füllstand 0..1 (Softmax-gewichtete Stufen 1/0,5/0;
+  beim Füllstand je zur Hälfte mit der Farbähnlichkeit einer 16×16-Miniatur gemischt).
   Referenzbilder (`sensors/ref/…`, ganzes Kamerabild) werden auf die Detect-Auflösung skaliert, der Bereich wird
   ausgeschnitten, Embeddings je Referenz + Bereich gecacht.
 * `occluded`: Personen-Boxen bedecken > 10 % des Bereichs → die Messung zählt nicht. `change`: Abweichung eines
