@@ -7,6 +7,9 @@
 --pose / --gestures schalten die Pose-Stufe (C1: Haltung, D1: Gesten) für alle Kameras ein (Lasttest W2), z. B.
     python -m vg_worker.selftest rtsp://testcam:8554/cam3 --pose --seconds 120
 
+--reid schaltet die Personen-Wiedererkennung (C2) für alle Kameras ein; /api/internal/reid beantwortet eine
+In-Memory-Galerie (Kosinus ≥ 0,70), gezählt werden Aufrufe, Verknüpfungen und neue Einträge (Lasttest W4).
+
 --inventory schaltet die Inventar-Pipeline (Gegenstände) für die erste Kamera ein, z. B.
     python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 --inventory --seconds 60
 
@@ -47,6 +50,7 @@ def main():
     ap.add_argument("--history", action="store_true", help="Zeitmaschine (B1) auf allen Kameras")
     ap.add_argument("--history-interval", type=float, default=30.0)
     ap.add_argument("--history-tiling", action="store_true")
+    ap.add_argument("--reid", action="store_true", help="Wiedererkennung über Kameras (C2) auf allen Kameras")
     ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -148,7 +152,28 @@ def main():
             db[kind].append((idc[0], emb))
             return {"identity_id": idc[0], "display_name": f"{kind} #{idc[0]}", "name": None, "score": best[1], "is_new": True}
 
-    p = Pipeline(publish, identify)
+    reid_db: list[tuple[str, np.ndarray]] = []
+    reid_stats = Counter()
+
+    def reid(body: dict) -> dict:
+        # C2: Fake der Backend-Galerie (nur RAM, wie im Backend)
+        emb = np.asarray(body["embedding"], dtype=np.float32)
+        assert abs(float(np.linalg.norm(emb)) - 1.0) < 1e-2, "reid embedding not normalized"
+        reid_stats["calls"] += 1
+        best, best_s = None, -1.0
+        for key, e in reid_db:
+            sc = float(np.dot(e, emb))
+            if sc > best_s:
+                best, best_s = key, sc
+        if best is not None and best_s >= 0.70:
+            reid_stats["linked"] += 1
+            return {"presence_key": best, "identity_id": None, "score": best_s, "is_new": False, "identity": None}
+        key = f"p-{len(reid_db):04d}"
+        reid_db.append((key, emb))
+        reid_stats["new"] += 1
+        return {"presence_key": key, "identity_id": None, "score": max(best_s, 0.0), "is_new": True, "identity": None}
+
+    p = Pipeline(publish, identify, reid)
     t0 = time.time()
     p.load_detector()
     print(f"detector loaded in {time.time() - t0:.1f}s: {p.detector_status}")
@@ -163,7 +188,7 @@ def main():
                          "pet_recognition": not a.no_pet,
                          "pose_enabled": a.pose or a.gestures, "gesture_enabled": a.gestures,
                          "history_enabled": a.history, "history_interval_s": a.history_interval,
-                         "history_tiling": a.history_tiling,
+                         "history_tiling": a.history_tiling, "reid_enabled": a.reid,
                          "zones": [{"id": "left", "name": "links", "polygon": [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]}]})
     if a.inventory:
         if a.vocab:
@@ -198,6 +223,8 @@ def main():
                   f"gestures={[g['gesture'] for g in gestures_seen]}")
         if a.history:
             print(f"         history={p.history.perf()} status={p.history.status_text()}")
+        if a.reid:
+            print(f"         reid={p.reid.perf()} status={p.reid.status_text()} gallery={dict(reid_stats)}")
         if a.inventory:
             with lock:
                 inv = dict(inventory_last)
@@ -249,6 +276,9 @@ def main():
     if a.history:
         print(f"history perf      : {p.history.perf()}  status {p.history.status_text()}  "
               f"messages {counts.get('history', 0)} (extend {counts.get('history_extend', 0)})")
+    if a.reid:
+        print(f"reid perf         : {p.reid.perf()}  status {p.reid.status_text()}  gallery {dict(reid_stats)} "
+              f"entries {len(reid_db)}")
     if a.inventory:
         print(f"inventory perf    : {p.inventory.perf()}  changes {dict(inventory_changes)}")
         for cid_, m in inventory_last.items():

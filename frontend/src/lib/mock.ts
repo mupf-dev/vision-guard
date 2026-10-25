@@ -4,7 +4,7 @@
  */
 import type { AskResult, ShoppingItem, VirtualSensor } from "./types";
 import type {
-  Camera, Identity, Rule, Sample, Settings, VGEvent, DetObject, IdentityKind,
+  Camera, Identity, Rule, Sample, Settings, VGEvent, DetObject, IdentityKind, Presence,
 } from "./types";
 import type { InventoryHistoryEntry, InventoryItem, InventoryRelation, InventorySearchHit } from "./types";
 import type { ApiToken, TokenScope } from "./types";
@@ -49,6 +49,8 @@ const INV_OFF = {
   inventory_suppress: [] as Camera["inventory_suppress"],
   // W3
   vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
+  // W4
+  reid_enabled: false,
 };
 
 const cameras: Camera[] = [
@@ -146,8 +148,28 @@ let settings: Settings = {
   vlm_enabled: true, vlm_model: "moondream2-int4", vlm_idle_unload_s: 120, vlm_need_mb: 3000, vlm_cloud_model: null,
   retention_days_ask: 7, retention_days_sensors: 30, shopping_list_auto: true,
   retention_days_history: 14, history_min_change: 0.05, history_model: "siglip2-b16-256",
+  reid_ttl_min: 60, reid_match_threshold: 0.7, reid_assign_identity: true,
   llm_key_configured: { openai_compat: false, anthropic: false },
 };
+
+/* ---------- W4 C2: Anwesenheit ---------- */
+const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+let presence: Presence[] = [
+  { presence_key: "p-1a2b3c4d5e", label: "person", identity: { id: 12, kind: "face", display_name: "Anna", name: "Anna" },
+    source: "reid", confidence: 0.83, camera_id: 3, camera_name: "Wohnzimmer", room: "Wohnzimmer", zones: [], zone_names: [],
+    active: true, since: minsAgo(4), last_seen: minsAgo(0), event_id: null, thumb_url: faceSvg(12),
+    trail: [
+      { camera_id: 3, camera_name: "Wohnzimmer", since: minsAgo(4), last_seen: minsAgo(0), active: true, event_id: null, via: "reid" },
+      { camera_id: 1, camera_name: "Einfahrt", since: minsAgo(9), last_seen: minsAgo(6), active: false, event_id: null, via: "face" },
+    ] },
+  { presence_key: "p-9f8e7d6c5b", label: "person", identity: null, source: "none", confidence: 0, camera_id: 1, camera_name: "Einfahrt",
+    room: "Außen", zones: ["z1"], zone_names: ["Tor"], active: false, since: minsAgo(25), last_seen: minsAgo(21), event_id: null,
+    thumb_url: faceSvg(31), trail: [{ camera_id: 1, camera_name: "Einfahrt", since: minsAgo(25), last_seen: minsAgo(21), active: false, event_id: null, via: "track" }] },
+  { presence_key: "p-0c0ffee000", label: "cat", identity: { id: 21, kind: "pet", display_name: "Mimi", name: "Mimi" },
+    source: "pet", confidence: 1, camera_id: 3, camera_name: "Wohnzimmer", room: "Wohnzimmer", zones: [], zone_names: [],
+    active: false, since: minsAgo(50), last_seen: minsAgo(41), event_id: null, thumb_url: faceSvg(21, "pet"),
+    trail: [{ camera_id: 3, camera_name: "Wohnzimmer", since: minsAgo(50), last_seen: minsAgo(41), active: false, event_id: null, via: "face" }] },
+];
 
 /* ---------- W2: Rückfragen, Haustier-Tagebuch, Berichte ---------- */
 let reviews: ReviewRequest[] = [
@@ -631,6 +653,15 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     const by_label: Record<string, number> = {};
     for (const t of timeline) by_label[t.label] = (by_label[t.label] ?? 0) + t.count;
     return json({ by_label, by_camera: { 1: 142, 2: 87, 3: 0 }, timeline, identities_new: 3 });
+  }
+  // W4 C2: Anwesenheit (RAM-Galerie im Backend)
+  if (path === "/presence/status") return json({ entries: presence.length, active: presence.filter((x) => x.active).length, embeddings: 7, requests: 12, linked: 3, new: 4, adopted: 1, identity_given: 1, merged: 0, expired: 2 });
+  if (path === "/presence" && method === "DELETE") { presence = []; return json(undefined, 204); }
+  if (path === "/presence") {
+    const min = Number(p.get("minutes") ?? 60);
+    const labels = (p.get("label") ?? "").split(",").filter(Boolean);
+    return json(presence.filter((x) => (x.active || Date.now() - Date.parse(x.last_seen ?? "") <= min * 60_000)
+      && (!labels.length || labels.includes(x.label))));
   }
   if (path === "/system") {
     return json({

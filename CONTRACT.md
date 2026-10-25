@@ -1526,3 +1526,83 @@ Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
   `deleteSensor`, `evaluateSensor`, `sensorHistory`, `sensorReferences`, `addSensorReference`,
   `deleteSensorReference`, `shoppingList`, `addShoppingItem`, `updateShoppingItem`, `deleteShoppingItem`,
   `historySearch`, `historyFrames`, `historyStats`, `deleteHistory`; Mock-Routen in `lib/mock.ts`.
+
+## Nachträge: Welle 4 – C2 Person über mehrere Kameras (ReID, Anwesenheit)
+
+Verbindlich wie der Rest, rein additiv. Grundlage: `docs/plan/roadmap/c1-d1-c2-pose-gesten-reid.md` (C2),
+`00-wellenplan.md` (W4) und die Messung `reidtest` (`messungen.md` §11). Für Welle 4 gab es keinen Kickoff; diese
+Ergänzungen hat der Fach-Agent C2 minimal angelegt.
+
+### W4.A Datenbank und Settings
+
+| Tabelle | Spalte | Typ / Default |
+|---|---|---|
+| `cameras` | `reid_enabled` | boolean NOT NULL DEFAULT false |
+
+Keine neue Tabelle: **Embeddings und Galerie existieren nur im RAM** (Worker: bis zum HTTP-Aufruf, Backend:
+`app/reid.py`). Nichts davon geht in die DB, auf die Platte, ins Log oder über MQTT.
+Settings (`GET/PUT /settings`): `reid_ttl_min` 60 (5..720), `reid_match_threshold` 0.70 (0.3..0.95),
+`reid_assign_identity` true (Identität über ReID an Events weitergeben, ab Schwelle + 0,1).
+Camera/`CameraIn`/`GET /api/internal/cameras`: zusätzlich `reid_enabled` (PUT ohne das Feld lässt es unverändert).
+
+### W4.B Worker → Backend
+
+- Nur Kameras mit `reid_enabled`. Je bestätigtem Personen-Track höchstens alle 3 s und höchstens 5 Embeddings;
+  nur wenn die Box im Detect-Bild ≥ 128 px hoch, höher als breit, nicht am Rand abgeschnitten, nicht `lying` und
+  nicht zu > 25 % von einer anderen Person überdeckt ist. Modell OSNet x0_25 (MSMT17, ONNX, 512-d, L2-normiert),
+  Standard auf der **CPU** (`VG_REID_DEVICE=cuda` optional). `models.reid` in `vg/internal/system`
+  (`off|loading|ready (…)|error: …`), `perf.reid = {embeds_per_min, runs_per_min, ms, skipped, cameras, sent,
+  linked, new, errors}`. Bei einer GPU-Lease rechnet ReID (falls `cuda`) auf der CPU weiter.
+- `POST /api/internal/reid {camera_id, track_id, embedding:[512 float], quality, ts}` →
+  `{presence_key, identity_id|null, score, is_new, identity:{id,display_name,name,kind}|null,
+  identity_source:"reid"|"face"|null}`. `identity` ist nur gesetzt, wenn die Identität über ReID weitergegeben wird
+  (`score ≥ reid_match_threshold + 0,1`, `reid_assign_identity`, Eintrag mit Gesichts-Identität, Track ohne eigene).
+- Der Worker setzt daraufhin am Track `attributes.presence_key` und – nur ohne eigene Identität – `identity` mit
+  `attributes.identity_source:"reid"`. Erkennt der Worker später selbst ein Gesicht, gilt dieses
+  (`identity_source` wird `"face"`). Track-`update` wie bei jeder Attributänderung; Events übernehmen
+  `attributes.presence_key`/`identity_source` und die Identität wie gewohnt.
+
+### W4.C Galerie und Abgleich (Backend, `app/reid.py`)
+
+- Einträge `presence_key` (`"p-" + 10 Hex`, zufällig) mit ≤ 10 Embeddings, verknüpften Tracks, Identität
+  (nur aus Gesicht/Tier, nie aus ReID), letzter Kamera. Track-Schritte kommen über `events.on_track` für die Labels
+  `person`, `dog`, `cat` (auch ohne ReID: Eintrag je Identität bzw. je Track).
+- Abgleich: Kosinus, Maximum über die Embeddings eines Eintrags. Kandidaten nur ohne **gleichzeitig aktiven anderen
+  Track** und ohne widersprechende Identität; verknüpft ab `reid_match_threshold`. Verknüpft wird nur, solange der
+  Track allein in seinem Eintrag steht (danach kommen weitere Embeddings nur hinzu).
+- Gesicht hat Vorrang: Tracks mit eigener Identität (Gesicht/Tier) werden nie per ReID verknüpft, sie gehören zum
+  Eintrag ihrer Identität. Bekommt ein per ReID verknüpfter Track nachträglich eine eigene Identität, wird er samt
+  Embeddings in den Eintrag dieser Identität verschoben (der bisherige Eintrag wird **nicht** benannt) – außer die
+  Verknüpfung lag bei ≥ `reid_match_threshold + 0,1`, dann bekommt der Eintrag die Identität. Gründet ein
+  Track mit eigener Identität einen Eintrag, trägt der Eintrag diese Identität; dieselbe Identität in zwei Einträgen
+  → zusammenführen; widersprechende Identität → Track wird herausgelöst.
+- Umgekehrte Richtung: Ein Track mit eigener Identität übernimmt einen **anonymen** Eintrag ohne aktiven Track, wenn
+  sein Embedding ab `reid_match_threshold + 0,1` passt (z. B. Person zuerst von hinten gesehen, dann mit Gesicht).
+- Verfall: Einträge ohne aktiven Track `reid_ttl_min` nach dem letzten Sehen (samt Embeddings). Embeddings von
+  Kameras, deren `reid_enabled` abgeschaltet wurde, werden binnen 5 s verworfen. Backend-Neustart = leere Galerie.
+  `presence_key` in alten Events ist danach nur noch eine Kennung ohne Bezug.
+
+### W4.D REST, WebSocket, MCP
+
+```jsonc
+// Presence (GET /api/presence?minutes=60&label=person,dog,cat → Presence[], aktive zuerst, dann last_seen absteigend)
+{ "presence_key": "p-1a2b3c4d5e", "label": "person",
+  "identity": { "id": 12, "kind": "face", "display_name": "Anna", "name": "Anna" } | null,
+  "source": "face|pet|reid|none",      // face/pet = eigene Erkennung des aktuellen Tracks, reid = über Kleidung
+  "confidence": 0.83,                  // reid: Score der Verknüpfung; face/pet: 1
+  "camera_id": 3, "camera_name": "Wohnzimmer", "room": "Wohnzimmer", "zones": ["z1"], "zone_names": ["Sofa"],
+  "active": true, "since": "...", "last_seen": "...", "event_id": "uuid" | null,
+  "thumb_url": "/media/crops/…jpg" | null,    // signiert mit ?signed=1
+  "trail": [ { "camera_id", "camera_name", "since", "last_seen", "active", "event_id", "score": 0.81 | null,
+               "via": "face|reid|track" } ] }
+```
+- `GET /api/presence/status` → `{entries, active, embeddings, requests, linked, new, adopted, identity_given,
+  merged, expired}` (nur Zähler). `DELETE /api/presence` → 204, leert die Galerie sofort (Scope `write`).
+- WS: `{"type":"presence","presence":Presence}` bei neuem Eintrag, Kamera-/Zonen-/Identitätswechsel, Track-Ende
+  (je Eintrag höchstens alle 2 s, Start/Ende sofort); `{"type":"presence","presence":{"presence_key","deleted":true
+  [,"merged_into"]}}` bei Verfall/Zusammenführung.
+- MCP `who_is_where(minutes=60)` liest `/presence?signed=1`: `{people:[{display_name, identity_id, kind, label,
+  presence_key, source, confidence, active, camera_id, camera_name, room, zones, since, last_seen, thumb_url}]}`,
+  Text mit „gerade sichtbar“ und „zuletzt gesehen vor … in …“.
+- Oberfläche: Seite `/anwesenheit` (`pages/Presence.tsx`), Kamera-Dialog „Personenanalyse“ → Schalter
+  „Wiedererkennung über Kameras“, Einstellungs-Karte `admin/ReidSettings.tsx`.

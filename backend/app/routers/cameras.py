@@ -51,7 +51,9 @@ OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "
                           # W2
                           "pose_enabled", "gesture_enabled", "inventory_label_min_scores", "inventory_suppress",
                           # W3
-                          "vlm_cloud_allowed", "history_enabled", "history_interval_s", "history_tiling")
+                          "vlm_cloud_allowed", "history_enabled", "history_interval_s", "history_tiling",
+                          # W4
+                          "reid_enabled")
 
 
 def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:

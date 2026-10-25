@@ -30,6 +30,7 @@ def reload() -> None:
                                  if isinstance(z, dict) and z.get("purpose")},
                 "pose_enabled": bool(c.pose_enabled),
                 "gesture_enabled": bool(c.gesture_enabled),
+                "reid_enabled": bool(c.reid_enabled),   # W4 (C2)
             }
             for c in rows
         }

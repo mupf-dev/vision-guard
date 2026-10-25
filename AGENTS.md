@@ -92,6 +92,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Frag die Kamera (lokales Bildmodell, GPU-Lease) | Dienst `vlm/` (Profil `vlm`, [vlm/README.md](vlm/README.md)), `backend/app/vlm.py`, `cloud_vlm.py`, `routers/ask.py`, `frontend/src/components/AskCamera.tsx` |
 | Virtuelle Sensoren, Vorräte, Einkaufsliste (A3+C4) | `worker/vg_worker/sensors.py`, `backend/app/sensors.py` (Hysterese, `vlm`-Fenster `VG_SENSOR_VLM_GAP_S`), `routers/sensors.py`, `frontend/src/pages/Supplies.tsx`, `pages/admin/Sensors.tsx`, `mcp/tools/sensors.py` |
 | Zeitmaschine (B1, SigLIP 2, pgvector) | `worker/vg_worker/history.py`, `backend/app/history.py`, `history_query.py` (deutsch→englisch), `routers/history.py`, `frontend/src/pages/History.tsx`, `mcp/tools/history.py` |
+| Person über mehrere Kameras / Anwesenheit (C2, OSNet auf der CPU, Galerie nur im RAM) | `worker/vg_worker/reid.py`, `backend/app/reid.py`, `routers/presence.py`, `frontend/src/pages/Presence.tsx`, `pages/admin/ReidSettings.tsx`, `mcp/tools/people.py`, Messung `worker/vg_worker/tests_feasibility/reidtest.py` |
 | Embedding-Dienst (geteiltes DINOv2, W2) | Worker `worker/vg_worker/embed.py`, Backend `backend/app/embed_client.py` |
 | Rückfragen „Bitte bestätigen“ (W2) | `backend/app/review.py`, `backend/app/routers/review.py`, `frontend/src/pages/Review.tsx` |
 | LLM-Client (optional, Standard aus) | `backend/app/llm_client.py`, Test-Server ohne Kosten `scripts/llm_mock.py` |

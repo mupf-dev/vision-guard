@@ -10,7 +10,7 @@ from .. import go2rtc, identity, settings_store
 from ..auth import require_internal
 from ..db import SessionLocal, get_db
 from ..models import Camera, Identity
-from ..schemas import IdentifyIn, IdentifyOut
+from ..schemas import IdentifyIn, IdentifyOut, ReidIn, ReidOut
 
 # Jeder interne Router hängt an require_internal (heute ohne Wirkung, später Worker-Key-Prüfung – D3).
 router = APIRouter(prefix="/api/internal", tags=["internal"], dependencies=[Depends(require_internal)])
@@ -79,6 +79,8 @@ def internal_cameras(db: Session = Depends(get_db)):
             "history_interval_s": c.history_interval_s if c.history_interval_s is not None else 30,
             "history_tiling": bool(c.history_tiling),
             "sensors": sensors_by_cam.get(c.id, []),
+            # W4 (C2): Personen-Wiedererkennung über Kameras
+            "reid_enabled": bool(c.reid_enabled),
         })
     return out
 
@@ -97,3 +99,24 @@ def _identify(body: IdentifyIn) -> dict:
 @router.post("/identify", response_model=IdentifyOut)
 async def identify_ep(body: IdentifyIn):
     return await run_in_threadpool(_identify, body)
+
+
+# ---------------------------------------------------------------- W4 (C2): Person über mehrere Kameras
+
+
+def _reid(body: ReidIn) -> dict:
+    from .. import reid
+    from ..events import processor
+    tr = processor.tracks.get((body.camera_id, body.track_id))
+    return reid.gallery.match(body.camera_id, body.track_id, body.embedding, body.quality, body.ts or 0.0,
+                              event_id=tr.event_id if tr is not None else None)
+
+
+@router.post("/reid", response_model=ReidOut)
+async def reid_ep(body: ReidIn):
+    """Embedding eines Personen-Tracks mit der RAM-Galerie abgleichen → presence_key (CONTRACT W4.C)."""
+    from fastapi import HTTPException
+    try:
+        return await run_in_threadpool(_reid, body)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e

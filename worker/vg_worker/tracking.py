@@ -286,6 +286,10 @@ class CameraTracker:
             tr = self.tracks.get(tid)
             if tr is None:
                 return
+            if identity and tr.attributes.get("identity_source") == "reid":
+                # W4 (C2): eigene Erkennung (Gesicht) hat Vorrang vor der über ReID weitergegebenen Identität
+                tr.attributes["identity_source"] = identity.get("kind") or "face"
+                tr.dirty_reason.add("attributes")
             if identity and identity != tr.identity:
                 tr.identity = identity
                 tr.dirty_reason.add("identity")
@@ -294,6 +298,24 @@ class CameraTracker:
                 if new != tr.attributes:
                     tr.attributes = new
                     tr.dirty_reason.add("attributes")
+
+    # ------------------------------------------------------------------ ReID (C2)
+    def set_reid(self, tid: int, presence_key: str, identity: dict | None = None):
+        """Antwort von /api/internal/reid übernehmen: `presence_key` als Attribut; eine über ReID weitergegebene
+        Identität nur, wenn der Track noch keine eigene hat (`identity_source: "reid"`)."""
+        with self.lock:
+            tr = self.tracks.get(tid)
+            if tr is None or tr.ended:
+                return
+            a = tr.attributes
+            if presence_key and a.get("presence_key") != presence_key:
+                a["presence_key"] = presence_key
+                tr.dirty_reason.add("attributes")
+            if identity and identity.get("id") is not None and tr.identity is None:
+                tr.identity = {"id": identity["id"], "display_name": identity.get("display_name"),
+                               "name": identity.get("name"), "kind": identity.get("kind") or "face"}
+                a["identity_source"] = "reid"
+                tr.dirty_reason.add("identity")
 
     # ------------------------------------------------------------------ Pose (C1/D1)
     def _lying_hold(self, tr: Track) -> bool:

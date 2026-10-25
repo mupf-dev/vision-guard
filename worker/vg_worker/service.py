@@ -37,6 +37,12 @@ class Backend:
         r.raise_for_status()
         return r.json()
 
+    def reid(self, body: dict) -> dict | None:
+        """W4 (C2): Embedding → presence_key (Backend-Galerie nur im RAM)."""
+        r = self.s.post(f"{settings.BACKEND_URL}/api/internal/reid", json=with_worker_id(body), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
     def identify(self, body: dict) -> dict | None:
         r = self.s.post(f"{settings.BACKEND_URL}/api/internal/identify", json=with_worker_id(body), timeout=15)
         r.raise_for_status()
@@ -56,7 +62,7 @@ class Service:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
-        self.pipeline = Pipeline(self.publish, self.backend.identify)
+        self.pipeline = Pipeline(self.publish, self.backend.identify, self.backend.reid)
 
     # ------------------------------------------------------------------ MQTT
     def publish(self, topic: str, payload: dict, qos: int = 0, retain: bool = False):

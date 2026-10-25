@@ -79,7 +79,8 @@ class CameraRuntime:
 
 
 class Pipeline:
-    def __init__(self, publish: Publish, identify_fn: Callable[[dict], dict | None]):
+    def __init__(self, publish: Publish, identify_fn: Callable[[dict], dict | None],
+                 reid_fn: Callable[[dict], dict | None] | None = None):
         self.publish = publish
         self.cams: dict[int, CameraRuntime] = {}
         self.lock = threading.RLock()
@@ -117,6 +118,10 @@ class Pipeline:
         self.history = HistoryEngine(publish, self.taps, self.gpu)
         self.lease.register("history", self.history.pause_gpu, self.history.resume_gpu)
         self.embed.siglip = self.history          # B1: vg/internal/embed mit model "siglip2" (lädt bei Bedarf)
+        # W4 (C2): Personen-Wiedererkennung über Kameras (OSNet, Standard CPU) → POST /api/internal/reid
+        from .reid import ReidEngine
+        self.reid = ReidEngine(reid_fn or (lambda body: None), lambda cid: self.cams.get(cid), self.gpu)
+        self.lease.register("reid", self.reid.pause_gpu, self.reid.resume_gpu)
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
@@ -146,6 +151,7 @@ class Pipeline:
         self.pose.stop()
         self.sensors.stop()
         self.history.stop()
+        self.reid.stop()
         self.taps.stop()
         self.lease.stop()
         with self.lock:
@@ -199,7 +205,7 @@ class Pipeline:
             self.pose.configure(list(wanted.values()))
         except Exception:  # noqa: BLE001
             log.exception("pose configuration failed")
-        for name, mod in (("sensors", self.sensors), ("history", self.history)):   # W3
+        for name, mod in (("sensors", self.sensors), ("history", self.history), ("reid", self.reid)):   # W3/W4
             try:
                 mod.configure(list(wanted.values()))
             except Exception:  # noqa: BLE001
@@ -287,6 +293,8 @@ class Pipeline:
                 self.publish(f"vg/internal/track/{c.id}", m, 1, False)
             if self.pose.wants(c.id):
                 self.pose.offer(c, f.ts, f.image)
+            if self.reid.wants(c.id):            # W4 (C2): gedrosselt, verwirft statt zu stauen
+                self.reid.offer(c, f.ts, f.image, touched)
             self._dispatch_identification(c, f, touched)
         except Exception:
             log.exception("post-processing camera %s failed", c.id)
@@ -411,6 +419,7 @@ class Pipeline:
         d["embed"] = self.embed.status()
         d["pose"] = self.pose.status_text()
         d["history"] = self.history.status_text()
+        d["reid"] = self.reid.status_text()
         return d
 
     def gpu_lease(self) -> dict | None:
@@ -423,11 +432,12 @@ class Pipeline:
         if not h:
             return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf(),
                     "health": self.health.perf(), "embed": self.embed.perf(), "pose": self.pose.perf(),
-                    "taps": self.taps.perf(), "sensors": self.sensors.perf(), "history": self.history.perf()}
+                    "taps": self.taps.perf(), "sensors": self.sensors.perf(), "history": self.history.perf(),
+                    "reid": self.reid.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
                 "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
                 "inventory": self.inventory.perf(), "health": self.health.perf(), "embed": self.embed.perf(),
                 "pose": self.pose.perf(), "taps": self.taps.perf(), "sensors": self.sensors.perf(),
-                "history": self.history.perf()}
+                "history": self.history.perf(), "reid": self.reid.perf()}
