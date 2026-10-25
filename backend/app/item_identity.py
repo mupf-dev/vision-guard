@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 import uuid
 from typing import Any, Optional
 
@@ -33,6 +34,8 @@ log = logging.getLogger("vg.item_identity")
 
 NO_MATCH: dict[str, Any] = {"identity_id": None, "display_name": None, "name": None, "score": 0.0, "is_new": False}
 LEARN_MARGIN = 0.10          # automatisch lernen erst ab Schwelle + 0,10
+LEARN_DUPLICATE = 0.95       # … aber nicht, wenn das Bild einem gespeicherten fast gleicht (keine Dubletten)
+LEARN_EVERY_S = 600.0        # … und höchstens ein automatisches Sample je Exemplar und 10 min
 ASK_BAND = 0.15              # [Schwelle − 0,15, Schwelle) → Rückfrage statt Zuordnung (W2.B)
 INVENTORY_CROP_MARGIN = 0.25  # Rand der Inventar-Crops im Worker (inventory._maybe_crop)
 EMBED_MARGIN = 0.10          # Rand des Worker-Embeddings beim Abgleich (inventory.ItemMatcher)
@@ -42,6 +45,7 @@ _lock = threading.RLock()
 # label → (Matrix [n,d] normiert, identity_ids [n], negative [n]) ; None = neu aufbauen
 _gallery: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 _summaries: Optional[dict[int, dict[str, Any]]] = None
+_last_learn: dict[int, float] = {}
 
 
 # ------------------------------------------------------------------ Caches
@@ -184,9 +188,13 @@ def identify_item(s: Session, req: Any) -> dict[str, Any]:
     if score >= thr and big_enough:
         ident.last_seen = utcnow()
         learned = False
-        if score >= thr + LEARN_MARGIN and not ident.learning_locked and req.crop_path:
+        now = time.time()
+        if (thr + LEARN_MARGIN <= score < LEARN_DUPLICATE and not ident.learning_locked and req.crop_path
+                and now - _last_learn.get(ident.id, 0.0) >= LEARN_EVERY_S):
             with _lock:
                 learned = _add_sample(s, ident, [float(x) for x in vec], None, req.crop_path, score)
+                if learned:
+                    _last_learn[ident.id] = now
         s.commit()
         if learned:
             changed(publish=False)   # nur Galerie neu; der Worker muss deshalb nicht neu laden

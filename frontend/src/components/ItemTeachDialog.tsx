@@ -218,8 +218,9 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
             {samples.isLoading ? <Loading /> : (
               <div className="chips">
                 {(samples.data ?? []).map((s) => (
-                  <div key={s.id} style={{ position: "relative", width: 84 }} title={s.negative ? "Gegenbeispiel (nicht dieses Exemplar)" : s.source === "upload" ? "Foto/Übernahme" : s.source === "review" ? "aus Rückfrage" : "automatisch gelernt"}>
-                    <Img src={s.image_url} className="thumb" />
+                  <div key={s.id} style={{ position: "relative", width: 84, height: 84, borderRadius: 6, overflow: "hidden", background: "var(--bg-4)" }}
+                    title={s.negative ? "Gegenbeispiel (nicht dieses Exemplar)" : s.source === "upload" ? "Foto/Übernahme" : s.source === "review" ? "aus Rückfrage" : "automatisch gelernt"}>
+                    <Img src={s.image_url} className="fill-img" />
                     {s.negative && <span className="badge bad" style={{ position: "absolute", left: 2, bottom: 2, fontSize: 10 }}>nein</span>}
                     <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ position: "absolute", right: 0, top: 0 }} onClick={() => removeSample(s)} aria-label="Bild entfernen"><X size={13} /></button>
                   </div>

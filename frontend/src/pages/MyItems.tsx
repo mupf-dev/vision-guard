@@ -76,13 +76,13 @@ export function MyItems({ onPickItem }: { onPickItem: (it: InventoryItem) => voi
                   <div className="meta" style={{ color: it?.visible ? "#4ade80" : undefined }}><Clock />
                     {it ? (it.visible ? "aktuell sichtbar" : `zuletzt gesehen ${fmtAgo(it.last_seen)}`) : "bisher von keiner Kamera zugeordnet"}
                   </div>
-                  <div className="row" style={{ marginTop: 8, gap: 6 }}>
-                    <span title="Lernsperre: erkennen ja, aber keine neuen Bilder automatisch speichern">
-                      <Switch checked={i.learning_locked} onChange={(v) => lock.mutate({ id: i.id, v })} label={<><Lock size={12} /> Lernen gesperrt</>} />
+                  <div className="row" style={{ marginTop: 8, gap: 4, flexWrap: "wrap" }}>
+                    <span title="Lernsperre: erkennen ja, aber keine neuen Bilder automatisch speichern" style={{ whiteSpace: "nowrap", fontSize: 12 }}>
+                      <Switch checked={i.learning_locked} onChange={(v) => lock.mutate({ id: i.id, v })} label={<span className="row" style={{ gap: 4 }}><Lock size={12} />Lernsperre</span>} />
                     </span>
                     <span className="spacer" />
                     <button className="btn btn-sm" onClick={() => setTeach({ identity: i })}><ImagePlus size={14} />Bilder</button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setDel(i)} aria-label="Gegenstand löschen"><Trash2 size={14} /></button>
+                    <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setDel(i)} aria-label="Gegenstand löschen" title="Löschen"><Trash2 size={14} /></button>
                   </div>
                 </div>
               </div>
