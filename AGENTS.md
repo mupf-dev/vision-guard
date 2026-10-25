@@ -70,7 +70,11 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | YouTube-Quellen (yt-dlp) | `backend/app/youtube.py`, Template `youtube` in `go2rtc/go2rtc.yaml` |
 | Kameras, go2rtc-Sync | `backend/app/routers/cameras.py`, `backend/app/go2rtc.py`, `backend/app/sync.py` |
 | Track → Event, Aktionen | `backend/app/events.py` |
-| Regel-Bedingungen, Templates, Webhooks | `backend/app/rules.py` |
+| Regel-Bedingungen, Templates, Webhooks | `backend/app/rules.py` (Registry `register_trigger`/`register_condition`) |
+| Bedingungs-Auswertung (Inventar, Wetter, Herkunft) | `backend/app/rule_conditions.py` |
+| Hinweise (Notifications), Push (ntfy/Pushover) | `backend/app/notifications.py`, `backend/app/push.py`, `backend/app/routers/notifications.py` |
+| Track-Hooks für Fachmodule | `backend/app/events.py::on_track` |
+| Kamera-Gesundheit (Backend) | `backend/app/health.py`, `state.set_camera_health` |
 | Identitätsabgleich | `backend/app/identity.py` |
 | Datenbankmodell | `backend/app/models.py` (`create_all`, keine Migrationen – Spalten nur additiv mit Default ändern) |
 | Kamera-Ingest (ffmpeg) | `worker/vg_worker/ingest.py` |
@@ -84,7 +88,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Zonen-Editor | `frontend/src/components/ZoneEditor.tsx` |
 | Admin-Seiten | `frontend/src/pages/admin/` |
 | nginx-Routen | `frontend/nginx.conf` |
-| MCP-Server (Tools für KI-Agenten) | `mcp/server.py`, Selbsttest `mcp/selftest.py` |
+| MCP-Server (Tools für KI-Agenten) | `mcp/server.py`, Tools je Thema `mcp/tools/<thema>.py`, Selbsttest `mcp/selftest.py` |
 
 Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](worker/README.md),
 [frontend/README.md](frontend/README.md).

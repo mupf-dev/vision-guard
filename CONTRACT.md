@@ -557,3 +557,200 @@ Abwärtskompatibel; mit einem einzelnen Worker ändert sich kein Verhalten. Hint
   `available`, `events`, `health`, `sensor`, `gesture`, `pets`, `notifications`, `report`, `review`, bekommt er
   das Suffix `_cam` (Kamera „Events“ → `{prefix}/events_cam/{label}`). Liste: `backend/app/util.py::RESERVED_SLUGS`,
   Funktion `camera_slug(name)`. Neue Themen-Topics hinter dem Präfix müssen dort ergänzt werden.
+
+## Nachträge: Welle 1 – Hinweise, Push, Veränderungen, Kamera-Gesundheit
+
+Verbindlich wie der Rest, rein additiv. Grundlage: `docs/plan/roadmap/00-wellenplan.md` (Abschnitt 2, W1) und die
+Entwürfe `a1-…`, `b2-…`, `c3-c4-c5-…`. Angelegt im Kickoff K1; Fach-Agenten (A1, B2, C5) ändern diesen Abschnitt,
+`db.py`, `models.py` und die Settings-Defaults nicht selbst.
+
+### W1.A Datenbank
+
+| Tabelle | Spalte | Typ / Default |
+|---|---|---|
+| `rules` | `trigger_options` | jsonb NOT NULL DEFAULT '{}' |
+| `rules` | `conditions` | jsonb NOT NULL DEFAULT '[]' |
+| `rules` | `condition_delay_s` | double precision NOT NULL DEFAULT 0 |
+| `cameras` | `health_enabled` | boolean NOT NULL DEFAULT true |
+
+Neue Tabellen (`create_all`): `notifications` (Modell `Notification`: id, ts, source, level, rule_id, rule_name,
+title, message, camera_id, event_id, item_ids jsonb, image_path, data jsonb, delivery jsonb, dedup_key) und
+`camera_health_log` (Modell `CameraHealthLog`: id, camera_id, type, start_ts, end_ts NULL, value NULL).
+`ADDITIVE_INDEXES`: `ix_inventory_history_camera_ts` auf `inventory_history (camera_id, ts)`.
+
+### W1.B Regel-Engine v2 (Registry)
+
+```jsonc
+// Rule (zusätzlich)
+{ ..., "trigger": "enter|leave|dwell|time",          // Registry rules.TRIGGERS (W2: posture, gesture; W3: sensor)
+  "trigger_options": {},                             // je Trigger; time: { "at": "HH:MM" } (lokal, Pflicht)
+  "conditions": [                                    // alle müssen erfüllt sein (UND), max. 20; Registry rules.CONDITIONS
+    { "type": "inventory", "labels": ["keys"], "state": "present|absent",
+      "camera_ids": [], "room": null, "zone_ids": [] },        // absent = kein passender Gegenstand present
+    { "type": "inventory_untouched", "labels": ["medicine"], "since": "06:00", "camera_ids": [], "zone_ids": [] },
+    { "type": "weather", "metric": "rain_probability", "min": 60, "hours": 12 },   // min 0..100, hours 1..48
+    { "type": "track_came_from", "zone_ids": ["z_flur"] } ],                    // nur bei Track-Triggern
+  "condition_delay_s": 0,                            // 0..600; Bedingungen erst nach dieser Zeit prüfen
+  "actions": [ ..., { "type": "push", "target": "handy" | null,   // id aus push_targets; null = alle aktiven Ziele
+                      "title": "{rule}", "message": "{items} liegt noch da",
+                      "priority": "low|default|high", "image": "snapshot|crop|none" } ] }
+```
+- Validierung über die Registry (`rules.validate_rule_parts`): unbekannter Trigger/Bedingungstyp, fehlende Optionen
+  oder `track_came_from` bei `time` → **422**. Gespeichert wird die normalisierte Form (Defaults ergänzt, `at` als
+  `HH:MM`). GET/POST/PUT `/rules` liefern immer `trigger_options`, `conditions`, `condition_delay_s`.
+- `trigger=time`: läuft ohne Track, erzeugt **kein Event**, sondern eine Notification (`source:"rule"`, Planung
+  zustandslos aus der DB, höchstens 1× je Tag und `at`; Tage aus `schedule.days`, `schedule.start/end` ohne Wirkung;
+  `camera_ids/labels/identity` ohne Wirkung; `cooldown_s` gilt pro Regel). Umsetzung A1.
+- Bedingungen ohne Auswertung oder mit Fehler gelten als **nicht erfüllt**. Wetter unbekannt → nicht erfüllt.
+- Neue Platzhalter (A1): `{items}` (deutsche Namen der passenden Gegenstände), `{item_place}` (z. B. „Flur,
+  Schlüsselbrett“), `{weather}` („70 % Regen ab 15 Uhr“); ohne passende Bedingung leer.
+- Aktion `push`: je Aktion **eine** Notification (`source:"rule"`, `level` = `alarm` bei `priority:"high"`, sonst
+  `info`) mit Push an `target`. Bild: `snapshot` = Snapshot dieser Regel (falls Aktion `snapshot` vorhanden),
+  sonst Event-Crop; `crop` = Ausschnitt des Gegenstands aus der Bedingung, sonst Event-Crop. Regeln mit
+  `conditions`, aber ohne `push`, erzeugen beim Auslösen eine Notification ohne Push (A1).
+- Tageslimit `push_max_per_rule_per_day` (0 = aus): weitere Notifications der Regel an diesem (lokalen) Tag werden
+  gespeichert und angezeigt, der Push wird übersprungen (`delivery[].status:"skipped"`).
+
+Python-API (`backend/app/rules.py`): `register_trigger(name, *, track_based, options_model, label_de)`,
+`register_condition(name, model, *, evaluate=None, track_only=False, label_de)` (erneuter Aufruf überschreibt bzw.
+reicht den Evaluator nach), `evaluate_conditions(rule, CondContext) -> CondResult`, `is_track_trigger(name)`.
+`CondContext{rule, now (UTC), camera_id, track, event_id}`, `CondResult{ok, ctx (Platzhalter), item_ids,
+image_path, reason}`. Schemas der W1-Bedingungen: `schemas.CondInventory`, `CondInventoryUntouched`,
+`CondWeather`, `CondTrackCameFrom`, `TimeTriggerOptions`. Evaluatoren registriert A1 in
+`backend/app/rule_conditions.py` (wird von `main.py` importiert).
+
+**Hook-API** (`backend/app/events.py`): `on_track(callback) -> off()`; `callback(TrackHook)` mit
+`TrackHook{phase:"start|update|end", camera_id, track_id, event_id, label, msg, track}` nach Event-Speicherung und
+Regelauswertung, auch bei nachträglich aufgelöster Identität (`phase:"update"`, `msg={"identity":…}`) und bei
+verwaisten Tracks (`end`). Läuft im Track-Thread unter `processor.lock`: kurz halten, eigene DB-Session; Fehler
+werden geloggt.
+
+### W1.C Notifications und Push
+
+```jsonc
+// Notification
+{ "id": 5, "ts": "...", "source": "rule|health|pet|review|report|sensor", "level": "info|warning|alarm",
+  "rule_id": 3 | null, "rule": "Schlüssel vergessen" | null, "title": "...", "message": "...",
+  "camera_id": 2 | null, "event_id": "uuid" | null, "item_ids": [17], "image_url": "/media/…" | null,
+  "data": { "pushed": true, … },                       // quellenspezifisch, z. B. health: {"type":"covered"}
+  "delivery": [ { "target": "handy", "ok": true, "status": "pending|sent|failed|skipped",
+                  "error": null | "HTTP 403: forbidden", "ts": "..." | null } ] }
+```
+- REST: `GET /notifications?source=&level=&rule_id=&camera_id=&since=&until=&limit=50&offset=0&signed=` →
+  `{items,total}`, neueste zuerst, `source`/`level` kommagetrennt; `GET /notifications/{id}`;
+  `DELETE /notifications/{id}` → 204.
+- WS: `{"type":"notification","action":"new|update|delete","notification":Notification}` (`update` = Zustellstatus
+  nachgetragen; `delete` nur `{"id"}`).
+- MQTT extern: `{prefix}/notifications` (QoS 1, nicht retained), Payload = Notification mit signierten URLs.
+- Python-API (`backend/app/notifications.py`): `create(*, source, title, message, level="info", rule_id, rule_name,
+  camera_id, event_id, item_ids, image_path, data, targets=None, push_enabled=True, priority="default",
+  dedup_key=None, dedup_s=0) -> dict | None`. Ziele: `targets=None` → bei `rule` alle aktiven Ziele, sonst
+  `notify_routes[source]`; Liste → genau diese; `[]`/`push_enabled=False` → kein Push. `dedup_key`+`dedup_s`:
+  innerhalb des Fensters keine zweite Meldung (Rückgabe `None`). Push läuft im Thread-Pool, nie im Aufrufer.
+- Push (`backend/app/push.py`, `send(target, PushMessage) -> {target, ok, status, error, ts}`): ntfy (JSON-Publish
+  auf die Server-Wurzel; mit Bild ohne `public_base_url` als Upload `PUT {server}/{topic}` mit RFC-2047-Headern;
+  Token als `Authorization: Bearer`), Pushover (`POST {server}/1/messages.json`, Bild als `attachment` ≤ 2,5 MB).
+  Timeout 10 s, 1 Wiederholung bei Netzwerkfehler/5xx/429. Ist `public_base_url` gesetzt, gehen Bilder als
+  signierter Link (`attach`) und `click` = `<public_base_url>/hinweise` hinaus. Zugangsdaten, Server-URL und Topic
+  erscheinen nie in Logs oder Fehlermeldungen.
+- `POST /settings/push_test {target?: id, config?: PushTarget, title?, message?}` → `{ok, error, target}`
+  (Scope `write`). `config` testet eine ungespeicherte Konfiguration; `"***"` darin wird durch den gespeicherten Wert
+  desselben Ziels (gleiche `id`) ersetzt. Unbekanntes `target` → 404.
+- Aufbewahrung: Notifications älter als `retention_days_notifications` werden gelöscht (Bilder sind Snapshots/Crops
+  und folgen deren Aufbewahrung).
+
+### W1.D Settings (zusätzlich)
+
+```jsonc
+{ ...,
+  "push_targets": [ { "id": "handy",            // ^[a-z0-9_-]{1,40}$, eindeutig; max. 20 Ziele
+      "type": "ntfy|pushover", "name": "Marcs Handy", "enabled": true,
+      "server": "https://ntfy.sh" | null,       // ntfy: Default https://ntfy.sh; Pushover: Default https://api.pushover.net
+      "topic": "vg-…" | null,                   // ntfy Pflicht (^[A-Za-z0-9_-]{1,64}$), nicht maskiert
+      "token": "***" | null,                    // ntfy Access-Token (optional)
+      "user_key": "***" | null, "app_token": "***" | null } ],   // Pushover Pflicht
+  "notify_routes": { "health": ["handy"], "pet": [], "review": [], "report": [], "sensor": [] },  // andere Schlüssel → 422
+  "push_max_per_rule_per_day": 3,               // 0..100, 0 = ohne Limit
+  "weather_location": { "lat": 50.11, "lon": 8.68 } | null,     // auf 2 Nachkommastellen gerundet; PUT {} → null
+  "retention_days_notifications": 30,           // 1..3650
+  "inventory_change_min_s": 120,                // 0..3600 (B2)
+  "health_alert_after_s": 60 }                  // 10..3600 (C5)
+```
+- `token`, `user_key`, `app_token` kommen in **allen** Antworten (`GET/PUT /settings`, `/api/internal/settings`) als
+  `"***"`. Ein `PUT` mit `"***"` behält den gespeicherten Wert des Ziels mit derselben `id`.
+- Geänderte Defaults (nach Messung W0, A1-Flackertest): `inventory_confirm_n` **3** (vorher 2),
+  `inventory_miss_m` **10** (vorher 3). Gilt für neue Installationen; gespeicherte Werte bleiben unverändert.
+
+### W1.E B2 „Was hat sich verändert?“ (Umsetzung B2)
+
+```jsonc
+// GET /api/inventory/changes?since=&until=&camera_id=&room=&label=&include_transient=0&signed=&limit=100
+// → InventoryChanges
+{ "since": "...", "until": "...", "summary": "Seit 07:00: 2 neu (…), 1 weg (…), 1 verschoben (…).",
+  "counts": { "appeared": 2, "disappeared": 1, "moved": 1, "uncertain": 0, "transient": 0 },
+  "changes": [ { "type": "appeared|disappeared|moved|uncertain|transient", "at": "...",
+                 "item": InventoryItem,
+                 "before": { "ts", "state", "camera_id", "bbox", "zones", "zone_names", "crop_url" } | null,
+                 "after":  { …wie before… } | null,
+                 "text": "Fernbedienung: vermutlich vom Tisch zum Sofa verschoben (Wohnzimmer)" } ] }
+```
+- `since` Pflicht: ISO-8601, relativ `3h`/`90m`/`2d`, `today` (lokal 00:00), `morning` (lokal 06:00),
+  `yesterday`; `until` Default jetzt. `since` älter als `retention_days_inventory` → 422 „Zeitraum außerhalb der
+  Aufbewahrung“. Route vor `/inventory/{id}` registrieren. Sortierung `disappeared`, `appeared`, `moved`,
+  `uncertain`, `transient`, je `at` absteigend.
+- Paarung: `disappeared` + `appeared` mit gleichem `label` und gleicher Kamera → ein `moved` (nächster Mittelpunkt
+  zuerst); ein Worker-Neustart erzeugt so kein Paar. Rauschfilter: kürzer als `inventory_change_min_s` `present`
+  → kein `appeared` (mit `include_transient=1` als `transient`). Modul `backend/app/inventory_diff.py`.
+
+### W1.F C5 Kamera-Gesundheit (Umsetzung C5)
+
+- MQTT intern `vg/internal/health/{camera_id}` (Worker, QoS 1, **retain**, alle 30 s und bei Änderung, mit
+  `worker_id`): `{camera_id, ts, problems:[{type:"dark|blur|covered|frozen|moved", since, value}],
+  metrics:{brightness, sharpness, sharpness_ref, diff, inliers, shift, rotation}, reference:{day:path|null,
+  night:path|null}}`. Referenzbilder unter `health/cam<N>_<day|night>.jpg` (640 px, über `util.store_media`).
+  Prüfung nur bei `health_enabled` (Feld zusätzlich in `GET /api/internal/cameras`) und `state == online`.
+- `vg/internal/cmd/{camera_id}`: neue Aktion `{action:"health_reference", request_id, mode:"day|night|auto"}` →
+  `cmd_result` wie gehabt (`path` = neues Referenzbild).
+- Backend: `mqtt_bus` leitet das Topic an `backend/app/health.py::handle(camera_id, msg)`; Status über
+  `state.set_camera_health(camera_id, health|None)`. Camera `status.health` = `{state:"ok|warn|unknown",
+  problems:[{type, since, text}]} | null` (read-only; `text` deutsch, z. B. „Verdeckt seit 14:02“), auch in
+  `/system.cameras[].status` und WS `camera_status`. Warnung erst nach `health_alert_after_s` Dauer, Entwarnung nach
+  60 s Normalzustand.
+- Camera (REST) zusätzlich `"health_enabled": true` (bei `PUT` nur geändert, wenn im Body).
+- REST: `GET /cameras/{id}/health?hours=168` → `{camera_id, enabled, current:{state, problems, metrics, ts}|null,
+  reference_urls:{day, night}, log:[{type, start_ts, end_ts, value}]}`; `POST /cameras/{id}/health/reference
+  {mode:"day|night|auto"}` → 202 `{request_id}` (Scope `write`).
+- Tabelle `camera_health_log` (eine Zeile je Problem-Episode); abgeschlossene Einträge älter als
+  `retention_days_events` werden gelöscht.
+- Meldung: Notification `source:"health"`, `level:"warning"`, Ziele aus `notify_routes.health`,
+  `dedup_key:"health:<camera_id>:<type>"`. MQTT extern `{prefix}/health/{camera_slug}` (retain):
+  `{"state":"ok|warn","problems":[…]}`.
+
+### W1.G MCP
+
+- Aufteilung: `mcp/server.py` (Server, Auth, App) und `mcp/tools/<thema>.py` mit `register(mcp)`; Helfer in
+  `mcp/tools/common.py` (`api`, `ok`, `fail`, `cameras`, `find_camera`, `compact_item`, `fmt_time`, `fmt_ago`,
+  `READ_ONLY`, `BackendError`). Neue Module in `tools/__init__.py::MODULES` eintragen. Bestehende Tools:
+  `inventory.py`, `cameras.py`, `people.py`.
+- Neue Tools (alle lesend, Scope `read`, URLs signiert):
+
+| Tool | Modul | Parameter | Rückgabe (`structuredContent`) |
+|---|---|---|---|
+| `list_notifications` | `notifications.py` (A1) | `since: str?` (wie B2-`since`), `limit: int = 10`, `source: str?` | `{total, items:[{id, ts, source, level, rule, title, message, camera_id, image_url}]}` aus `GET /notifications?signed=1` |
+| `what_changed` | `changes.py` (B2) | `since: str = "today"`, `until: str?`, `camera_id: int?`, `camera_name: str?`, `room: str?`, `limit: int = 30` | InventoryChanges (Items kompakt wie `find_object`) aus `GET /inventory/changes?signed=1`; Text = `summary` + 1 Zeile je Änderung |
+| `get_camera_health` | `health.py` (C5) | `camera_id: int?`, `camera_name: str?` | `{cameras:[{id, name, room, enabled, state, problems:[{type, since, text}]}]}` |
+
+### W1.H Oberfläche
+
+- Neue Seite **„Hinweise“** unter `/hinweise` (`pages/Notifications.tsx`, Hauptnavigation nach „Gegenstände“), WS-Toast
+  bei `notification/new` (Schalter wie Ereignis-Toasts).
+- Einstellungen → Karte „Benachrichtigungen“ (`pages/admin/NotificationSettings.tsx`): Push-Ziele inkl. Test,
+  Weiterleitung je Quelle, Tageslimit, Wetter-Standort, Aufbewahrung, `health_alert_after_s`.
+- Regeln: Aktion „Push“ (Ziel, Priorität, Bild, Titel/Text). Trigger „Zu einer Uhrzeit“ und Block „Nur wenn …“: A1.
+- Gegenstände: Reiter „Veränderungen“ (B2). Kameraverwaltung: Reiter „Zustand“, Ampel auf der Systemseite (C5).
+- Typen in `frontend/src/lib/types.ts`: `Trigger`, `TriggerOptions`, `RuleCondition`, `PushPriority`,
+  `VGNotification`, `NotificationMsg`, `NotificationSource`, `NotificationLevel`, `PushDelivery`, `PushTarget`,
+  `NotifyRoutes`, `WeatherLocation`, `PushTestInput/Result`, `InventoryChanges`, `InventoryChange(Snap|Type)`,
+  `CameraHealth`, `CameraHealthStatus`, `CameraHealthLogEntry`, `HealthProblemType`; API in `lib/api.ts`:
+  `notifications`, `notification`, `deleteNotification`, `pushTest`, `inventoryChanges`, `cameraHealth`,
+  `setHealthReference`; Mock-Routen in `lib/mock.ts`.
