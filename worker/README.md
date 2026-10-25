@@ -125,6 +125,22 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 * `vg/internal/sensor/{id}` (QoS 0) je Messung, `vg/internal/system.perf.sensors = {per_min, ms}`. CPU ≈ 1 ms je
   Messung, kein zusätzliches VRAM (DINOv2 ist mit der Tiererkennung geteilt; ohne Tiererkennung ≈ 0,1 GB).
 
+## Zeitmaschine (B1)
+
+* Nur auf Kameras mit `history_enabled`: Frame-Tap-Abnehmer `history` (eigener Thread, analysierter Detect-Frame,
+  höchstens `VG_MAX_FRAME_WIDTH` breit, kein zusätzliches ffmpeg) alle `history_interval_s` (5–600 s).
+* Modell **SigLIP 2 ViT-B/16-256** (`open_clip_torch==3.2.0`, eigene Dockerfile-Schicht; Gewichte einmalig nach
+  `/models/history`, ≈ 1,4 GB): Bildturm fp16 auf der GPU (≈ 0,25 GB, ≈ 11 ms je Bild, 5 Bilder ≈ 39 ms),
+  Textturm fp32 auf der CPU (≈ 30 ms je Anfrage, ≈ 1,1 GB RAM). Alternative `mobileclip2-s0` (512-d, mit Nullen
+  auf 768 aufgefüllt). Ladefehler → `models.history = "error: …"`, neuer Versuch nach 5 min, Detektion läuft weiter.
+* Gesamtbild + optional 4 Kacheln (2×2, 10 % Überlappung, `history_tiling`). Dedupe gegen das zuletzt gespeicherte
+  Bild der Kamera (größte Änderung über alle Kacheln < `history_min_change` → nur `extend`), spätestens alle 30 min
+  trotzdem ein neues Bild. Vorschau 256 px breit (`history/YYYY-MM-DD/cam{N}_{unix}.jpg`).
+* Textanfragen über `vg/internal/embed` mit `model:"siglip2"`; ohne aktive Kamera lädt das Modell bei der ersten
+  Anfrage (≈ 5 s, das Backend wiederholt dann kurz) und entlädt nach 10 min Leerlauf.
+* GPU-Lease: Bildturm wandert in den Arbeitsspeicher (kein Neuladen von Platte), Takte verfallen
+  (`perf.history.skipped`), danach zurück auf die GPU. `perf.history = {per_min, ms, skipped, stored_per_min, cameras}`.
+
 ## Track-Lebenszyklus
 
 * `start`: nach ≥ 3 Treffern mit `score ≥ min_score` (Label = score-gewichtete Mehrheit).

@@ -90,6 +90,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | nginx-Routen | `frontend/nginx.conf` |
 | MCP-Server (Tools für KI-Agenten) | `mcp/server.py`, Tools je Thema `mcp/tools/<thema>.py`, Selbsttest `mcp/selftest.py` |
 | Frag die Kamera (lokales Bildmodell, GPU-Lease) | Dienst `vlm/` (Profil `vlm`, [vlm/README.md](vlm/README.md)), `backend/app/vlm.py`, `cloud_vlm.py`, `routers/ask.py`, `frontend/src/components/AskCamera.tsx` |
+| Zeitmaschine (B1, SigLIP 2, pgvector) | `worker/vg_worker/history.py`, `backend/app/history.py`, `history_query.py` (deutsch→englisch), `routers/history.py`, `frontend/src/pages/History.tsx`, `mcp/tools/history.py` |
 | Embedding-Dienst (geteiltes DINOv2, W2) | Worker `worker/vg_worker/embed.py`, Backend `backend/app/embed_client.py` |
 | Rückfragen „Bitte bestätigen“ (W2) | `backend/app/review.py`, `backend/app/routers/review.py`, `frontend/src/pages/Review.tsx` |
 | LLM-Client (optional, Standard aus) | `backend/app/llm_client.py`, Test-Server ohne Kosten `scripts/llm_mock.py` |

@@ -27,6 +27,13 @@ RUN pip install --no-deps "ftfy==6.3.1" "regex==2024.11.6" \
       "clip @ https://github.com/ultralytics/CLIP/archive/7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40.tar.gz" \
  && python -c "import clip, ultralytics.nn.text_model; print('clip ok')"
 
+# B1 Zeitmaschine: SigLIP 2 über open_clip (messungen.md §5). Eigene Schicht, ohne Abhängigkeitsauflösung
+# (torch/timm/huggingface_hub/ftfy kommen aus den Schichten davor); transformers/tokenizers/sentencepiece für den
+# Gemma-Tokenizer des Textturms. Gewichte (~1,4 GB inkl. Textturm) einmalig nach /models/history.
+RUN pip install --no-deps "open_clip_torch==3.2.0" "transformers==4.57.6" "tokenizers==0.22.2" \
+      "sentencepiece==0.2.0" \
+ && python -c "import open_clip, transformers, tokenizers; print('open_clip ok', open_clip.__version__, transformers.__version__)"
+
 # cuDNN/cuBLAS from the torch wheels for onnxruntime-gpu
 ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cufft/lib:/opt/conda/lib/python3.11/site-packages/nvidia/curand/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:${LD_LIBRARY_PATH}
 

@@ -850,15 +850,18 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
     if (body?.done !== undefined) it.done_at = body.done ? now() : null;
     return json(it);
   }
-  if (path === "/history/stats") return json({ enabled: true, frames: 1234, vectors: 1234, thumb_bytes: 7_400_000, oldest: ago(86400 * 6), by_camera: { 1: 800, 2: 434 } });
+  if (path === "/history/stats") return json({ enabled: true, frames: 1234, vectors: 1234, thumb_bytes: 7_400_000, oldest: ago(86400 * 6), by_camera: { 1: 800, 2: 434 }, model: "siglip2-b16-256" });
   if (path === "/history/search") {
     const q = p.get("q") ?? "";
-    return json({ query: q, model: "ViT-B-16-SigLIP2-256", items: [
+    return json({ query: q, queries: [q, "red box"], model: "siglip2-b16-256", items: [
       { camera_id: 1, camera_name: "Einfahrt", room: null, start_ts: ago(7300), end_ts: ago(6900), best_ts: ago(7100), score: 71,
-        tile_bbox: null, thumb_url: null, frames: 9 },
+        tile_bbox: null, thumb_url: null, frames: 9, similarity: 0.142 },
+      { camera_id: 2, camera_name: "Garten", room: "Garten", start_ts: ago(90000), end_ts: ago(89000), best_ts: ago(89500), score: 44,
+        tile_bbox: [0.45, 0.45, 1, 1], thumb_url: null, frames: 3, similarity: 0.088 },
     ] });
   }
-  if (path === "/history/frames") return json({ items: [] });
+  if (path === "/history/frames") return json({ items: [7400, 7300, 7200, 7100, 7000, 6900].map((s) => ({ ts: ago(s), last_ts: ago(s - 60), thumb_url: null })) });
+  if (path === "/history" && method === "DELETE") return json({ deleted: 1234 });
   return null;
 }
 

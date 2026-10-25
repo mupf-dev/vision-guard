@@ -19,6 +19,8 @@ Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
 - **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
 - **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
 - **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse
+- **Zeitmaschine:** je Kamera zuschaltbar ein Bildgedächtnis (Bild-Embeddings + 256-px-Vorschau, kein Video);
+  Suche mit eigenen Worten („roter Karton im Flur“) liefert Zeiträume mit Filmstreifen – auch per MCP
 
 ## Architektur
 
@@ -117,6 +119,7 @@ damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten könne
 | `list_cameras()` | Kameras mit Raum und Zustand |
 | `get_camera_snapshot(camera_id? \| camera_name?)` | aktuelles Kamerabild (JPEG, max. 1600 px breit) |
 | `who_is_where()` | welche Personen/Tiere gerade wo zu sehen sind |
+| `search_history(query, since?, until?, camera?, limit?, include_image?)` | Zeitmaschine: „Am Di 14:03–14:21 in Raum Flur, Übereinstimmung 71 %“ mit signierter Vorschau |
 
 Beispiel Claude Code:
 

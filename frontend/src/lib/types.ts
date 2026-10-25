@@ -1025,10 +1025,14 @@ export interface HistoryEpisode {
   tile_bbox: [number, number, number, number] | null;
   thumb_url: string | null;
   frames: number;
+  /** roher Kosinus Text↔Bild (Diagnose) */
+  similarity?: number;
 }
 
 export interface HistorySearch {
   query: string;
+  /** tatsächlich kodierte Texte: Original + ggf. englische Fassung */
+  queries?: string[];
   model: string;
   items: HistoryEpisode[];
 }
@@ -1046,4 +1050,6 @@ export interface HistoryStats {
   thumb_bytes: number;
   oldest: string | null;
   by_camera: Record<string, number>;
+  /** Setting history_model */
+  model?: string;
 }

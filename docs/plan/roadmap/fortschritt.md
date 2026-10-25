@@ -407,3 +407,38 @@ ohne `allow_cloud` ausschließlich lokal; die UI zeigt die Modellwahl nur bei Ka
 0,6–2 s) – Abnahme „< 5 s“ gilt warm. Keine Fragen an echte `cam_3`-Bilder gestellt (Personen im Bild; bewusst nur
 Demo-Kameras). Worker-Neustart während einer Lease nicht nachgestellt (der Dienst fragt bei der nächsten Frage neu an).
 Gewichte liegen bisher nur im Test-Volume `vg-w0_models`; der erste Start im Haupt-Stack lädt ≈ 2 GB ins Volume `models`.
+
+## Welle 3 – B1 Haus-Zeitmaschine (Zweig `w3/b1-zeitmaschine`)
+
+- **Modell laut messungen.md §5 (Go):** SigLIP 2 ViT-B/16-256 (`open_clip_torch==3.2.0`, `transformers==4.57.6`,
+  `tokenizers==0.22.2`, `sentencepiece==0.2.0`, eigene Dockerfile-Schicht mit `--no-deps`). Bildturm fp16 auf der
+  GPU (+248 MiB torch), Textturm auf der CPU (≈ 30 ms/Anfrage). Laden aus dem Cache 4,8–5,9 s.
+- **Umgesetzt:** Worker `history.py` (Frame-Tap, Kacheln, Dedupe, 30-min-Auffrischung, Lease, `embed` mit
+  `siglip2`), Backend `history.py` + `history_query.py` (deutsch → englische Zusatzanfrage ohne LLM), Router
+  `/history/search|frames|stats`, `DELETE /history`, Aufbewahrung, Kamera löschen; MCP `search_history`; Seite
+  „Zeitmaschine“ mit Filmstreifen, Einstellungs-Karte mit Speicheranzeige/Modell/„Verlauf löschen“; `selftest --history`.
+- **Geprüft (Test-Stack `vg-b1`, Port 18091, danach `down -v`):**
+  - Roter Karton (synthetisches Testvideo: Flur aus `cam1`, Karton 240–540 s im 12-min-Loop, Kamera mit Kacheln,
+    Intervall 10 s): Kosinus mit Karton 0,13–0,16, ohne 0,03–0,07. „roter Karton“ → Platz 1, Zeitraum
+    03:59:39–04:04:33 UTC bei Wahrheit 03:59:37–04:04:37 (± 1 Intervall ✓), Score 78, Kachel unten links markiert.
+    „roter Karton im Flur“, „ein Paket“ ebenfalls Platz 1.
+  - „Person mit Rucksack“ auf `cam1`: bester Zeitraum Kosinus 0,074 (Score 37) > Median aller cam1-Bilder 0,048 ✓
+    (im Testvideo ist kein eindeutiger Rucksack; Kriterium formal erfüllt). „Auto auf der Straße“, „Fahrrad“ → cam2.
+  - MCP von außen (nginx, read-Key, danach widerrufen): `search_history` liefert signierte `thumb_url`, ohne
+    Signatur 401, mit 200 `image/jpeg`; `include_image` liefert das Vorschaubild; unbekannte Kamera → `isError`.
+  - Lasttest 16 Kameras (`selftest --replicate 8`, 75 s, Haupt-Stack lief parallel auf der GPU):
+    ohne Zeitmaschine 66,3 fps gesamt / Spitze 4219 MiB; mit (30 s) 64,1 fps / 4337 MiB (+118 MiB);
+    mit Kacheln und 5 s 64,6 fps / 4465 MiB (+246 MiB), `skipped` 0. fps −3 % (±5 % ✓), VRAM ≤ +0,5 GB ✓.
+  - GPU-Lease (`leasetest`): `unloaded: ["inventory","history"]`, danach Bildturm zurück, Speichern läuft weiter.
+  - Worker aus → Suche 503 „Textsuche derzeit nicht verfügbar“. `DELETE /history?camera_id=2` → 18 Bilder;
+    Aufbewahrung (`retention_days_history=1`, Zeit +2 Tage) löscht Zeilen und Dateien.
+  - `corepack pnpm build` grün, Screenshots (Desktop, Filmstreifen, Einstellungen, 390 px) ohne JS-Fehler.
+- **Entscheidungen:** Bildquelle = Frame-Tap (≤ 1920 px, kein zusätzliches ffmpeg) statt `KeyframeGrabber`.
+  Zeiträume nur aus Bildern nahe am besten Treffer der Kamera (Kosinus − 0,03), Lücke ≤ 2,5 × Intervall (2 × war
+  durch Taktschwankung zu knapp). Score = Kosinus [0; 0,20] → 0..100 (kalibriert am Testvideo). Englische
+  Zusatzanfrage per Wörterbuch statt LLM (kostenlos, standardmäßig an). Textturm bleibt geladen, solange eine Kamera
+  aktiv ist (RAM reichlich), sonst Entladen nach 10 min. CONTRACT W3.G nur additiv ergänzt.
+- **Offen:** Dedupe-Quote tagsüber mit echter Kamera (nachts 99 % laut W0) und Test mit `cam_3` – im Haupt-Stack
+  nach dem Merge `history_enabled` einschalten. Gewichte (≈ 1,4 GB) lädt der Worker beim ersten Start nach
+  `/models/history` (oder vorab aus `vg-w0_models` kopieren). Deutsche Anfragen mit seltenen Wörtern bleiben
+  schwächer (Wörterbuch erweitern oder optional LLM-Übersetzung über `llm_client`).

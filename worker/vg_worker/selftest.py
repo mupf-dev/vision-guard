@@ -44,6 +44,9 @@ def main():
                     help="Kamera-Gesundheit (C5) mitprüfen; Referenzbilder dann nur in einem temporären Ordner")
     ap.add_argument("--pose", action="store_true", help="Pose/Haltung (C1) auf allen Kameras")
     ap.add_argument("--gestures", action="store_true", help="Gesten (D1) auf allen Kameras (impliziert Pose)")
+    ap.add_argument("--history", action="store_true", help="Zeitmaschine (B1) auf allen Kameras")
+    ap.add_argument("--history-interval", type=float, default=30.0)
+    ap.add_argument("--history-tiling", action="store_true")
     ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -98,6 +101,8 @@ def main():
                         postures[attr["posture"]] += 1
             elif kind == "gesture":
                 gestures_seen.append(payload)
+            elif kind == "history" and payload.get("extend"):
+                counts["history_extend"] += 1
             elif kind == "detections":
                 max_objects[payload["camera_id"]] = max(max_objects[payload["camera_id"]], len(payload["objects"]))
             elif kind == "cmd_result":
@@ -157,6 +162,8 @@ def main():
                          "face_recognition": not a.no_face, "plate_recognition": not a.no_plate,
                          "pet_recognition": not a.no_pet,
                          "pose_enabled": a.pose or a.gestures, "gesture_enabled": a.gestures,
+                         "history_enabled": a.history, "history_interval_s": a.history_interval,
+                         "history_tiling": a.history_tiling,
                          "zones": [{"id": "left", "name": "links", "polygon": [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]}]})
     if a.inventory:
         if a.vocab:
@@ -189,6 +196,8 @@ def main():
         if a.pose or a.gestures:
             print(f"         pose={p.pose.perf()} posture_updates={dict(postures)} lying_tracks={len(lying_tracks)} "
                   f"gestures={[g['gesture'] for g in gestures_seen]}")
+        if a.history:
+            print(f"         history={p.history.perf()} status={p.history.status_text()}")
         if a.inventory:
             with lock:
                 inv = dict(inventory_last)
@@ -237,6 +246,9 @@ def main():
         print(f"posture updates   : {dict(postures)}; lying tracks {len(lying_tracks)}: "
               f"{sorted(round(v, 1) for v in lying_tracks.values())}")
         print(f"gestures          : {len(gestures_seen)} {Counter(g['gesture'] for g in gestures_seen)}")
+    if a.history:
+        print(f"history perf      : {p.history.perf()}  status {p.history.status_text()}  "
+              f"messages {counts.get('history', 0)} (extend {counts.get('history_extend', 0)})")
     if a.inventory:
         print(f"inventory perf    : {p.inventory.perf()}  changes {dict(inventory_changes)}")
         for cid_, m in inventory_last.items():
