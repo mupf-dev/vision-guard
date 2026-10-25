@@ -29,12 +29,26 @@ def _compact(s: dict) -> dict:
     return {"id": s.get("id"), "name": s.get("name"), "kind": s.get("kind"), "camera_id": s.get("camera_id"),
             "camera_name": s.get("camera_name"), "room": s.get("room"), "state": s.get("state"),
             "state_text": s.get("state_text"), "value": s.get("value"), "since": s.get("since"),
-            "supply": s.get("supply"), "enabled": s.get("enabled"), "snapshot_url": s.get("snapshot_url")}
+            "supply": s.get("supply"), "enabled": s.get("enabled"), "snapshot_url": s.get("snapshot_url"),
+            # C4-VLM (W4): Messart des Bildmodells (yesno|count|fill) und letzte Modellantwort
+            "measure": _measure(s), "last_answer": s.get("last_answer")}
+
+
+def _measure(s: dict) -> Optional[str]:
+    if s.get("kind") == "vlm":
+        return str((s.get("params") or {}).get("measure") or "yesno")
+    if s.get("kind") == "inventory_count":
+        return "count"
+    if s.get("kind") == "fill":
+        return "fill"
+    return None
 
 
 def _line(s: dict) -> str:
     place = s.get("room") or s.get("camera_name") or ""
     text = s.get("state_text") or STATE_DE.get(s.get("state") or "", s.get("state") or "")
+    if s.get("value") is not None and s.get("state") != "unknown" and (s.get("measure") or _measure(s)) == "count":
+        text += f" ({round(float(s['value']))} Stück)"
     return f"- {s.get('name')} ({place}{', Vorrat' if s.get('supply') else ''}): {text}"
 
 
@@ -111,6 +125,8 @@ def register(mcp: MCPServer) -> None:
             text = (f"Sensor {s.get('name')} ({data['kind_de']}, {s.get('room') or s.get('camera_name')}): "
                     f"{s.get('state_text') or STATE_DE.get(s.get('state') or '', '')}"
                     + (f", zuletzt geprüft {fmt_ago(s.get('last_eval'))}" if s.get("last_eval") else "") + ".")
+            if s.get("last_answer"):
+                text += f"\nLetzte Antwort des Bildmodells: „{s['last_answer']}“"
             if changes:
                 text += "\nVerlauf (neueste zuerst): " + "; ".join(changes[:10])
             return ok(text, data)
