@@ -28,12 +28,13 @@ services:
       retries: 20
 
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2@sha256:860aeb5d63ce509508f6dcfb2bc8a1c1dd2bc60555b562b45ce90e52d8dabb0f   # R1: gepinnt (ACL-Datei-Prüfung kann sich in künftigen Versionen ändern)
     restart: unless-stopped
     ports:
-      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_PORT:-1883}:1884"   # R1: externer Listener (nur lesen), intern 1883
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl-extern.conf:/mosquitto/config/acl-extern.conf:ro
 
   go2rtc:
     image: alexxit/go2rtc:1.9.14
