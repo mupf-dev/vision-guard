@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import inventory_diff
 from .. import inventory_names as names
 from .. import settings_store
 from ..auth import require_user
@@ -137,6 +138,29 @@ def inventory_labels(db: Session = Depends(get_db)):
         out.append({"label": lb, "name_de": names.display_name(lb), "group": "", "prompts": [],
                     "synonyms": names.synonyms_for(lb, custom), "count_present": c[0], "count_total": c[1]})
     return out
+
+
+@router.get("/changes")
+def inventory_changes(
+    since: str = Query(..., description="ISO-8601, relativ (3h, 90m, 2d) oder today | morning | yesterday"),
+    until: Optional[str] = Query(None, description="wie since; Default jetzt"),
+    camera_id: Optional[int] = None,
+    room: Optional[str] = None,
+    label: Optional[str] = None,
+    include_transient: bool = False,
+    signed: bool = False,
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """„Was hat sich verändert?“ – neu, weg, verschoben, Stand unklar (CONTRACT W1.E). Muss vor `/{item_id}` stehen."""
+    try:
+        t_since = inventory_diff.parse_when(since)
+        t_until = inventory_diff.parse_when(until) if until else None
+        return inventory_diff.compute_changes(db, t_since, t_until, camera_id=camera_id, room=room,
+                                              labels=_csv(label) or None, include_transient=include_transient,
+                                              limit=limit)
+    except (inventory_diff.WhenError, inventory_diff.ChangesError) as e:
+        raise HTTPException(422, str(e)) from None
 
 
 def _get(db: Session, item_id: int) -> InventoryItem:
