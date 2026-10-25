@@ -53,13 +53,29 @@ def mask_settings(data: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+class SecretReuseError(ValueError):
+    """Ein maskiertes Geheimnis ("***") soll für ein Ziel mit geänderter Art/Server wiederverwendet werden."""
+
+
+def _norm_server(v: Any) -> str:
+    return str(v or "").strip().rstrip("/").lower()
+
+
 def unmask_target(new: dict[str, Any], stored: list[dict[str, Any]]) -> dict[str, Any]:
-    """Ersetzt "***" in einem Push-Ziel durch den gespeicherten Wert des Ziels mit derselben id."""
+    """Ersetzt "***" in einem Push-Ziel durch den gespeicherten Wert des Ziels mit derselben id.
+
+    Refinement 1: nur, wenn `type` und `server` unverändert sind – sonst könnte man ein gespeichertes Geheimnis
+    (ntfy-Token, Topic, Pushover-Schlüssel) an einen fremden Server schicken lassen (`push_test`). Dann
+    `SecretReuseError` (Router → 422)."""
     old = next((t for t in stored if t.get("id") == new.get("id")), None) or {}
     out = dict(new)
-    for k in PUSH_SECRET_FIELDS:
-        if out.get(k) == MASK:
-            out[k] = old.get(k)
+    masked = [k for k in PUSH_SECRET_FIELDS if out.get(k) == MASK]
+    if masked and old and (old.get("type") != out.get("type")
+                           or _norm_server(old.get("server")) != _norm_server(out.get("server"))):
+        raise SecretReuseError("Server oder Art des Push-Ziels geändert – Zugangsdaten (Token/Topic/Schlüssel) "
+                               "bitte neu eingeben")
+    for k in masked:
+        out[k] = old.get(k)
     return out
 
 

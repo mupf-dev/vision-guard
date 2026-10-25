@@ -377,7 +377,7 @@ def _default_vocab() -> list[InventoryVocabEntry]:
 
 # ---------- W1: Push-Ziele, Benachrichtigungs-Routen, Wetter
 
-PUSH_SECRET_FIELDS = ("token", "user_key", "app_token")
+PUSH_SECRET_FIELDS = ("token", "topic", "user_key", "app_token")   # R1: Topic ist bei ntfy.sh faktisch ein Passwort
 NOTIFY_SOURCES = ("rule", "health", "pet", "review", "report", "sensor")
 NOTIFY_ROUTE_SOURCES = ("health", "pet", "review", "report", "sensor")   # rule: Ziel steht in der Aktion push
 

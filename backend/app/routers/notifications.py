@@ -77,6 +77,8 @@ async def push_test(body: PushTestIn):
             target = PushTarget(**notifications.unmask_target(body.config, stored)).model_dump()
         except ValidationError as e:
             raise HTTPException(422, "; ".join(str(err.get("msg")) for err in e.errors())) from None
+        except notifications.SecretReuseError as e:
+            raise HTTPException(422, str(e)) from None
         target["enabled"] = True   # Test auch für (noch) deaktivierte Ziele
     elif body.target:
         target = next((t for t in stored if t.get("id") == body.target), None)

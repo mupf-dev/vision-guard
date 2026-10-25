@@ -300,19 +300,20 @@ _rate_lock = threading.Lock()
 _rate_hits: dict[tuple[str, str], list[float]] = {}
 
 
-def _rate_check(bucket: str, who: str, per_min: int) -> None:
+def _rate_check(bucket: str, who: str, per_min: int, window_s: float = 60.0) -> None:
     now = time.time()
     with _rate_lock:
-        hits = [t for t in _rate_hits.get((bucket, who), []) if now - t < 60.0]
+        hits = [t for t in _rate_hits.get((bucket, who), []) if now - t < window_s]
         if len(hits) >= per_min:
-            retry = max(1, int(60.0 - (now - hits[0])) + 1)
+            retry = max(1, int(window_s - (now - hits[0])) + 1)
             _rate_hits[(bucket, who)] = hits
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Zu viele Anfragen (max. {per_min}/min)",
+            unit = "min" if window_s <= 60.0 else f"{int(window_s // 60)} min"
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Zu viele Anfragen (max. {per_min}/{unit})",
                                 headers={"Retry-After": str(retry)})
         hits.append(now)
         _rate_hits[(bucket, who)] = hits
         if len(_rate_hits) > 5000:   # Speicher begrenzen (alte Zähler verwerfen)
-            for k in [k for k, v in _rate_hits.items() if not v or now - v[-1] > 60.0]:
+            for k in [k for k, v in _rate_hits.items() if not v or now - v[-1] > 3600.0]:
                 _rate_hits.pop(k, None)
 
 

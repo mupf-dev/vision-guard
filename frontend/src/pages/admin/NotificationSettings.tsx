@@ -28,7 +28,7 @@ function newTarget(existing: PushTarget[], type: PushTarget["type"]): PushTarget
 export function targetProblem(t: PushTarget): string | null {
   if (!ID_RE.test(t.id)) return "ID: nur a–z, 0–9, _ und -";
   if (!t.name.trim()) return "Name fehlt";
-  if (t.type === "ntfy" && !/^[A-Za-z0-9_-]{1,64}$/.test(t.topic ?? "")) return "Topic fehlt (Buchstaben, Ziffern, _ und -)";
+  if (t.type === "ntfy" && t.topic !== "***" && !/^[A-Za-z0-9_-]{1,64}$/.test(t.topic ?? "")) return "Topic fehlt (Buchstaben, Ziffern, _ und -)";
   if (t.type === "pushover" && (!t.user_key || !t.app_token)) return "User-Key und App-Token nötig";
   return null;
 }
@@ -70,7 +70,7 @@ function TargetEditor({ t, onChange, onRemove }: { t: PushTarget; onChange: (t: 
         <div className="field"><label>ID (für Regeln)</label><input className="input input-sm mono" value={t.id} onChange={(e) => onChange({ ...t, id: e.target.value.trim() })} /></div>
         {t.type === "ntfy" ? <>
           {field("server", "Server", "https://ntfy.sh")}
-          {field("topic", "Topic", "vg-langes-zufaelliges-wort")}
+          {field("topic", "Topic", "vg-langes-zufaelliges-wort", true)}
           {field("token", "Access-Token (optional)", "tk_…", true)}
         </> : <>
           {field("user_key", "User-Key", "u…", true)}
@@ -78,6 +78,7 @@ function TargetEditor({ t, onChange, onRemove }: { t: PushTarget; onChange: (t: 
         </>}
       </div>
       {problem && <span className="hint" style={{ color: "var(--warn)" }}>{problem}</span>}
+      {t.type === "ntfy" && <span className="hint">Gespeicherte Zugangsdaten (***) gelten nur für denselben Server – wer den Server ändert, gibt Topic und Token neu ein.</span>}
       {t.type === "ntfy" && (t.server ?? "").includes("ntfy.sh") && !t.token && (
         <span className="hint">Ohne Token ist ein Topic auf ntfy.sh öffentlich lesbar – langes, zufälliges Topic wählen oder eigenen Server nutzen.</span>
       )}

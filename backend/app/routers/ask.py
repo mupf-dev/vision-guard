@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import vlm
-from ..auth import require_read_limited, require_user
+from ..auth import _rate_check, require_read_limited, require_user
 from ..db import get_db
 from ..models import AskLog, Camera
 from ..util import safe_remove
@@ -20,6 +20,11 @@ from ..util import safe_remove
 router = APIRouter(prefix="/api", tags=["ask"])
 
 ASK_PER_MIN = 10
+# Refinement 1: jede lokale Frage hält die GPU-Lease bis zu vlm_idle_unload_s + 60 s und pausiert damit das Inventar.
+# Zusätzlich zum Limit je Key: global höchstens 20 Fragen/min und Fragen über API-Keys/MCP global höchstens
+# 12 je Stunde (≈ höchstens 36 min/h Inventar-Pause im ungünstigsten Fall; Oberfläche ausgenommen).
+ASK_GLOBAL_PER_MIN = 20
+ASK_TOKEN_PER_HOUR = 12
 
 
 class AskIn(BaseModel):
@@ -56,6 +61,9 @@ async def ask_camera(cam_id: int, body: AskIn, request: Request,
     if not c.enabled:
         raise HTTPException(409, "Kamera ist deaktiviert")
     p = getattr(request.state, "principal", None)
+    _rate_check("ask_global", "all", ASK_GLOBAL_PER_MIN)
+    if p is not None and p.kind == "token":
+        _rate_check("ask_tokens_hour", "all", ASK_TOKEN_PER_HOUR, window_s=3600.0)
     source = "api" if p is not None and p.kind == "token" else "ui"
     if request.headers.get("x-vg-source") == "mcp" and source == "api":
         source = "mcp"
