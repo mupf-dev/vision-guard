@@ -144,6 +144,19 @@ class Processor:
         return f
 
     @staticmethod
+    def _final_guard(tr: TrackState, ident: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """Identitäten 07 (ID.F): Hat das Backend für den Track schon eine *endgültige* Gesichtszuordnung
+        (`phase:"final"`), gewinnt sie gegen die Identität in späteren Track-Meldungen des Workers (die noch die
+        vorläufige tragen können). Ausnahme: endgültig „keine“ und die Meldung stammt aus ReID."""
+        from .identity import final_track_identity   # zyklischen Import vermeiden
+        has_final, fin = final_track_identity(tr.camera_id, tr.track_id)
+        if not has_final or not ident:
+            return ident
+        if fin is None:
+            return ident if (tr.attributes or {}).get("identity_source") == "reid" else None
+        return fin
+
+    @staticmethod
     def _valid_identity_id(s: Session, ident: Optional[dict[str, Any]]) -> Optional[int]:
         try:
             iid = int((ident or {}).get("id"))
@@ -316,10 +329,11 @@ class Processor:
         tr.best_score = max(tr.best_score, float(msg.get("best_score") or 0), tr.score)
         if "zones" in msg and msg.get("type") != "end":
             tr.set_zones(list(msg.get("zones") or []), now)
-        if msg.get("identity"):
-            tr.identity = msg["identity"]
         if msg.get("attributes"):
             tr.attributes.update(msg["attributes"])
+        msg_ident = self._final_guard(tr, msg.get("identity"))
+        if msg_ident:
+            tr.identity = msg_ident
         ev = s.get(Event, tr.event_id)
         if ev is None:
             return None
@@ -332,7 +346,7 @@ class Processor:
             if str(z) not in zones:
                 zones.append(str(z))
         ev.zones = zones
-        iid = self._valid_identity_id(s, msg.get("identity"))
+        iid = self._valid_identity_id(s, msg_ident)
         if iid is not None:
             ev.identity_id = iid
         if msg.get("attributes"):
@@ -747,6 +761,8 @@ class Processor:
                         return
                     data = self._emit(s, ev, "update")
                     tr = self.tracks.get((ev.camera_id, ev.track_id))
+                    if tr is not None and tr.event_id == ev.id and not data.get("identity") and tr.identity:
+                        tr.identity = None      # ID.F: endgültige Zuordnung hat die Identität entfernt
                     if tr is not None and tr.event_id == ev.id and data.get("identity"):
                         tr.identity = data["identity"]
                         self._evaluate(s, tr, {}, time.time(), phase="update")
