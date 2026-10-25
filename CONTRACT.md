@@ -725,6 +725,19 @@ werden geloggt.
 - Meldung: Notification `source:"health"`, `level:"warning"`, Ziele aus `notify_routes.health`,
   `dedup_key:"health:<camera_id>:<type>"`. MQTT extern `{prefix}/health/{camera_slug}` (retain):
   `{"state":"ok|warn","problems":[…]}`.
+- Ergänzungen der Umsetzung (C5, additiv): Worker-Nachricht zusätzlich `enabled` (false = Prüfung abgeschaltet, einmal
+  gesendet), `checked_ts`, bei `moved` je Problem `shift_x`/`shift_y` (Richtung, normiert); `metrics` zusätzlich
+  `shift_x, shift_y, shift_resp, base_resp, ncc, contrast, p95, saturation, flat_share, mode ("day"|"night")`.
+  `metrics.inliers` = Korrelationsantwort relativ zur gleitenden Basis (Phasenkorrelation statt ORB, Messung W0),
+  `metrics.rotation` = `null` (Drehung zeigt sich als eingebrochene Antwort → `moved`). Der Worker meldet einen
+  Befund erst nach zwei Prüfungen in Folge (10-s-Takt). `vg/internal/system.perf.health = {ms, cameras}`.
+  `GET /cameras/{id}/health`: `current.pending` = Befunde unter der Warnschwelle; `reference_urls` mit `?v=<mtime>`
+  (bei `signed=1` signiert). `POST …/health/reference` wartet bis 8 s und liefert zusätzlich `ok` (`null` = noch
+  keine Antwort), `error`, `path`; deaktivierte Kamera → 409. Ohne Worker-Meldung seit 120 s ist `state` `unknown`
+  (laufende Warnungen bleiben stehen). Bei Entwarnung zusätzlich Notification `level:"info"` („wieder in
+  Ordnung“), nur wenn zuvor gewarnt wurde; je Kamera/Art höchstens eine Warnung pro Stunde. Warnungen tragen ein
+  aktuelles Kamerabild (`snapshots/…/health_cam<N>_<ts>.jpg`). Externes Topic zusätzlich `camera_id, camera, ts`;
+  bei abgeschalteter Prüfung wird es geleert.
 
 ### W1.G MCP
 
