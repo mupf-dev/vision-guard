@@ -89,6 +89,10 @@ async def put_stream(client: httpx.AsyncClient, name: str, src: str) -> None:
 
 async def delete_stream(client: httpx.AsyncClient, name: str) -> None:
     r = await client.delete(f"{config.go2rtc_url}/api/streams", params={"src": name})
+    if r.status_code == 400 and ("read-only" in r.text or "not found" in r.text.lower()):
+        # Refinement 1: go2rtc löscht den Stream im Speicher und scheitert danach nur am Zurückschreiben der
+        # (bewusst read-only eingebundenen) go2rtc.yaml → Stream ist weg, kein Fehler
+        return
     if r.status_code >= 400 and r.status_code != 404:
         r.raise_for_status()
 

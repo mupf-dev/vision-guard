@@ -2,11 +2,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import REAL, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import REAL, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, SmallInteger, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+from .vector import HalfVec
 
 
 def utcnow() -> datetime:
@@ -35,6 +36,32 @@ class Camera(Base):
     pet_recognition: Mapped[bool] = mapped_column(Boolean, default=True)
     zones: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Inventar (Gegenstände) und Raum – Spalten auch in db.ADDITIVE_COLUMNS
+    room: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    inventory_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    inventory_interval_s: Mapped[float] = mapped_column(Float, default=3, server_default=text("3"))
+    inventory_labels: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    inventory_min_score: Mapped[float] = mapped_column(Float, default=0.35, server_default=text("0.35"))
+    inventory_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # W1 C5 Kamera-Gesundheit (Worker prüft dunkel/unscharf/verdeckt/eingefroren/verschoben)
+    health_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # Welle 2: Pose/Gesten (C1/D1), Schwellen je Label und Unterdrückungsflächen (D2)
+    pose_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    gesture_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    inventory_label_min_scores: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    inventory_suppress: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # Welle 3: Cloud-Fallback „Frag die Kamera“ (A2), Zeitmaschine (B1)
+    vlm_cloud_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    history_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    history_interval_s: Mapped[float] = mapped_column(Float, default=30, server_default=text("30"))
+    history_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Welle 4: Person über mehrere Kameras (C2, ReID) – Embeddings nur im RAM des Backends
+    reid_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # PTZ (ONVIF): Konfiguration als JSON (schemas.PtzConfig), Passwort nur hier
+    ptz_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    ptz: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    # Identitäten 07 (Paket B): Gesichter aus voller Auflösung (wirksam nur mit Setting face_fullres)
+    face_fullres: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
 
 
 class Rule(Base):
@@ -53,6 +80,13 @@ class Rule(Base):
     cooldown_s: Mapped[float] = mapped_column(Float, default=30)
     actions: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # W1 Regel-Engine v2 (Spalten auch in db.ADDITIVE_COLUMNS)
+    trigger_options: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    conditions: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    condition_delay_s: Mapped[float] = mapped_column(Float, default=0, server_default=text("0"))
+    # Welle 2 (C1): Eskalation – erneut auslösen, bis das Event quittiert/beendet ist
+    repeat_s: Mapped[float] = mapped_column(Float, default=0, server_default=text("0"))
+    repeat_max: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
 
 class Identity(Base):
@@ -66,6 +100,12 @@ class Identity(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Lernsperre: erkennen ja, keine neuen Samples automatisch speichern
+    learning_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Welle 2 (B4): Exemplar eines Gegenstands (kind="item") – Vokabular-Schlüssel
+    item_label: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # Identitäten 07 (Paket D): Schwelle je Person (0,25..0,45), null = globale Schwelle der Art
+    match_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     samples: Mapped[list["IdentitySample"]] = relationship(
         back_populates="identity", cascade="all, delete-orphan", passive_deletes=True
@@ -79,6 +119,8 @@ class Identity(Base):
             return f"Kennzeichen {self.plate_text or ''}".strip()
         if self.kind == "pet":
             return f"Tier #{self.auto_number}"
+        if self.kind == "item":
+            return f"Gegenstand #{self.auto_number}"
         return f"Person #{self.auto_number}"
 
 
@@ -91,6 +133,19 @@ class IdentitySample(Base):
     image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     quality: Mapped[float] = mapped_column(Float, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # per Merge mit Bildauswahl übernommen – wird beim Kürzen zuletzt verdrängt
+    manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Welle 2 (B4/D2): Negativbeispiel („das ist es NICHT“) und Herkunft auto|merge|upload|review
+    negative: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    source: Mapped[str] = mapped_column(String(16), default="auto", server_default=text("'auto'"))
+    # Identitäten 07 (Paket B/C): Bildmerkmale (Altdaten: null) – CONTRACT ID.A
+    face_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)        # px in Quellauflösung
+    yaw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)              # Grad
+    pitch: Mapped[Optional[float]] = mapped_column(Float, nullable=True)            # Grad
+    sharpness: Mapped[Optional[float]] = mapped_column(Float, nullable=True)        # Laplace-Varianz (roh)
+    day_night: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)      # day|night
+    source_res: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)     # main|detect
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     identity: Mapped[Identity] = relationship(back_populates="samples")
 
@@ -116,7 +171,318 @@ class Event(Base):
     clip_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     rules: Mapped[list] = mapped_column(JSONB, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # Welle 2 (C1): quittiert (stoppt Wiederholungen)
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     identity: Mapped[Optional[Identity]] = relationship(lazy="joined")
 
     __table_args__ = (Index("ix_events_cam_track", "camera_id", "track_id"),)
+
+
+class ApiToken(Base):
+    """API-Key für externe Clients (Bearer `vgt_<prefix>_<secret>`); gespeichert wird nur der HMAC-Hash."""
+    __tablename__ = "api_tokens"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    prefix: Mapped[str] = mapped_column(String(16), unique=True, index=True)  # "vgt_ab12cd34"
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)         # HMAC-SHA256 hex
+    scopes: Mapped[list] = mapped_column(JSONB, default=lambda: ["read"])    # ["read"] | ["read","write"]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class InventoryItem(Base):
+    """Gegenstandsgedächtnis: eine Zeile je Gegenstand (Kamera + Label + Ort), wird aktualisiert."""
+    __tablename__ = "inventory_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    label: Mapped[str] = mapped_column(String(64), index=True)
+    worker_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    worker_session: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    prompt: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    bbox: Mapped[list] = mapped_column(JSONB, default=list)        # normiert [x1,y1,x2,y2]
+    zones: Mapped[list] = mapped_column(JSONB, default=list)
+    state: Mapped[str] = mapped_column(String(16), default="present", index=True)  # present|missing|stale
+    relation: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Welle 2 (B4): zugeordnetes Exemplar (Identity kind="item"), Index über ADDITIVE_INDEXES
+    identity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    identity_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class InventoryHistory(Base):
+    """Verlauf je Gegenstand: bei Zustandswechsel, sonst höchstens alle 5 min."""
+    __tablename__ = "inventory_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), index=True)
+    camera_id: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String(64))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    state: Mapped[str] = mapped_column(String(16), default="present")
+    bbox: Mapped[list] = mapped_column(JSONB, default=list)
+    zones: Mapped[list] = mapped_column(JSONB, default=list)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class Notification(Base):
+    """Zentrale Sammelstelle aller proaktiven Meldungen (Regeln, Kamera-Gesundheit, später Tiere, Rückfragen …)."""
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    source: Mapped[str] = mapped_column(String(16), default="rule", index=True)   # rule|health|pet|review|report|sensor
+    level: Mapped[str] = mapped_column(String(16), default="info")                # info|warning|alarm
+    rule_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    rule_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    event_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    item_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)          # quellenspezifische Zusatzdaten
+    delivery: Mapped[list] = mapped_column(JSONB, default=list)      # [{target, ok, error, ts}]
+    dedup_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, index=True)
+
+
+class CameraHealthLog(Base):
+    """Zeitleiste der Kamera-Probleme (C5): eine Zeile je Problem-Episode."""
+    __tablename__ = "camera_health_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    type: Mapped[str] = mapped_column(String(16))          # dark|blur|covered|frozen|moved
+    start_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    end_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+# ------------------------------------------------------------------ Welle 2 (K2)
+
+
+class IdentityMerge(Base):
+    """Identitäten 07 (Paket A): Verlauf vollständiger Zusammenführungen – Grundlage für „Zurücksetzen“ (ID.C)."""
+    __tablename__ = "identity_merges"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    kind: Mapped[str] = mapped_column(String(8))
+    actor: Mapped[str] = mapped_column(String(16), default="user")                # user|bulk|nightly|review
+    src_id: Mapped[int] = mapped_column(Integer, index=True)
+    src_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    src_auto_number: Mapped[int] = mapped_column(Integer, default=0)
+    src_notes: Mapped[str] = mapped_column(Text, default="")
+    src_first_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    src_last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    src_learning_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    src_match_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    into_id: Mapped[int] = mapped_column(Integer, index=True)
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sample_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    event_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    nightly_report_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Prüfung 07: {name, notes, first_seen, last_seen} des Ziels vor dem Merge (None bei Altdaten)
+    dst_before: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+
+class NightlyReport(Base):
+    """Identitäten 07 (Paket D): Bericht eines Nachtlaufs (Probelauf oder Anwendung) – CONTRACT ID.H."""
+    __tablename__ = "nightly_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    period_key: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, unique=True)   # nightly:YYYY-MM-DD
+    mode: Mapped[str] = mapped_column(String(8), default="preview")               # preview|apply
+    trigger: Mapped[str] = mapped_column(String(8), default="manual")             # schedule|manual|apply
+    status: Mapped[str] = mapped_column(String(8), default="running")             # running|done|error
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary: Mapped[dict] = mapped_column(JSONB, default=dict)
+    actions: Mapped[list] = mapped_column(JSONB, default=list)
+    text: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applied_report_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReviewRequest(Base):
+    """D2: Rückfrage an den Nutzer („Ist das eine Fernbedienung?“) – Kern in review.py."""
+    __tablename__ = "review_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)       # inventory_label|inventory_identity|identity_match|…
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)   # open|yes|no|skipped|expired
+    dedup_key: Mapped[str] = mapped_column(String(200), index=True)
+    priority: Mapped[float] = mapped_column(Float, default=0)
+    question: Mapped[str] = mapped_column(Text, default="")
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    inventory_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    identity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_identity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bbox: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    correct_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    answered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    answer_source: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)   # ui|push|mcp|api
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class InventoryExample(Base):
+    """D2: Positiv-/Negativbeispiele je Label (spätere Few-shot-/visuelle Prompts)."""
+    __tablename__ = "inventory_examples"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label: Mapped[str] = mapped_column(String(64), index=True)
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bbox: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    positive: Mapped[bool] = mapped_column(Boolean, default=True)
+    embedding: Mapped[Optional[list[float]]] = mapped_column(ARRAY(REAL), nullable=True)
+    review_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PetVisit(Base):
+    """C3: Besuch eines Tiers in einer Zweck-Zone (Napf, Wasser, Klo)."""
+    __tablename__ = "pet_visits"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    identity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    label: Mapped[str] = mapped_column(String(32))
+    camera_id: Mapped[int] = mapped_column(Integer)
+    zone_id: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(16), index=True)    # food|water|litter
+    event_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    start_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    end_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_s: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class Report(Base):
+    """B3: Tagesbericht (daily) bzw. manuell erzeugter Bericht."""
+    __tablename__ = "reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), default="daily")          # daily|manual
+    period_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, unique=True)   # "daily:YYYY-MM-DD"
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    facts: Mapped[dict] = mapped_column(JSONB, default=dict)
+    text: Mapped[str] = mapped_column(Text, default="")
+    html: Mapped[str] = mapped_column(Text, default="")
+    generator: Mapped[str] = mapped_column(String(80), default="template")
+    delivery: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+# ------------------------------------------------------------------ Welle 3 (K3)
+
+
+class AskLog(Base):
+    """A2: beantwortete Frage an eine Kamera („Frag die Kamera“), Standbild unter ask/."""
+    __tablename__ = "ask_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    question: Mapped[str] = mapped_column(Text, default="")
+    region: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)         # normiert [x1,y1,x2,y2]
+    answer: Mapped[str] = mapped_column(Text, default="")
+    yes_no: Mapped[str] = mapped_column(String(8), default="unknown")            # yes|no|unknown
+    engine: Mapped[str] = mapped_column(String(8), default="local")              # local|cloud
+    model: Mapped[str] = mapped_column(String(100), default="")
+    ms: Mapped[float] = mapped_column(Float, default=0)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(8), default="ui")                 # ui|api|mcp|sensor
+    token_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class VirtualSensor(Base):
+    """A3+C4: Bereich + Art → Zustand (binary on|off, level ok|low|out) mit Hysterese."""
+    __tablename__ = "virtual_sensors"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    kind: Mapped[str] = mapped_column(String(20))      # brightness|blink|reference|inventory_count|fill|vlm
+    region: Mapped[list] = mapped_column(JSONB, default=list)                    # Polygon [[x,y],…] normiert
+    params: Mapped[dict] = mapped_column(JSONB, default=dict)
+    state_set: Mapped[str] = mapped_column(String(8), default="binary")         # binary|level
+    supply: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_vlm: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_s: Mapped[float] = mapped_column(Float, default=10)
+    vlm_max_age_s: Mapped[float] = mapped_column(Float, default=900)
+    change_threshold: Mapped[float] = mapped_column(Float, default=0.08)
+    confirm_n: Mapped[int] = mapped_column(Integer, default=2)
+    state: Mapped[str] = mapped_column(String(8), default="unknown")            # on|off|ok|low|out|unknown
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_eval: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_engine: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)   # cheap|local|cloud
+    last_vlm_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SensorHistory(Base):
+    """A3: Zustandsverlauf eines Sensors (bei jedem bestätigten Wechsel, sonst gedrosselt)."""
+    __tablename__ = "sensor_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sensor_id: Mapped[int] = mapped_column(ForeignKey("virtual_sensors.id", ondelete="CASCADE"))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    state: Mapped[str] = mapped_column(String(8))
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    engine: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_sensor_history_sensor_ts", "sensor_id", "ts"),)
+
+
+class SensorReference(Base):
+    """A3/C4: Referenzbild eines Sensors für einen Zustand (on|off bzw. full|half|empty)."""
+    __tablename__ = "sensor_references"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sensor_id: Mapped[int] = mapped_column(ForeignKey("virtual_sensors.id", ondelete="CASCADE"), index=True)
+    state: Mapped[str] = mapped_column(String(8))
+    image_path: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[Optional[list[float]]] = mapped_column(ARRAY(REAL), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ShoppingItem(Base):
+    """C4: Einkaufsliste (automatisch aus Vorrats-Sensoren oder manuell)."""
+    __tablename__ = "shopping_list"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    note: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(8), default="manual")            # auto|manual|mcp
+    sensor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    done_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+HISTORY_DIM = 768   # SigLIP 2 ViT-B/16-256
+
+
+class HistoryFrame(Base):
+    """B1: Bild-Embedding (Zeitmaschine). Nur mit pgvector angelegt (info.vector, siehe db.init_db)."""
+    __tablename__ = "history_frames"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    camera_id: Mapped[int] = mapped_column(Integer)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    tile: Mapped[int] = mapped_column(SmallInteger, default=0)                  # 0 = ganzes Bild, 1..4 Kacheln
+    bbox: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    embedding: Mapped[list[float]] = mapped_column(HalfVec(HISTORY_DIM))
+    thumb_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(String(60), default="")
+
+    # Indizes über db.VECTOR_INDEXES (HNSW braucht die Extension)
+    __table_args__ = {"info": {"vector": True}}

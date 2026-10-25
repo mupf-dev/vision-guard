@@ -11,14 +11,16 @@ x-common-env: &common-env
 
 services:
   db:
-    image: postgres:17-alpine
+    # W3 (K3): pgvector für Vektorsuche (B1 Zeitmaschine). Umzug per Dump/Restore auf das neue Volume
+    # db-data-pgv: scripts/db-migrate-pgvector.sh; Rückfall auf db-data: scripts/db-rollback-pgvector.sh
+    image: pgvector/pgvector:0.8.2-pg17-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: visionguard
       POSTGRES_USER: vg
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vg}
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - db-data-pgv:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vg -d visionguard"]
       interval: 5s
@@ -26,12 +28,13 @@ services:
       retries: 20
 
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2@sha256:860aeb5d63ce509508f6dcfb2bc8a1c1dd2bc60555b562b45ce90e52d8dabb0f   # R1: gepinnt (ACL-Datei-Prüfung kann sich in künftigen Versionen ändern)
     restart: unless-stopped
     ports:
-      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_PORT:-1883}:1884"   # R1: externer Listener (nur lesen), intern 1883
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl-extern.conf:/mosquitto/config/acl-extern.conf:ro
 
   go2rtc:
     image: alexxit/go2rtc:1.9.14
@@ -56,6 +59,17 @@ services:
       VG_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       VG_SECRET_KEY: ${SECRET_KEY:-change-me-please}
       VG_DEMO_CAMERAS: ${DEMO_CAMERAS:-1}
+      # 1 = /media ohne Anmeldung (altes Verhalten); Standard 0 = Cookie | API-Key | signierter Link
+      VG_MEDIA_PUBLIC: ${MEDIA_PUBLIC:-0}
+      # Welle 2: optionale Schlüssel für den LLM-Client (Tagesbericht) und Mailversand – leer = aus
+      VG_LLM_API_KEY: ${LLM_API_KEY:-}
+      VG_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VG_SMTP_HOST: ${SMTP_HOST:-}
+      VG_SMTP_PORT: ${SMTP_PORT:-587}
+      VG_SMTP_USER: ${SMTP_USER:-}
+      VG_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      VG_SMTP_FROM: ${SMTP_FROM:-}
+      VG_SMTP_STARTTLS: ${SMTP_STARTTLS:-1}
     volumes:
       - media:/data/media
     healthcheck:
@@ -99,6 +113,47 @@ services:
     ports:
       - "${HTTP_PORT:-8080}:80"
 
+  # MCP-Server für KI-Agenten (Streamable HTTP, über nginx unter /mcp; Zugriff nur mit API-Key)
+  mcp:
+    build: ./mcp
+    restart: unless-stopped
+    depends_on:
+      backend: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      VG_BACKEND_URL: http://backend:8000
+      VG_MCP_PORT: "8100"
+      VG_MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+
+  # W3 (A2): „Frag die Kamera“ – lokales Bildmodell (Moondream 2 INT4), nur intern (vlm:8200).
+  # Start: docker compose --profile vlm up -d vlm. Lädt das Modell erst bei der ersten Frage und leiht sich dafür
+  # per GPU-Lease den Speicher des Inventars (YOLOE pausiert); nach vlm_idle_unload_s wieder frei.
+  # Gewichte einmalig ins Volume models (≈ 2 GB, Unterordner hf/).
+  vlm:
+    build: ./vlm
+    restart: unless-stopped
+    profiles: ["vlm"]
+    depends_on:
+      backend: { condition: service_healthy }
+      mosquitto: { condition: service_started }
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      VG_BACKEND_URL: http://backend:8000
+      VG_MQTT_HOST: mosquitto
+      VG_MQTT_PORT: "1883"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - models:/models
+    shm_size: 512m
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   # Simulierte Kameras zum Testen (RTSP: rtsp://testcam:8554/cam1, cam2)
   testcam:
     image: bluenviron/mediamtx:1.15.3-ffmpeg
@@ -111,6 +166,7 @@ services:
       - ./testcam/videos:/videos:ro
 
 volumes:
-  db-data:
+  db-data:       # alt (postgres:17-alpine) – bleibt als Rückfall, bis W3 abgenommen ist
+  db-data-pgv:   # aktuell (pgvector)
   media:
   models:

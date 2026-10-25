@@ -16,6 +16,22 @@ def slugify(name: str) -> str:
     return s or "camera"
 
 
+# Externe Topics `{prefix}/<wort>/…` direkt hinter dem Präfix (Wellenplan Abschnitt 2). Kamera-Slugs dürfen
+# damit nicht zusammenfallen, sonst landen Zähler `{prefix}/{slug}/{label}` in fremden Themen-Topics.
+RESERVED_SLUGS: frozenset[str] = frozenset({
+    "available", "events",                                      # heute belegt
+    "health", "sensor", "gesture", "pets", "notifications",     # Wellen 1–3
+    "report", "review",
+    "shopping_list",                                            # Welle 3 (C4)
+})
+
+
+def camera_slug(name: str) -> str:
+    """ASCII-Slug eines Kameranamens für externe MQTT-Topics; reservierte Wörter bekommen das Suffix `_cam`."""
+    s = slugify(name)
+    return f"{s}_cam" if s in RESERVED_SLUGS else s
+
+
 def from_unix(ts: Optional[float]) -> Optional[datetime]:
     if ts is None:
         return None
@@ -47,7 +63,7 @@ def safe_remove(rel: Optional[str]) -> None:
 
 
 def ensure_media_dirs() -> None:
-    for sub in ("snapshots", "crops", "clips", "identities"):
+    for sub in ("snapshots", "crops", "clips", "identities", "inventory", "ask", "sensors", "history"):
         os.makedirs(os.path.join(config.media_dir, sub), exist_ok=True)
 
 

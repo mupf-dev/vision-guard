@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { MousePointer2, PenLine, Plus, RefreshCw, Trash2, Undo2, Check } from "lucide-react";
-import type { Zone } from "../lib/types";
+import type { Zone, ZonePurpose } from "../lib/types";
 import { randomId } from "../lib/format";
 import { api } from "../lib/api";
 import { isMock, mockSnapshot } from "../lib/mock";
+
+/** W2 (C3): Zweck einer Zone fürs Haustier-Tagebuch. */
+export const ZONE_PURPOSE_NAME: Record<ZonePurpose, string> = { food: "Napf", water: "Wasser", litter: "Katzenklo" };
 
 const COLORS = ["#ff9800", "#22c55e", "#3b9cff", "#e879f9", "#ef4444", "#facc15", "#2dd4bf"];
 
@@ -119,7 +122,7 @@ export function ZoneEditor({ cameraId, zones, onChange }: { cameraId: number | n
                   })}
                   {z.polygon[0] && (
                     <text x={Math.min(...z.polygon.map((p) => p[0])) * W + 6} y={Math.min(...z.polygon.map((p) => p[1])) * H + 18}
-                      fill="#fff" fontSize={13} fontWeight={600} stroke="#000" strokeWidth={3} style={{ paintOrder: "stroke", pointerEvents: "none" }}>{z.name}</text>
+                      fill="#fff" fontSize={13} fontWeight={600} stroke="#000" strokeWidth={3} style={{ paintOrder: "stroke", pointerEvents: "none" }}>{z.name}{z.purpose ? ` · ${ZONE_PURPOSE_NAME[z.purpose]}` : ""}</text>
                   )}
                   {on && z.polygon.map(([x, y], i) => (
                     <circle key={i} className="vertex" cx={x * W} cy={y * H} r={7} fill="#05080d" stroke={z.color} strokeWidth={2.5}
@@ -158,6 +161,13 @@ export function ZoneEditor({ cameraId, zones, onChange }: { cameraId: number | n
           <div key={z.id} className={`zone-row ${z.id === sel ? "sel" : ""}`} onClick={() => setSel(z.id)}>
             <input type="color" value={z.color} onChange={(e) => update(z.id, { color: e.target.value })} onClick={(e) => e.stopPropagation()} />
             <input className="input input-sm" value={z.name} onChange={(e) => update(z.id, { name: e.target.value })} />
+            <select className="select input-sm" style={{ width: 112, flex: "none" }} value={z.purpose ?? ""}
+              title="Zweck fürs Haustier-Tagebuch: Besuche von Tieren in dieser Zone werden gezählt"
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => update(z.id, { purpose: (e.target.value || null) as ZonePurpose | null })}>
+              <option value="">kein Zweck</option>
+              {(Object.keys(ZONE_PURPOSE_NAME) as ZonePurpose[]).map((k) => <option key={k} value={k}>{ZONE_PURPOSE_NAME[k]}</option>)}
+            </select>
             <button type="button" className="btn btn-ghost btn-icon btn-sm" title="Zone löschen" onClick={(e) => { e.stopPropagation(); onChange(zones.filter((x) => x.id !== z.id)); if (sel === z.id) setSel(null); }}><Trash2 size={14} /></button>
           </div>
         ))}

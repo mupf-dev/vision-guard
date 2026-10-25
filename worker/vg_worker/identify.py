@@ -50,6 +50,7 @@ class ModelWorker:
         self.jobs_done = 0
         self.dropped = 0
         self.last_ms = 0.0
+        self.avg_ms = 0.0
 
     def ensure_started(self):
         if self._thread is None:
@@ -105,6 +106,7 @@ class ModelWorker:
                 log.warning("%s inference failed: %s", self.key, e)
                 res = {"error": str(e)}
             self.last_ms = (time.perf_counter() - t1) * 1000
+            self.avg_ms = self.last_ms if self.avg_ms == 0 else 0.95 * self.avg_ms + 0.05 * self.last_ms
             self.jobs_done += 1
             try:
                 self.on_result(self.key, job, res or {})
@@ -154,42 +156,46 @@ class FaceModel(ModelWorker):
         self.status = f"{settings.FACE_MODEL} ({_providers_used(self.det.session)})"
 
     def process(self, job: Job) -> dict | None:
+        """Bestes Gesicht im Kopf-Ausschnitt: Merkmal (512-d, L2), Qualität und Merkmale (Paket B, ID.F).
+
+        `job.extra["px_scale"]`: Originalpixel je Ausschnitt-Pixel (> 1, wenn ein Vollbild-Ausschnitt verkleinert
+        wurde); `size` ist die kürzere Gesichtsseite in Pixeln des Bildes, aus dem geschnitten wurde."""
+        import cv2
+        from insightface.utils import face_align
+
+        from . import face_quality as fq
         img = job.image
         h, w = img.shape[:2]
+        px_scale = float(job.extra.get("px_scale") or 1.0)
         # tiny crops: upscale so that faces reach the detector's useful range
         scale = 1.0
         if max(h, w) < 240:
             scale = 240.0 / max(h, w)
-            import cv2
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
         bboxes, kpss = self.det.detect(img, max_num=0)
-        if bboxes is None or len(bboxes) == 0:
+        if bboxes is None or len(bboxes) == 0 or kpss is None:
             return None
         best = None
         for i in range(len(bboxes)):
             x1, y1, x2, y2, sc = bboxes[i]
-            fw, fh = (x2 - x1) / scale, (y2 - y1) / scale
-            size = min(fw, fh)
+            size = min(x2 - x1, y2 - y1) / scale * px_scale          # Originalpixel
             if sc < settings.FACE_MIN_DET or size < settings.FACE_MIN_SIZE * 0.5:
                 continue
-            # quality: detection confidence * size factor * frontal-ness (eye distance vs. box width)
-            kps = kpss[i] if kpss is not None else None
-            frontal = 1.0
-            if kps is not None:
-                eye = np.linalg.norm(kps[1] - kps[0])
-                frontal = float(np.clip(eye / max(1.0, (x2 - x1)) / 0.4, 0.2, 1.0))
-            q = float(sc) * min(1.0, size / 112.0) * frontal
-            if best is None or q > best[0]:
-                best = (q, i, size)
+            yaw, pitch = fq.head_pose(kpss[i])
+            # Vorauswahl ohne Schärfe (die braucht das ausgerichtete Bild)
+            q0 = fq.quality(float(sc), size, yaw, pitch, None)
+            if best is None or q0 > best[0]:
+                best = (q0, i, size, yaw, pitch)
         if best is None:
             return None
-        q, i, size = best
+        _, i, size, yaw, pitch = best
         if size < settings.FACE_MIN_SIZE:
-            return {"face_quality": q, "too_small": True}
-        from insightface.app.common import Face
-        face = Face(bbox=bboxes[i, :4], kps=kpss[i], det_score=float(bboxes[i, 4]))
-        emb = self.rec.get(img, face)
-        emb = np.asarray(emb, dtype=np.float32).ravel()
+            return {"face_quality": best[0], "too_small": True}
+        aimg = face_align.norm_crop(img, landmark=kpss[i], image_size=self.rec.input_size[0])
+        sharp = fq.sharpness(aimg)
+        det = float(bboxes[i, 4])
+        q = fq.quality(det, size, yaw, pitch, sharp)
+        emb = np.asarray(self.rec.get_feat(aimg), dtype=np.float32).ravel()
         n = float(np.linalg.norm(emb))
         if n <= 0:
             return None
@@ -198,7 +204,13 @@ class FaceModel(ModelWorker):
         m = 0.25 * (x2 - x1)
         H, W = img.shape[:2]
         fc = img[int(max(0, y1 - m)):int(min(H, y2 + m)), int(max(0, x1 - m)):int(min(W, x2 + m))]
-        return {"embedding": emb, "quality": round(float(q), 4), "face_crop": np.ascontiguousarray(fc), "size": size}
+        if fc.size and max(fc.shape[:2]) > settings.FACE_SAMPLE_MAX_PX:
+            s = settings.FACE_SAMPLE_MAX_PX / max(fc.shape[:2])
+            fc = cv2.resize(fc, (max(1, int(fc.shape[1] * s)), max(1, int(fc.shape[0] * s))),
+                            interpolation=cv2.INTER_AREA)
+        return {"embedding": emb, "quality": q, "face_crop": np.ascontiguousarray(fc), "size": size,
+                "yaw": yaw, "pitch": pitch, "sharpness": sharp, "det_score": round(det, 3),
+                "day_night": fq.day_night(job.image)}
 
 
 # ============================================================================ plates
@@ -260,7 +272,12 @@ class PlateModel(ModelWorker):
 
 # ============================================================================ pets
 class PetModel(ModelWorker):
+    """DINOv2 (timm) – Tier-Wiedererkennung; seit W2 auch geteiltes Modell des Embedding-Dienstes (embed.py)."""
     key = "pet"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.infer_lock = threading.Lock()
 
     def load(self):
         import timm
@@ -283,24 +300,34 @@ class PetModel(ModelWorker):
         self.process(Job(0, 0, np.zeros((100, 100, 3), np.uint8), 0, {}))
         self.status = f"{name} ({'CUDA fp16' if self.device == 'cuda' else 'CPU'})"
 
-    def process(self, job: Job) -> dict | None:
+    def _prep(self, img: np.ndarray) -> np.ndarray:
         import cv2
-        torch = self.torch
-        img = job.image
         h, w = img.shape[:2]
         # pad to square (keeps aspect), then resize
         s = max(h, w)
         canvas = np.zeros((s, s, 3), np.uint8)
         canvas[(s - h) // 2:(s - h) // 2 + h, (s - w) // 2:(s - w) // 2 + w] = img
-        x = cv2.resize(canvas, (self.size, self.size), interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
-        with torch.inference_mode():
-            t = torch.from_numpy(x).to(self.device).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        return cv2.resize(canvas, (self.size, self.size), interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
+
+    def embed_batch(self, images: list[np.ndarray]) -> np.ndarray:
+        """L2-normierte Embeddings (N×384) für BGR-Bilder. Thread-sicher (geteilt mit embed.EmbedService, W2);
+        nur aufrufen, wenn das Modell geladen ist (`ready()`)."""
+        torch = self.torch
+        x = np.stack([self._prep(im) for im in images])
+        with self.infer_lock, torch.inference_mode():
+            t = torch.from_numpy(x).to(self.device).permute(0, 3, 1, 2).float() / 255.0
             t = (t - self.mean) / self.std
             if self.device == "cuda":
                 t = t.half()
             f = self.model(t).float()
             f = torch.nn.functional.normalize(f, dim=1)
-        emb = f[0].cpu().numpy().astype(np.float32)
+        return f.cpu().numpy().astype(np.float32)
+
+    def ready(self) -> bool:
+        return self.model is not None and not self.status.startswith(("error", "loading", "idle"))
+
+    def process(self, job: Job) -> dict | None:
+        emb = self.embed_batch([job.image])[0]
         return {"embedding": emb, "quality": float(job.extra.get("quality", 0.0))}
 
 
@@ -311,7 +338,7 @@ class Identifier:
     def __init__(self, identify_fn: Callable[[dict], dict | None], on_identity: Callable[[int, int, dict | None, dict | None], None],
                  on_pending: Callable[[int, int, int], None]):
         self.identify_fn = identify_fn          # POST /api/internal/identify (blocking)
-        self.on_identity = on_identity          # (camera_id, track_id, identity|None, attributes|None)
+        self.on_identity = on_identity          # (camera_id, track_id, identity|None, attributes|None, clear=False)
         self.on_pending = on_pending            # (camera_id, track_id, delta)
         self.face = FaceModel(self._on_result)
         self.plate = PlateModel(self._on_result)
@@ -321,6 +348,9 @@ class Identifier:
         self.http = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identify-http")
         self.stats = {"face_found": 0, "face_identify": 0, "plate_reads": 0, "plate_identify": 0,
                       "pet_identify": 0, "identify_errors": 0}
+        # Identitäten 07 (Paket B): Gesichter je Track sammeln, vorläufig/endgültig zuordnen
+        from .face_track import FaceCollector
+        self.faces = FaceCollector(self)
 
     def needed(self, cameras: list[dict]):
         """Start (load) models required by the current camera config."""
@@ -357,25 +387,34 @@ class Identifier:
             self.on_pending(job.camera_id, job.track_id, -1)
 
     def _face_result(self, job: Job, res: dict, st: dict):
-        if "embedding" not in res:
+        if "embedding" not in res or "faces" not in job.extra:
             return
         self.stats["face_found"] += 1
-        q = res["quality"]
-        with st["lock"]:
-            if st["face_sent"] >= settings.FACE_MAX_IDENTIFY:
-                return
-            # first decent face, or a clearly better one later
-            if st["face_sent"] > 0 and q < st["face_quality"] * 1.3:
-                return
-            st["face_sent"] += 1
-            st["face_quality"] = q
-        path = new_media_path("crops", "jpg", job.ts)
-        write_jpeg(path, res["face_crop"])
-        body = {"kind": "face", "camera_id": job.camera_id, "track_id": job.track_id,
-                "embedding": [round(float(v), 6) for v in res["embedding"]], "plate_text": None,
-                "crop_path": path, "quality": q}
-        self.stats["face_identify"] += 1
-        self._call(body, "face", job)
+        self.faces.on_face(job, res)
+
+    def call_async(self, body, camera_id: int, track_id: int, done: Callable[[dict | None], None]):
+        """POST /api/internal/identify im HTTP-Pool; der Track wartet (pending) bis zur Antwort.
+        `body` ist ein dict oder eine Funktion, die es im HTTP-Thread baut (None = nichts senden)."""
+        self.on_pending(camera_id, track_id, +1)
+
+        def run():
+            b = None
+            try:
+                b = body() if callable(body) else body
+                if b is None:
+                    return
+                if b.get("kind") == "face":
+                    self.stats["face_identify"] += 1
+                done(self.identify_fn(b))
+            except Exception as e:  # noqa: BLE001
+                self.stats["identify_errors"] += 1
+                log.warning("identify (%s/%s) failed: %s", (b or {}).get("kind"), (b or {}).get("phase", "single"), e)
+            finally:
+                self.on_pending(camera_id, track_id, -1)
+        try:
+            self.http.submit(run)
+        except RuntimeError:          # Pool beendet (Worker fährt herunter)
+            self.on_pending(camera_id, track_id, -1)
 
     def _plate_result(self, job: Job, res: dict, st: dict):
         text = res.get("plate_text")
@@ -428,10 +467,7 @@ class Identifier:
                 st = job.extra.get("track_state")
                 if st is not None:
                     with st["lock"]:
-                        if kind == "face":
-                            st["face_sent"] = max(0, st["face_sent"] - 1)
-                            st["face_quality"] = 0.0
-                        elif kind == "plate" and body.get("plate_text"):
+                        if kind == "plate" and body.get("plate_text"):
                             st["plate_sent"].discard(body["plate_text"])
             finally:
                 self.on_pending(job.camera_id, job.track_id, -1)

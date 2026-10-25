@@ -4,8 +4,8 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import state
-from .models import Camera, Event, Identity, IdentitySample, Rule
+from . import ptz, state
+from .models import Camera, Event, Identity, IdentitySample, Notification, Rule
 from .schemas import iso, media_url
 from .secrets_mask import mask_url
 
@@ -24,6 +24,30 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "plate_recognition": c.plate_recognition,
         "pet_recognition": c.pet_recognition,
         "zones": list(c.zones or []),
+        "room": c.room,
+        "inventory_enabled": bool(c.inventory_enabled),
+        "inventory_interval_s": c.inventory_interval_s if c.inventory_interval_s is not None else 3,
+        "inventory_labels": list(c.inventory_labels or []),
+        "inventory_min_score": c.inventory_min_score if c.inventory_min_score is not None else 0.35,
+        "inventory_tiling": True if c.inventory_tiling is None else bool(c.inventory_tiling),
+        "health_enabled": True if c.health_enabled is None else bool(c.health_enabled),
+        # W2: Pose/Gesten (C1/D1), Schwellen je Label und Unterdrückungsflächen (D2)
+        "pose_enabled": bool(c.pose_enabled),
+        "gesture_enabled": bool(c.gesture_enabled),
+        "inventory_label_min_scores": dict(c.inventory_label_min_scores or {}),
+        "inventory_suppress": list(c.inventory_suppress or []),
+        # W3: Cloud-Fallback (A2), Zeitmaschine (B1)
+        "vlm_cloud_allowed": bool(c.vlm_cloud_allowed),
+        "history_enabled": bool(c.history_enabled),
+        "history_interval_s": c.history_interval_s if c.history_interval_s is not None else 30,
+        "history_tiling": bool(c.history_tiling),
+        # W4 (C2)
+        "reid_enabled": bool(c.reid_enabled),
+        # PTZ (ONVIF)
+        "face_fullres": True if c.face_fullres is None else bool(c.face_fullres),
+        "ptz_enabled": bool(c.ptz_enabled),
+        "ptz": ptz.public_config(c.ptz),
+        "ptz_state": ptz.manager.state(c.id) if c.ptz_enabled else None,
         "status": state.status_for(c.id, c.enabled),
     }
 
@@ -40,10 +64,15 @@ def rule_json(r: Rule) -> dict[str, Any]:
         "min_score": r.min_score,
         "identity": {"mode": ident.get("mode", "any"), "identity_ids": list(ident.get("identity_ids") or [])},
         "trigger": r.trigger,
+        "trigger_options": dict(r.trigger_options or {}),
         "min_dwell_s": r.min_dwell_s,
         "schedule": r.schedule,
         "cooldown_s": r.cooldown_s,
+        "conditions": list(r.conditions or []),
+        "condition_delay_s": float(r.condition_delay_s or 0),
         "actions": list(r.actions or []),
+        "repeat_s": float(r.repeat_s or 0),
+        "repeat_max": int(r.repeat_max or 0),
     }
 
 
@@ -74,6 +103,9 @@ def identity_json(s: Session, i: Identity) -> dict[str, Any]:
         "first_seen": iso(i.first_seen),
         "last_seen": iso(i.last_seen),
         "event_count": event_count,
+        "learning_locked": bool(i.learning_locked),
+        "item_label": i.item_label,
+        "match_threshold": i.match_threshold,
     }
 
 
@@ -102,6 +134,8 @@ def identities_json(s: Session, items: list[Identity]) -> list[dict[str, Any]]:
             "plate_text": i.plate_text, "notes": i.notes or "", "sample_count": sc.get(i.id, 0),
             "cover_url": media_url(covers.get(i.id)), "first_seen": iso(i.first_seen),
             "last_seen": iso(i.last_seen), "event_count": ec.get(i.id, 0),
+            "learning_locked": bool(i.learning_locked), "item_label": i.item_label,
+            "match_threshold": i.match_threshold,
         })
     return out
 
@@ -124,4 +158,24 @@ def event_json(e: Event) -> dict[str, Any]:
         "clip_url": media_url(e.clip_path),
         "rules": list(e.rules or []),
         "active": bool(e.active),
+        "acknowledged_at": iso(e.acknowledged_at),
+    }
+
+
+def notification_json(n: Notification) -> dict[str, Any]:
+    return {
+        "id": n.id,
+        "ts": iso(n.ts),
+        "source": n.source,
+        "level": n.level,
+        "rule_id": n.rule_id,
+        "rule": n.rule_name,
+        "title": n.title,
+        "message": n.message,
+        "camera_id": n.camera_id,
+        "event_id": n.event_id,
+        "item_ids": list(n.item_ids or []),
+        "image_url": media_url(n.image_path),
+        "data": dict(n.data or {}),
+        "delivery": list(n.delivery or []),
     }

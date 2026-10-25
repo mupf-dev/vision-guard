@@ -35,7 +35,7 @@ export const labelGroup = (l: string): LabelGroup => GROUP[l] ?? "other";
 export const labelName = (l: string): string => DE[l] ?? l;
 export const labelColor = (l: string): string => LABEL_COLOR[l] ?? GROUP_COLOR[labelGroup(l)];
 
-export const KIND_NAME: Record<IdentityKind, string> = { face: "Person", plate: "Kennzeichen", pet: "Tier" };
-export const KIND_PLURAL: Record<IdentityKind, string> = { face: "Personen", plate: "Kennzeichen", pet: "Tiere" };
+export const KIND_NAME: Record<IdentityKind, string> = { face: "Person", plate: "Kennzeichen", pet: "Tier", item: "Gegenstand" };
+export const KIND_PLURAL: Record<IdentityKind, string> = { face: "Personen", plate: "Kennzeichen", pet: "Tiere", item: "Gegenstände" };
 
 export const DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];

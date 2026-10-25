@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CameraStatus, DetectionsMsg, VGEvent } from "./types";
+import type { GestureMsg, InventoryItem, InventoryMsg, PtzState } from "./types";
 
 export type WsState = "connecting" | "open" | "closed";
 
@@ -13,6 +14,19 @@ interface LiveState {
   setStatus: (id: number, s: CameraStatus) => void;
   upsertEvent: (e: VGEvent) => void;
   seedFeed: (events: VGEvent[]) => void;
+  /** Gegenstände: letzte per WebSocket gemeldete Fassung je Item-ID */
+  inventory: Record<number, InventoryItem>;
+  /** Item-ID → Zeitpunkt (ms) der letzten Live-Änderung (für Hervorhebung) */
+  inventoryFlash: Record<number, number>;
+  /** per WebSocket gelöschte Item-IDs */
+  inventoryDeleted: Record<number, true>;
+  applyInventory: (m: InventoryMsg) => void;
+  /** W2 D1: letzte Geste je Kamera (Live-Overlay blendet sie kurz am Track ein) */
+  gestures: Record<number, GestureMsg & { at: number }>;
+  setGesture: (m: GestureMsg) => void;
+  /** PTZ: letzter Zustand je Kamera (per WebSocket) */
+  ptz: Record<number, PtzState>;
+  setPtz: (id: number, st: PtzState) => void;
 }
 
 const FEED_MAX = 80;
@@ -42,6 +56,31 @@ export const useLive = create<LiveState>((set) => ({
       const merged = [...s.feed, ...events.filter((e) => !known.has(e.id))];
       merged.sort((a, b) => (a.start_ts < b.start_ts ? 1 : -1));
       return { feed: merged.slice(0, FEED_MAX) };
+    }),
+  ptz: {},
+  setPtz: (id, st) => set((s) => ({ ptz: { ...s.ptz, [id]: st } })),
+  gestures: {},
+  setGesture: (m) => set((s) => ({ gestures: { ...s.gestures, [m.camera_id]: { ...m, at: Date.now() } } })),
+  inventory: {},
+  inventoryFlash: {},
+  inventoryDeleted: {},
+  applyInventory: (m) =>
+    set((s) => {
+      const inventory = { ...s.inventory };
+      const inventoryFlash = { ...s.inventoryFlash };
+      const inventoryDeleted = { ...s.inventoryDeleted };
+      const t = Date.now();
+      for (const it of m.items) {
+        if (m.action === "delete") {
+          delete inventory[it.id];
+          inventoryDeleted[it.id] = true;
+        } else {
+          inventory[it.id] = it;
+          inventoryFlash[it.id] = t;
+          delete inventoryDeleted[it.id];
+        }
+      }
+      return { inventory, inventoryFlash, inventoryDeleted };
     }),
 }));
 

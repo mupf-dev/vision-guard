@@ -1,9 +1,11 @@
 """Small helpers: media paths, JPEG writing, geometry."""
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import logging
 import os
+import threading
 import uuid
 
 import cv2
@@ -62,18 +64,54 @@ def abs_media_path(rel: str) -> str:
     return full
 
 
-def write_jpeg(rel_path: str, img: np.ndarray, quality: int | None = None) -> str:
-    """Encode + atomically write a JPEG to MEDIA_DIR/rel_path. Returns rel_path."""
+# --- Medien schreiben -----------------------------------------------------------------------------
+# Alle Medien (Crops, Snapshots, Inventar-Bilder, Clips) gehen AUSSCHLIESSLICH über store_media() bzw.
+# media_target(). Heute: atomar ins gemeinsame Volume. Später (D3, VG_MEDIA_MODE=upload) wird nur hier
+# auf `PUT /api/internal/media/{rel_path}` umgestellt – kein anderer Code schreibt nach MEDIA_DIR.
+
+@contextlib.contextmanager
+def media_target(rel_path: str, suffix: str = ""):
+    """Temporäre Zieldatei für Medien, die ein externer Prozess (ffmpeg) erzeugt.
+
+    ``with media_target("clips/…/x.mp4", ".mp4") as tmp: <tmp schreiben>`` – bei Erfolg wird ``tmp`` atomar
+    unter ``rel_path`` abgelegt, bei einer Ausnahme verworfen. ``suffix`` erhält die Endung (ffmpeg erkennt
+    daran das Format)."""
     full = abs_media_path(rel_path)
     os.makedirs(os.path.dirname(full), exist_ok=True)
+    tmp = f"{full}.part{os.getpid()}-{threading.get_ident()}{suffix}"
+    try:
+        yield tmp
+        if not os.path.exists(tmp):
+            raise RuntimeError(f"no output written for {rel_path}")
+        os.replace(tmp, full)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def store_media(rel_path: str, data: bytes) -> str:
+    """Speichert Rohdaten atomar unter MEDIA_DIR/rel_path (einzige Schreibstelle für Medien). → rel_path"""
+    with media_target(rel_path) as tmp:
+        with open(tmp, "wb") as f:
+            f.write(data)
+    return rel_path
+
+
+def write_jpeg(rel_path: str, img: np.ndarray, quality: int | None = None) -> str:
+    """Encode a JPEG and store it via store_media(). Returns rel_path."""
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(quality or settings.JPEG_QUALITY)])
     if not ok:
         raise RuntimeError("jpeg encode failed")
-    tmp = f"{full}.tmp{os.getpid()}"
-    with open(tmp, "wb") as f:
-        f.write(buf.tobytes())
-    os.replace(tmp, full)
-    return rel_path
+    return store_media(rel_path, buf.tobytes())
+
+
+def with_worker_id(payload):
+    """Kopie einer Worker-Nachricht mit ``worker_id`` (D3-Vorbereitung; Nicht-dicts unverändert)."""
+    if isinstance(payload, dict):
+        return {**payload, "worker_id": settings.WORKER_ID}
+    return payload
 
 
 def crop_norm(frame: np.ndarray, bbox, margin: float = 0.0, region: tuple[float, float] = (0.0, 1.0)) -> np.ndarray | None:

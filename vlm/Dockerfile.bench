@@ -1,0 +1,17 @@
+# Probe-Container für den VLM-Machbarkeitstest (A2, W0-b). Eigener Container, damit transformers/torchao-Pins
+# nicht mit dem Worker (ultralytics/insightface) kollidieren. CUDA ≤ 12.4 (Host-Treiber 551.x).
+#   docker build -t vg-w0-vlm:bench -f vlm/Dockerfile.bench vlm
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONUNBUFFERED=1 \
+    HF_HOME=/models/hf HOME=/models/home
+
+ARG TORCHAO=0.11.0
+RUN pip install "transformers==4.57.6" "accelerate==1.10.1" "torchao==${TORCHAO}" "einops==0.8.1" \
+      "bitsandbytes==0.45.5" "nvidia-ml-py==12.575.51" "pillow==10.4.0" "num2words==0.5.14" \
+      "torch==2.5.1" "torchvision==0.20.1" \
+ && python -c "import torch, transformers, torchao; print('ok', torch.__version__, transformers.__version__, torchao.__version__)"
+
+WORKDIR /app
+COPY bench.py /app/bench.py
+CMD ["python", "/app/bench.py", "--help"]

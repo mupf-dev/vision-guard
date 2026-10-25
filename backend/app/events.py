@@ -7,15 +7,17 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from . import go2rtc, registry, rules, settings_store, state
+from . import go2rtc, media_sign, notifications, registry, rules, settings_store, state
 from .db import SessionLocal
-from .models import Event, Identity, utcnow
+from .models import KV, Event, Identity, utcnow
 from .rules import TrackState
 from .serializers import event_json
 from .util import from_unix, local_date_str, media_path
@@ -26,6 +28,62 @@ log = logging.getLogger("vg.events")
 SNAPSHOT_FALLBACK_S = 5.0
 PENDING_TTL_S = 900.0
 WORKER_GONE_S = 60.0
+TIME_CHECK_EVERY_S = 20.0          # Zeit-Regeln: Prüftakt (fällig ab `at`, 15 min Nachholfenster)
+WEATHER_PREFETCH_EVERY_S = 300.0   # Wetter-Cache warm halten, solange Regeln mit Wetter-Bedingung existieren
+REPEATS_KEY = "rule_repeats"          # R1: KV – offene Wiederholungen (C1)
+COND_DELAYED_KEY = "rule_cond_delayed"  # R1: KV – geplante verzögerte Bedingungsprüfungen
+RESUME_WINDOW_S = 120.0                 # R1: so lange nach dem Start werden alte Tracks fortgesetzt
+TIME_RUNS_KEY = "rule_time_runs"   # KV: {rule_id: "YYYY-MM-DD HH:MM"} – letzter Lauf je Zeit-Regel
+
+# Bedingungsprüfungen (A1) laufen außerhalb des Track-Threads (DB-Abfragen, ggf. Wetter-Abruf)
+_cond_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vg-cond")
+
+
+# ------------------------------------------------------------------ Hook-API (W1, genutzt von C3/C1/C2)
+
+
+@dataclass(frozen=True)
+class TrackHook:
+    """Ein verarbeiteter Track-Schritt. `msg` ist die Worker-Nachricht (zones, entered_zones, left_zones, identity,
+    attributes, ts, …; bei nachträglich aufgelöster Identität nur `{"identity": …}`), `track` der aktuelle
+    Zustand – beides nur lesen."""
+    phase: str                  # "start" | "update" | "end"
+    camera_id: int
+    track_id: int
+    event_id: str
+    label: str
+    msg: dict[str, Any]
+    track: TrackState
+
+
+TrackCallback = Callable[[TrackHook], None]
+_track_hooks: list[TrackCallback] = []
+
+
+def on_track(callback: TrackCallback) -> Callable[[], None]:
+    """Registriert einen Callback für jeden Track-Schritt (nach Event-Speicherung und Regelauswertung).
+
+    Läuft im Track-Thread unter `processor.lock`: schnell bleiben, eigene DB-Session öffnen, nichts blockieren
+    (Längeres per Thread/`rules.submit_async`). Ausnahmen werden geloggt und stoppen nichts. Liefert eine
+    Funktion zum Abmelden."""
+    _track_hooks.append(callback)
+
+    def off() -> None:
+        if callback in _track_hooks:
+            _track_hooks.remove(callback)
+    return off
+
+
+def _run_track_hooks(phase: str, tr: TrackState, msg: dict[str, Any]) -> None:
+    if not _track_hooks:
+        return
+    hook = TrackHook(phase=phase, camera_id=tr.camera_id, track_id=tr.track_id, event_id=tr.event_id,
+                     label=tr.label, msg=msg or {}, track=tr)
+    for cb in list(_track_hooks):
+        try:
+            cb(hook)
+        except Exception:
+            log.exception("Track-Hook %s fehlgeschlagen", getattr(cb, "__name__", cb))
 
 
 class Processor:
@@ -39,6 +97,18 @@ class Processor:
         self.publish = None   # callable(topic, payload, retain=False, qos=0)
         self._last_status_check = 0.0
         self._status_seen: dict[int, str] = {}
+        # A1: laufende/geplante Bedingungsprüfungen je (Regel, Kamera) und Zeit-Regeln
+        self.cond_pending: dict[tuple[int, int], float] = {}
+        self._last_time_check = 0.0
+        self._last_weather_prefetch = 0.0
+        self._time_runs: Optional[dict[str, str]] = None
+        # C1: Wiederholungen (repeat_s/repeat_max) je (Regel, Event) bis quittiert/beendet
+        self.repeats: dict[tuple[int, str], dict[str, Any]] = {}
+        # R1: Zustand über Backend-Neustarts – beim Start aktive Events (zum Fortsetzen statt neu anlegen),
+        # gesicherte Wiederholungen (KV) und offene verzögerte Bedingungsprüfungen (KV, nur protokolliert)
+        self.resumable: dict[tuple[int, int], str] = {}    # (camera_id, track_id) -> event_id
+        self._resume_until = 0.0
+        self.cond_delayed: dict[str, dict[str, Any]] = {}
 
     # ---------------------------------------------------------- Hilfen
 
@@ -59,7 +129,8 @@ class Processor:
         hub.broadcast(msg)
         st = settings_store.get()
         if st.get("publish_all_events"):
-            self._pub(f"{st['mqtt_prefix']}/events", {"action": action, "event": data}, qos=1)
+            # extern: Medien-Links signiert (TTL media_link_ttl_h)
+            self._pub(f"{st['mqtt_prefix']}/events", {"action": action, "event": media_sign.sign_urls(data)}, qos=1)
         return data
 
     @staticmethod
@@ -71,6 +142,19 @@ class Processor:
                 cache[iid] = s.scalar(select(Identity.name).where(Identity.id == iid))
             return cache[iid]
         return f
+
+    @staticmethod
+    def _final_guard(tr: TrackState, ident: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """Identitäten 07 (ID.F): Hat das Backend für den Track schon eine *endgültige* Gesichtszuordnung
+        (`phase:"final"`), gewinnt sie gegen die Identität in späteren Track-Meldungen des Workers (die noch die
+        vorläufige tragen können). Ausnahme: endgültig „keine“ und die Meldung stammt aus ReID."""
+        from .identity import final_track_identity   # zyklischen Import vermeiden
+        has_final, fin = final_track_identity(tr.camera_id, tr.track_id)
+        if not has_final or not ident:
+            return ident
+        if fin is None:
+            return ident if (tr.attributes or {}).get("identity_source") == "reid" else None
+        return fin
 
     @staticmethod
     def _valid_identity_id(s: Session, ident: Optional[dict[str, Any]]) -> Optional[int]:
@@ -151,11 +235,18 @@ class Processor:
             self._end_track(s, tr, msg, now)
             return
 
+        if tr is None and typ != "start" and key in self.resumable and now < self._resume_until:
+            tr = self._resume_track(s, camera_id, track_id, self.resumable.pop(key), msg, now)
+            if tr is not None:
+                _run_track_hooks("start", tr, msg)
+                return
+
         if tr is None:
             tr = self._start_track(s, camera_id, track_id, msg, now)
             if tr is None:
                 return
             self._evaluate(s, tr, msg, now, phase="start")
+            _run_track_hooks("start", tr, msg)
             return
 
         ev = self._apply_msg(s, tr, msg, now)
@@ -163,6 +254,38 @@ class Processor:
             s.commit()
             self._emit(s, ev, "update")
         self._evaluate(s, tr, msg, now, phase="update")
+        _run_track_hooks("update", tr, msg)
+
+    def _resume_track(self, s: Session, camera_id: int, track_id: int, event_id: str, msg: dict[str, Any],
+                      now: float) -> Optional[TrackState]:
+        """R1: Track lief schon vor dem Backend-Neustart → dasselbe Event fortsetzen (statt eines neuen) und
+        bereits ausgelöste Regeln nicht noch einmal auslösen (Quittierung/Wiederholungen bleiben gültig)."""
+        ev = s.get(Event, event_id)
+        if ev is None or ev.camera_id != camera_id:
+            return None
+        ev.active = True
+        ev.end_ts = None
+        s.commit()
+        fired = set(ev.rules or [])
+        rule_ids = {int(r["id"]) for r in rules.all_rules() if r.get("name") in fired}
+        tr = TrackState(camera_id=camera_id, track_id=track_id, event_id=ev.id,
+                        first_seen=ev.start_ts.timestamp() if ev.start_ts else now, label=ev.label,
+                        score=float(msg.get("score") or ev.score or 0), best_score=float(ev.score or 0),
+                        identity=msg.get("identity"), attributes=dict(ev.attributes or {}),
+                        started_rx=ev.start_ts.timestamp() if ev.start_ts else now, last_rx=now)
+        tr.set_zones([str(z) for z in (msg.get("zones") or ev.zones or [])], tr.started_rx)
+        tr.fired_enter |= rule_ids
+        tr.fired_dwell |= rule_ids
+        for rid in rule_ids:     # Evaluator-Trigger (posture/gesture): als bereits ausgelöst markieren
+            tr.trigger_state.setdefault(rid, {})["fired"] = True
+        self.tracks[(camera_id, track_id)] = tr
+        self._apply_msg(s, tr, msg, now)
+        s.commit()
+        log.info("Track %s/%s nach Neustart fortgesetzt (Event %s, %d Regel(n) bereits ausgelöst)", camera_id,
+                 track_id, ev.id, len(rule_ids))
+        self._emit(s, ev, "update")
+        self._publish_counts(camera_id)
+        return tr
 
     def _start_track(self, s: Session, camera_id: int, track_id: int, msg: dict[str, Any],
                      now: float) -> Optional[TrackState]:
@@ -206,10 +329,11 @@ class Processor:
         tr.best_score = max(tr.best_score, float(msg.get("best_score") or 0), tr.score)
         if "zones" in msg and msg.get("type") != "end":
             tr.set_zones(list(msg.get("zones") or []), now)
-        if msg.get("identity"):
-            tr.identity = msg["identity"]
         if msg.get("attributes"):
             tr.attributes.update(msg["attributes"])
+        msg_ident = self._final_guard(tr, msg.get("identity"))
+        if msg_ident:
+            tr.identity = msg_ident
         ev = s.get(Event, tr.event_id)
         if ev is None:
             return None
@@ -222,7 +346,7 @@ class Processor:
             if str(z) not in zones:
                 zones.append(str(z))
         ev.zones = zones
-        iid = self._valid_identity_id(s, msg.get("identity"))
+        iid = self._valid_identity_id(s, msg_ident)
         if iid is not None:
             ev.identity_id = iid
         if msg.get("attributes"):
@@ -243,11 +367,18 @@ class Processor:
             s.commit()
             self._emit(s, ev, "end")
         self._publish_counts(tr.camera_id)
+        _run_track_hooks("end", tr, msg)
 
     # ---------------------------------------------------------- Regeln
 
-    def _evaluate(self, s: Session, tr: TrackState, msg: dict[str, Any], now: float, phase: str) -> None:
+    def _evaluate(self, s: Session, tr: TrackState, msg: dict[str, Any], now: float, phase: str,
+                  only_custom: bool = False) -> None:
+        """Regeln für einen Track-Schritt auswerten. enter/leave/dwell nur in den Track-Phasen start/update/end;
+        Nicht-Standard-Trigger (W2: posture, gesture) über ihren Evaluator in jeder Phase (auch tick/gesture)."""
         lookup = self._name_lookup(s)
+        if only_custom or phase not in ("start", "update", "end"):
+            self._evaluate_custom(s, tr, msg, now, phase, lookup)
+            return
         entered = [str(z) for z in msg.get("entered_zones") or []]
         left = [str(z) for z in msg.get("left_zones") or []]
         if phase == "start":
@@ -285,6 +416,44 @@ class Processor:
                     self._check_dwell(s, rule, tr, now, lookup)
             except Exception:
                 log.exception("Regel %s: Auswertung fehlgeschlagen", rule.get("name"))
+        self._evaluate_custom(s, tr, msg, now, phase, lookup)
+
+    def _evaluate_custom(self, s: Session, tr: TrackState, msg: dict[str, Any], now: float, phase: str,
+                         lookup) -> None:
+        """W2: Track-Trigger mit Evaluator (rules.register_trigger(..., evaluate=…)). Der Evaluator entscheidet über
+        Haltezeiten/Einmaligkeit (eigener `state`); Cooldown, static_match und Bedingungen prüft wie immer _fire."""
+        for rule in rules.all_rules():
+            ev_fn = rules.track_evaluator(rule.get("trigger"))
+            if ev_fn is None or not rule.get("enabled"):
+                continue
+            try:
+                rid = int(rule["id"])
+                st = tr.trigger_state.setdefault(rid, {})
+                zones = ev_fn(rules.TriggerContext(rule=rule, track=tr, msg=msg or {}, now=now, phase=phase, state=st))
+                if zones is None:
+                    continue
+                if rules.static_match(rule, tr, lookup):
+                    self._fire(s, rule, tr, list(zones), now, extra=st.pop("placeholders", None))
+                else:
+                    # z. B. Identität noch nicht aufgelöst / Zeitplan: Evaluator bleibt scharf (C1)
+                    st.pop("fired", None)
+                    st.pop("placeholders", None)
+            except Exception:
+                log.exception("Regel %s: Trigger %s fehlgeschlagen", rule.get("name"), rule.get("trigger"))
+
+    def dispatch_track_phase(self, camera_id: int, track_id: int, phase: str, msg: dict[str, Any]) -> bool:
+        """W2: Nur Evaluator-Trigger für einen laufenden Track auswerten (z. B. phase="gesture" aus
+        vg/internal/gesture). False, wenn der Track (noch) nicht bekannt ist."""
+        with self.lock:
+            tr = self.tracks.get((camera_id, int(track_id)))
+            if tr is None:
+                return False
+            try:
+                with SessionLocal() as s:
+                    self._evaluate(s, tr, msg, time.time(), phase=phase, only_custom=True)
+            except Exception:
+                log.exception("Track-Phase %s (Kamera %s, Track %s) fehlgeschlagen", phase, camera_id, track_id)
+            return True
 
     def _check_dwell(self, s: Session, rule: dict[str, Any], tr: TrackState, now: float, lookup) -> None:
         rid = int(rule["id"])
@@ -300,42 +469,157 @@ class Processor:
         tr.fired_dwell.add(rid)
         self._fire(s, rule, tr, rules.rule_zones_hit(rule, tr.zones) if rz else list(tr.zones), now)
 
-    def _fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float) -> None:
-        ck = (int(rule["id"]), tr.camera_id)
-        cd = float(rule.get("cooldown_s") or 0)
+    def _cooldown_active(self, ck: tuple[int, int], rule: dict[str, Any], now: float) -> bool:
         last = self.cooldowns.get(ck)
-        if last is not None and now - last < cd:
+        return last is not None and now - last < float(rule.get("cooldown_s") or 0)
+
+    def _fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float,
+              extra: Optional[dict[str, Any]] = None) -> None:
+        ck = (int(rule["id"]), tr.camera_id)
+        if self._cooldown_active(ck, rule, now):
             log.info("Regel '%s' (Kamera %s): Cooldown aktiv", rule["name"], tr.camera_id)
             return
+        if rule.get("conditions"):
+            # A1: Bedingungen erst nach condition_delay_s prüfen (Gegenstand braucht Zeit, um „missing“ zu werden);
+            # je Regel und Kamera höchstens eine offene Prüfung, Cooldown erst, wenn die Aktionen wirklich laufen
+            if ck in self.cond_pending:
+                log.debug("Regel '%s' (Kamera %s): Prüfung läuft bereits", rule["name"], tr.camera_id)
+                return
+            self.cond_pending[ck] = now
+            delay = float(rule.get("condition_delay_s") or 0)
+            log.info("Regel '%s' ausgelöst (Kamera %s, Track %s) – Bedingungen werden in %.0f s geprüft",
+                     rule["name"], tr.camera_id, tr.track_id, delay)
+            rid, zs = int(rule["id"]), list(zones)
+
+            dkey = f"{rid}:{tr.camera_id}:{tr.track_id}"
+
+            def job() -> None:
+                with self.lock:
+                    if self.cond_delayed.pop(dkey, None) is not None:
+                        self._save_kv(COND_DELAYED_KEY, list(self.cond_delayed.values()))
+                _cond_pool.submit(self._conditional_fire, rid, tr, zs, now, extra)
+            if delay > 0:
+                self.cond_delayed[dkey] = {"rule_id": rid, "rule": rule.get("name"), "camera_id": tr.camera_id,
+                                           "track_id": tr.track_id, "event_id": tr.event_id, "due": now + delay}
+                self._save_kv(COND_DELAYED_KEY, list(self.cond_delayed.values()))
+                t = threading.Timer(delay, job)
+                t.daemon = True
+                t.start()
+            else:
+                job()
+            return
         self.cooldowns[ck] = now
+        self._do_fire(s, rule, tr, zones, now, extra=extra)
+
+    def _conditional_fire(self, rule_id: int, tr: TrackState, zones: list[str], trigger_ts: float,
+                          extra: Optional[dict[str, Any]] = None) -> None:
+        """Läuft im Pool: Bedingungen prüfen (ohne Lock), bei Erfolg Aktionen unter dem Lock ausführen."""
+        ck = (rule_id, tr.camera_id)
+        try:
+            rule = next((r for r in rules.all_rules() if int(r["id"]) == rule_id), None)
+            if rule is None or not rule.get("enabled"):
+                log.info("Regel %s inzwischen gelöscht/deaktiviert – Prüfung entfällt", rule_id)
+                return
+            ctx = rules.CondContext(rule=rule, now=datetime.now(timezone.utc), camera_id=tr.camera_id, track=tr,
+                                    event_id=tr.event_id, trigger_ts=trigger_ts, trigger_zones=list(zones))
+            res = rules.evaluate_conditions(rule, ctx)
+            if not res.ok:
+                log.info("Regel '%s' (Kamera %s): Bedingungen nicht erfüllt – %s", rule["name"], tr.camera_id,
+                         res.reason or "?")
+                return
+            with self.lock:
+                now = time.time()
+                if self._cooldown_active(ck, rule, now):
+                    log.info("Regel '%s' (Kamera %s): Cooldown aktiv", rule["name"], tr.camera_id)
+                    return
+                self.cooldowns[ck] = now
+                log.info("Regel '%s' (Kamera %s): Bedingungen erfüllt – %s", rule["name"], tr.camera_id, res.reason)
+                with SessionLocal() as s:
+                    self._do_fire(s, rule, tr, zones, now, cond=res, extra=extra)
+        except Exception:
+            log.exception("Regel %s: verzögerte Prüfung fehlgeschlagen", rule_id)
+        finally:
+            with self.lock:
+                self.cond_pending.pop(ck, None)
+
+    def _do_fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float,
+                 cond: Optional[rules.CondResult] = None, extra: Optional[dict[str, Any]] = None,
+                 repeat: int = 0) -> None:
         ev = s.get(Event, tr.event_id)
         if ev is None:
             return
-        log.info("Regel '%s' ausgelöst (Kamera %s, Track %s, Event %s)", rule["name"], tr.camera_id, tr.track_id, ev.id)
+        log.info("Regel '%s' ausgelöst (Kamera %s, Track %s, Event %s%s)", rule["name"], tr.camera_id, tr.track_id,
+                 ev.id, f", Wiederholung {repeat}" if repeat else "")
         names = list(ev.rules or [])
         if rule["name"] not in names:
             names.append(rule["name"])
             ev.rules = names
+        trig = rule.get("trigger") or "enter"
+        repeat_s = float(rule.get("repeat_s") or 0)
+        posture = (tr.attributes or {}).get("posture")
+        if trig == "posture" or repeat_s > 0:
+            # C1: Notfall-Kennzeichnung (GET /events?alert=1, MCP list_alerts, Banner „Quittieren“)
+            prev = dict((ev.attributes or {}).get("alert") or {})
+            alert = {"rule": rule["name"], "rule_id": int(rule["id"]), "trigger": trig, "repeat": repeat,
+                     "fired_at": utcnow().isoformat(), "first_fired_at": prev.get("first_fired_at") or utcnow().isoformat()}
+            if trig == "posture":
+                alert["posture"] = (rule.get("trigger_options") or {}).get("posture") or posture
+                st = tr.trigger_state.get(int(rule["id"])) or {}
+                if st.get("since"):
+                    alert["posture_since"] = from_unix(float(st["since"])).isoformat()
+            ev.attributes = {**(ev.attributes or {}), "alert": alert}
         s.commit()
         event_data = self._emit(s, ev, "update")
         cam = registry.get(tr.camera_id) or {"name": ev.camera_name, "zones": {}}
         zone_names = [cam["zones"].get(z, z) for z in zones]
         ident = event_data.get("identity") or {}
+        date = local_date_str()
+        ttl = media_sign.default_ttl_s()
+        act_types = {a.get("type") for a in rule.get("actions") or []}
+        # Snapshot/Clip dieser Regel entstehen erst nach der Auslösung – Pfad ist aber schon bekannt
+        snap_path = ev.snapshot_path or (f"snapshots/{date}/{ev.id}_{rule['id']}.jpg"
+                                         if "snapshot" in act_types else None)
+        clip_path = ev.clip_path or (f"clips/{date}/{ev.id}.mp4" if "clip" in act_types else None)
         ctx = {
             "camera": cam["name"], "camera_id": tr.camera_id, "label": tr.label,
             "score": f"{max(tr.best_score, tr.score):.2f}", "identity": ident.get("display_name") or "",
             "zone": ", ".join(zone_names), "event_id": ev.id, "rule": rule["name"],
             "time": datetime.now(timezone.utc).astimezone(rules.config.tz).isoformat(timespec="seconds"),
+            "thumb_url": media_sign.sign_media_path(ev.thumb_path, ttl) if ev.thumb_path else "",
+            "snapshot_url": media_sign.sign_media_path(snap_path, ttl) if snap_path else "",
+            "clip_url": media_sign.sign_media_path(clip_path, ttl) if clip_path else "",
+            # A1: Platzhalter aus den Bedingungen (leer ohne passende Bedingung)
+            "items": "", "item_place": "", "weather": "",
+            # C1/D1: Haltung, Geste, Wiederholung (0 = erste Auslösung)
+            "posture": _posture_de(posture), "gesture": "", "repeat": repeat,
+            # W3 (A3): Sensor-Bedingung
+            "sensor": "", "sensor_state": "",
         }
-        date = local_date_str()
+        if extra:
+            ctx.update({k: v for k, v in extra.items() if k in ("posture", "gesture")})
+        if cond is not None:
+            ctx.update({k: v for k, v in cond.ctx.items() if k in COND_PLACEHOLDERS})
+        event_data = media_sign.sign_urls(event_data, ttl)   # Webhook-/MQTT-Payloads gehen nach außen
         for action in rule.get("actions") or []:
             try:
-                self._run_action(action, rule, tr, ev, event_data, ctx, date)
+                self._run_action(action, rule, tr, ev, event_data, ctx, date, cond)
             except Exception:
                 log.exception("Regel '%s': Aktion %s fehlgeschlagen", rule["name"], action.get("type"))
+        if repeat == 0 and repeat_s > 0 and rules.is_track_trigger(trig):
+            self.repeats[(int(rule["id"]), ev.id)] = {
+                "rule_id": int(rule["id"]), "event_id": ev.id, "camera_id": tr.camera_id, "track_id": tr.track_id,
+                "count": 0, "next": now + repeat_s, "zones": list(zones), "extra": dict(extra or {})}
+            self._save_repeats()
+        if cond is not None and "push" not in act_types:
+            # Regeln mit Bedingungen, aber ohne Push: Hinweis nur anzeigen (CONTRACT W1.B)
+            notifications.create(
+                source="rule", title=rule["name"], message=_cond_message(ctx), rule_id=int(rule["id"]),
+                rule_name=rule.get("name"), camera_id=tr.camera_id, event_id=ev.id, item_ids=list(cond.item_ids),
+                image_path=snap_path or cond.image_path or ev.thumb_path, push_enabled=False)
 
     def _run_action(self, action: dict[str, Any], rule: dict[str, Any], tr: TrackState, ev: Event,
-                    event_data: dict[str, Any], ctx: dict[str, Any], date: str) -> None:
+                    event_data: dict[str, Any], ctx: dict[str, Any], date: str,
+                    cond: Optional[rules.CondResult] = None) -> None:
         typ = action.get("type")
         if typ == "snapshot":
             rid = rules.new_request_id()
@@ -366,8 +650,47 @@ class Processor:
             self._pub(topic, body, retain=bool(action.get("retain")), qos=1)
         elif typ == "webhook":
             rules.submit_async(self.loop, rules.run_webhook(action, ctx, event_data))
+        elif typ == "push":
+            self._run_push(action, rule, tr, ev, ctx, date, cond)
+        elif typ == "ptz":
+            self._run_ptz(action, rule, tr.camera_id)
         else:
             log.warning("Unbekannte Aktion: %s", typ)
+
+    @staticmethod
+    def _run_ptz(action: dict[str, Any], rule: dict[str, Any], camera_id: Optional[int]) -> None:
+        """PTZ: Kamera (Aktion oder Ereignis) zu `preset` fahren und `hold_s` halten (CONTRACT PTZ.D)."""
+        from .ptz import manager as ptz_manager
+        target = action.get("camera_id") or camera_id
+        ctl = ptz_manager.get(int(target)) if target else None
+        if ctl is None:
+            log.info("Regel '%s': PTZ-Aktion – Kamera %s hat keine PTZ-Steuerung", rule["name"], target)
+            return
+        if not ctl.rule_goto(action.get("preset"), float(action.get("hold_s") or 30)):
+            log.info("Regel '%s': PTZ-Aktion für Kamera %s ignoriert (Handsteuerung aktiv oder nicht verbunden)",
+                     rule["name"], target)
+
+    def _run_push(self, action: dict[str, Any], rule: dict[str, Any], tr: TrackState, ev: Event,
+                  ctx: dict[str, Any], date: str, cond: Optional[rules.CondResult] = None) -> Optional[dict]:
+        """Aktion `push`: je Aktion eine Notification (source "rule") mit Push an `target` (None = alle Ziele).
+        `cond` (A1): Ergebnis der Bedingungen – liefert item_ids und ggf. das Bild des Gegenstands."""
+        mode = action.get("image") or "snapshot"
+        has_snap = any(a.get("type") == "snapshot" for a in rule.get("actions") or [])
+        if mode == "snapshot":
+            image = ev.snapshot_path or (f"snapshots/{date}/{ev.id}_{rule['id']}.jpg" if has_snap else ev.thumb_path)
+        elif mode == "crop":
+            image = (cond.image_path if cond else None) or ev.thumb_path
+        else:
+            image = None
+        priority = action.get("priority") or "default"
+        target = action.get("target")
+        return notifications.create(
+            source="rule", level="alarm" if priority == "high" else "info",
+            title=rules.render(action.get("title") or "{rule}", ctx),
+            message=rules.render(action.get("message") or "", ctx),
+            rule_id=int(rule["id"]), rule_name=rule.get("name"), camera_id=tr.camera_id, event_id=ev.id,
+            item_ids=list(cond.item_ids) if cond else [], image_path=image,
+            targets=[target] if target else None, priority=priority)
 
     # ---------------------------------------------------------- Snapshot/Clip-Ergebnisse
 
@@ -438,9 +761,12 @@ class Processor:
                         return
                     data = self._emit(s, ev, "update")
                     tr = self.tracks.get((ev.camera_id, ev.track_id))
+                    if tr is not None and tr.event_id == ev.id and not data.get("identity") and tr.identity:
+                        tr.identity = None      # ID.F: endgültige Zuordnung hat die Identität entfernt
                     if tr is not None and tr.event_id == ev.id and data.get("identity"):
                         tr.identity = data["identity"]
                         self._evaluate(s, tr, {}, time.time(), phase="update")
+                        _run_track_hooks("update", tr, {"identity": data["identity"]})
             except Exception:
                 log.exception("Event-Aktualisierung fehlgeschlagen")
 
@@ -451,7 +777,8 @@ class Processor:
         with self.lock:
             try:
                 dwell_rules = [r for r in rules.all_rules() if r.get("enabled") and r.get("trigger") == "dwell"]
-                if dwell_rules and self.tracks:
+                custom = any(r.get("enabled") and rules.track_evaluator(r.get("trigger")) for r in rules.all_rules())
+                if (dwell_rules or custom) and self.tracks:
                     with SessionLocal() as s:
                         lookup = self._name_lookup(s)
                         for tr in list(self.tracks.values()):
@@ -460,6 +787,10 @@ class Processor:
                                     self._check_dwell(s, rule, tr, now, lookup)
                                 except Exception:
                                     log.exception("Dwell-Prüfung fehlgeschlagen")
+                            if custom:   # W2: Evaluator-Trigger (posture: Haltedauer) jede Sekunde
+                                self._evaluate_custom(s, tr, {}, now, "tick", lookup)
+                if self.repeats:
+                    self._tick_repeats(now)
                 # abgelaufene Aufträge
                 for rid in [k for k, v in self.pending.items() if now - v["created"] > PENDING_TTL_S]:
                     self.pending.pop(rid, None)
@@ -468,6 +799,293 @@ class Processor:
                     self._check_status(now)
             except Exception:
                 log.exception("Tick fehlgeschlagen")
+        if now - self._last_time_check >= TIME_CHECK_EVERY_S:
+            self._last_time_check = now
+            try:
+                self._check_time_rules()
+            except Exception:
+                log.exception("Zeit-Regeln: Prüfung fehlgeschlagen")
+
+    # ---------------------------------------------------------- Wiederholung (C1, repeat_s/repeat_max)
+
+    def _tick_repeats(self, now: float) -> None:
+        """Fällige Wiederholungen auslösen (unter self.lock). Ende: Event quittiert oder beendet, Regel geändert/
+        aus, `repeat_max` erreicht oder – bei `posture` – Haltung besteht nicht mehr."""
+        due = [r for r in self.repeats.values() if now >= r["next"]]
+        if not due:
+            return
+        by_id = {int(r["id"]): r for r in rules.all_rules()}
+        with SessionLocal() as s:
+            for rep in due:
+                key = (rep["rule_id"], rep["event_id"])
+                rule = by_id.get(rep["rule_id"])
+                tr = self.tracks.get((rep["camera_id"], rep["track_id"]))
+                reason = None
+                if tr is None and now < self._resume_until and (rep["camera_id"], rep["track_id"]) in self.resumable:
+                    rep["next"] = now + 5.0      # R1: Track nach Neustart noch nicht wieder gemeldet – warten
+                    continue
+                if rule is None or not rule.get("enabled") or float(rule.get("repeat_s") or 0) <= 0:
+                    reason = "Regel geändert"
+                elif tr is None or tr.event_id != rep["event_id"]:
+                    reason = "Event beendet"
+                elif rule.get("trigger") == "posture" and not (tr.trigger_state.get(rep["rule_id"]) or {}).get("holding"):
+                    reason = "Haltung besteht nicht mehr"
+                elif int(rule.get("repeat_max") or 0) and rep["count"] >= int(rule["repeat_max"]):
+                    reason = "repeat_max erreicht"
+                else:
+                    ack = s.scalar(select(Event.acknowledged_at).where(Event.id == rep["event_id"]))
+                    if ack is not None:
+                        reason = "quittiert"
+                if reason:
+                    log.info("Regel %s, Event %s: keine weiteren Wiederholungen (%s)", rep["rule_id"],
+                             rep["event_id"], reason)
+                    self.repeats.pop(key, None)
+                    self._save_repeats()
+                    continue
+                rep["count"] += 1
+                rep["next"] = now + float(rule["repeat_s"])
+                try:
+                    self._do_fire(s, rule, tr, list(rep["zones"]), now, extra=rep["extra"], repeat=rep["count"])
+                except Exception:
+                    log.exception("Regel '%s': Wiederholung fehlgeschlagen", rule.get("name"))
+                self._save_repeats()
+
+    # ---------------------------------------------------------- R1: Zustand über Neustarts (KV)
+
+    def _save_kv(self, key: str, value: Any) -> None:
+        try:
+            with SessionLocal() as s:
+                row = s.get(KV, key)
+                if row is None:
+                    s.add(KV(key=key, value=value))
+                else:
+                    row.value = value
+                s.commit()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Zustand %s nicht gesichert: %s", key, e)
+
+    def _save_repeats(self) -> None:
+        self._save_kv(REPEATS_KEY, [dict(r) for r in self.repeats.values()])
+
+    def startup(self, active: list[tuple[int, int, str]]) -> None:
+        """Beim Start (nach close_stale_events): fortsetzbare Tracks merken, Wiederholungen laden, verlorene
+        verzögerte Prüfungen melden."""
+        now = time.time()
+        with self.lock:
+            self.resumable = {(cid, tid): eid for cid, tid, eid in active}
+            self._resume_until = now + RESUME_WINDOW_S
+            with SessionLocal() as s:
+                rep = s.get(KV, REPEATS_KEY)
+                cond = s.get(KV, COND_DELAYED_KEY)
+                reps = list(rep.value) if rep and isinstance(rep.value, list) else []
+                lost = list(cond.value) if cond and isinstance(cond.value, list) else []
+            for r in reps:
+                try:
+                    if (int(r["camera_id"]), int(r["track_id"])) in self.resumable:
+                        self.repeats[(int(r["rule_id"]), str(r["event_id"]))] = {
+                            **r, "zones": list(r.get("zones") or []), "extra": dict(r.get("extra") or {}),
+                            "next": max(float(r.get("next") or now), now + 5.0)}
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self._save_repeats()
+            if lost:
+                self._save_kv(COND_DELAYED_KEY, [])
+        if self.repeats:
+            log.info("%d Wiederholung(en) aus der Zeit vor dem Neustart übernommen", len(self.repeats))
+        for c in lost:
+            log.warning("Verzögerte Prüfung von Regel '%s' (Kamera %s, fällig %s) durch Neustart entfallen",
+                        c.get("rule"), c.get("camera_id"),
+                        datetime.fromtimestamp(float(c.get("due") or 0), timezone.utc).isoformat())
+            try:
+                notifications.create(
+                    source="rule", level="warning", title=f"Regel „{c.get('rule')}“: Prüfung entfallen",
+                    message="Die verzögerte Bedingungsprüfung fiel in einen Neustart des Systems und wurde nicht "
+                            "ausgeführt.", rule_id=c.get("rule_id"), rule_name=c.get("rule"),
+                    camera_id=c.get("camera_id"), push_enabled=False)
+            except Exception:  # noqa: BLE001
+                log.exception("Hinweis zu entfallener Prüfung nicht angelegt")
+
+    # ---------------------------------------------------------- Zeit-Regeln (A1, trigger=time)
+
+    def _load_time_runs(self) -> dict[str, str]:
+        if self._time_runs is None:
+            with SessionLocal() as s:
+                row = s.get(KV, TIME_RUNS_KEY)
+                self._time_runs = dict(row.value) if row and isinstance(row.value, dict) else {}
+        return self._time_runs
+
+    def _save_time_run(self, rule_id: int, key: str) -> None:
+        runs = self._load_time_runs()
+        runs[str(rule_id)] = key
+        valid = {str(r["id"]) for r in rules.all_rules()}
+        for k in [k for k in runs if k not in valid]:
+            runs.pop(k, None)
+        with SessionLocal() as s:
+            row = s.get(KV, TIME_RUNS_KEY)
+            if row is None:
+                s.add(KV(key=TIME_RUNS_KEY, value=dict(runs)))
+            else:
+                row.value = dict(runs)
+            s.commit()
+
+    def _check_time_rules(self) -> None:
+        """Fällige Zeit-Regeln starten (Planung zustandslos aus Regeln + KV `rule_time_runs`)."""
+        now_dt = datetime.now(timezone.utc)
+        time_rules = [r for r in rules.all_rules() if r.get("enabled") and r.get("trigger") == "time"]
+        if time_rules:
+            runs = self._load_time_runs()
+            for rule in time_rules:
+                key = rules.time_rule_due(rule, now_dt, runs.get(str(rule["id"])))
+                if key is None:
+                    continue
+                self._save_time_run(int(rule["id"]), key)   # vor dem Lauf merken: höchstens 1× je Tag und `at`
+                log.info("Zeit-Regel '%s' fällig (%s)", rule["name"], key)
+                _cond_pool.submit(self._run_time_rule_safe, int(rule["id"]))
+        if time.time() - self._last_weather_prefetch >= WEATHER_PREFETCH_EVERY_S:
+            from . import rule_conditions, weather
+            if rule_conditions.uses_weather() and weather.location() is not None:
+                self._last_weather_prefetch = time.time()
+                _cond_pool.submit(weather.prefetch)
+
+    def _run_time_rule_safe(self, rule_id: int) -> None:
+        try:
+            self.run_time_rule(rule_id)
+        except Exception:
+            log.exception("Zeit-Regel %s fehlgeschlagen", rule_id)
+
+    def run_time_rule(self, rule_id: int, *, force: bool = False) -> Optional[dict[str, Any]]:
+        """Zeit-Regel ausführen (A1) – siehe run_eventless_rule."""
+        return self.run_eventless_rule(rule_id, trigger="time", force=force)
+
+    # ---------------------------------------------------------- Regeln ohne Event (time, W3: sensor)
+
+    def sensor_changed(self, sensor: dict[str, Any], old_state: Optional[str], new_state: str) -> int:
+        """W3 (A3): bestätigter Zustandswechsel eines virtuellen Sensors → passende Regeln mit `trigger:"sensor"`
+        asynchron starten (Bedingungs-Pool). `sensor` = VirtualSensor-JSON (mind. id, name, camera_id).
+        Liefert die Zahl der gestarteten Regeln."""
+        if old_state == new_state:
+            return 0
+        sid = int(sensor.get("id") or 0)
+        n = 0
+        for rule in rules.all_rules():
+            if not rule.get("enabled") or rule.get("trigger") != "sensor":
+                continue
+            opts = rule.get("trigger_options") or {}
+            if int(opts.get("sensor_id") or 0) != sid:
+                continue
+            want = opts.get("state") or "on"
+            if want != "any" and want != new_state:
+                continue
+            ctx = {"sensor": sensor.get("name") or f"Sensor {sid}", "sensor_state": rules.sensor_state_de(new_state)}
+            cam_id = sensor.get("camera_id")
+            image = sensor.get("snapshot_path")
+            _cond_pool.submit(self._run_eventless_safe, int(rule["id"]), "sensor", ctx, cam_id, image,
+                              {"trigger": "sensor", "sensor_id": sid, "state": new_state, "previous": old_state})
+            n += 1
+        return n
+
+    def _run_eventless_safe(self, rule_id: int, trigger: str, ctx: Optional[dict[str, Any]],
+                            camera_id: Optional[int], snapshot_path: Optional[str], data: Optional[dict]) -> None:
+        try:
+            self.run_eventless_rule(rule_id, trigger=trigger, ctx=ctx, camera_id=camera_id,
+                                    snapshot_path=snapshot_path, data=data)
+        except Exception:
+            log.exception("Regel %s (%s) fehlgeschlagen", rule_id, trigger)
+
+    def run_eventless_rule(self, rule_id: int, *, trigger: str, ctx: Optional[dict[str, Any]] = None,
+                           camera_id: Optional[int] = None, image_path: Optional[str] = None,
+                           snapshot_path: Optional[str] = None, data: Optional[dict[str, Any]] = None,
+                           force: bool = False) -> Optional[dict[str, Any]]:
+        """Regel ohne Track/Event ausführen (time, sensor): Bedingungen prüfen, Cooldown, bei Erfolg Notification
+        (+ Push), MQTT/Webhook. `ctx` ergänzt Platzhalter (z. B. sensor/sensor_state), `camera_id`/`image_path`/
+        `snapshot_path` gelten, wenn die Bedingungen nichts Passenderes liefern. Liefert {ok, reason,
+        notifications} oder None (Regel unbekannt). `force` ignoriert den Cooldown."""
+        rule = next((r for r in rules.all_rules() if int(r["id"]) == rule_id), None)
+        if rule is None:
+            return None
+        label = {"time": "Zeit-Regel", "sensor": "Sensor-Regel"}.get(trigger, f"Regel ({trigger})")
+        now_dt = datetime.now(timezone.utc)
+        res = rules.evaluate_conditions(rule, rules.CondContext(rule=rule, now=now_dt, camera_id=camera_id))
+        if not res.ok:
+            log.info("%s '%s': Bedingungen nicht erfüllt – %s", label, rule["name"], res.reason or "?")
+            return {"ok": False, "reason": res.reason, "notifications": []}
+        ck = (rule_id, 0)
+        with self.lock:
+            if not force and self._cooldown_active(ck, rule, time.time()):
+                log.info("%s '%s': Cooldown aktiv", label, rule["name"])
+                return {"ok": False, "reason": "Cooldown aktiv", "notifications": []}
+            self.cooldowns[ck] = time.time()
+        log.info("%s '%s' ausgelöst – %s", label, rule["name"], res.reason or "ohne Bedingungen")
+        cam_id = res.camera_id if res.camera_id is not None else camera_id
+        img = res.image_path or image_path
+        snap = res.snapshot_path or snapshot_path
+        cam = registry.get(cam_id) if cam_id is not None else None
+        ttl = media_sign.default_ttl_s()
+        pctx: dict[str, Any] = {
+            "camera": (cam or {}).get("name") or "", "camera_id": cam_id if cam_id is not None else "",
+            "label": "", "score": "", "identity": "", "zone": "", "event_id": "", "rule": rule["name"],
+            "time": now_dt.astimezone(rules.config.tz).isoformat(timespec="seconds"),
+            "thumb_url": media_sign.sign_media_path(img, ttl) if img else "",
+            "snapshot_url": media_sign.sign_media_path(snap, ttl) if snap else "",
+            "clip_url": "", "items": "", "item_place": "", "weather": "", "posture": "", "gesture": "", "repeat": "",
+            "sensor": "", "sensor_state": "",
+        }
+        pctx.update({k: v for k, v in (ctx or {}).items() if k in pctx})
+        pctx.update({k: v for k, v in res.ctx.items() if k in COND_PLACEHOLDERS and v not in (None, "")})
+        ndata = dict(data or {"trigger": trigger})
+        created: list[dict[str, Any]] = []
+        actions = rule.get("actions") or []
+        for a in actions:
+            if a.get("type") != "push":
+                continue
+            mode = a.get("image") or "snapshot"
+            if mode == "snapshot":
+                image = snap or img
+            elif mode == "crop":
+                image = img or snap
+            else:
+                image = None
+            priority = a.get("priority") or "default"
+            n = notifications.create(
+                source="rule", level="alarm" if priority == "high" else "info",
+                title=rules.render(a.get("title") or "{rule}", pctx), message=rules.render(a.get("message") or "", pctx),
+                rule_id=rule_id, rule_name=rule.get("name"), camera_id=cam_id, item_ids=list(res.item_ids),
+                image_path=image, targets=[a["target"]] if a.get("target") else None, priority=priority,
+                data=ndata)
+            if n:
+                created.append(n)
+        if not any(a.get("type") == "push" for a in actions):
+            n = notifications.create(
+                source="rule", title=rule["name"], message=_cond_message(pctx) or rule["name"], rule_id=rule_id,
+                rule_name=rule.get("name"), camera_id=cam_id, item_ids=list(res.item_ids),
+                image_path=snap or img, push_enabled=False, data=ndata)
+            if n:
+                created.append(n)
+        # MQTT/Webhook ohne eigenen Payload: Notification-JSON (signierte URLs), sonst die Platzhalter
+        payload = media_sign.sign_urls(dict(created[0])) if created else dict(pctx)
+        for a in actions:
+            typ = a.get("type")
+            try:
+                if typ == "mqtt":
+                    topic = rules.render(a.get("topic") or "", pctx)
+                    if not topic or "#" in topic or "+" in topic:
+                        log.warning("%s '%s': ungültiges MQTT-Topic '%s'", label, rule["name"], topic)
+                        continue
+                    body = rules.render(a["payload"], pctx) if a.get("payload") else json.dumps(payload, default=str)
+                    self._pub(topic, body, retain=bool(a.get("retain")), qos=1)
+                elif typ == "webhook":
+                    rules.submit_async(self.loop, rules.run_webhook(a, pctx, payload))
+                elif typ == "snapshot" and trigger == "sensor" and snap:
+                    # W3 (A3): sensors.py nimmt beim bestätigten Wechsel ein Standbild auf (go2rtc) – das ist der
+                    # Snapshot dieser Regel (hängt an Notification/Push, Platzhalter {snapshot_url})
+                    log.debug("%s '%s': Snapshot = Standbild des Sensors (%s)", label, rule["name"], snap)
+                elif typ == "ptz":
+                    self._run_ptz(a, rule, cam_id)
+                elif typ in ("snapshot", "clip"):
+                    log.info("%s '%s': Aktion %s braucht ein Ereignis – übersprungen", label, rule["name"], typ)
+            except Exception:
+                log.exception("%s '%s': Aktion %s fehlgeschlagen", label, rule["name"], typ)
+        return {"ok": True, "reason": res.reason, "notifications": created}
 
     def _check_status(self, now: float) -> None:
         """Statuswechsel (z. B. online → offline durch Timeout) melden; verwaiste Tracks beenden."""
@@ -489,11 +1107,51 @@ class Processor:
                     self._end_track(s, tr, {"ts": tr.last_rx}, now)
 
     def drop_camera(self, camera_id: int) -> None:
+        """Kamera gelöscht (vor registry.reload aufrufen): Tracks/Zähler vergessen und die gespeicherten
+        (retained) MQTT-Nachrichten der Kamera räumen – sonst sehen Abnehmer (Home Assistant) dauerhaft Objekte
+        in einer Kamera, die es nicht mehr gibt (Refinement 1)."""
+        cam = registry.get(camera_id)
         with self.lock:
             for key in [k for k in self.tracks if k[0] == camera_id]:
                 self.tracks.pop(key, None)
+            labels = {k[1] for k in self.counts if k[0] == camera_id}
             for key in [k for k in self.counts if k[0] == camera_id]:
                 self.counts.pop(key, None)
+        if cam:
+            prefix = settings_store.get()["mqtt_prefix"]
+            for lbl in labels | set(cam.get("labels") or []):
+                self._pub(f"{prefix}/{cam['slug']}/{lbl}", "", retain=True)
+
+        def _clear_internal() -> None:
+            # nach dem einmaligen „offline“ des Workers (CONTRACT: retain) – leere retained Nachricht löscht sie
+            for kind in ("status", "health", "inventory"):
+                self._pub(f"vg/internal/{kind}/{camera_id}", "", retain=True)
+        t = threading.Timer(10.0, _clear_internal)
+        t.daemon = True
+        t.start()
+
+
+def _posture_de(p: Optional[str]) -> str:
+    from .pose_events import posture_de
+    return posture_de(p)
+
+
+# Platzhalter, die Bedingungen liefern dürfen (A1, W3 sensor)
+COND_PLACEHOLDERS = ("items", "item_place", "weather", "sensor", "sensor_state")
+
+
+def _cond_message(ctx: dict[str, Any]) -> str:
+    """Hinweistext für Regeln mit Bedingungen ohne eigene Push-Aktion."""
+    parts = []
+    if ctx.get("items"):
+        parts.append(f"{ctx['items']}: {ctx['item_place']}" if ctx.get("item_place") else str(ctx["items"]))
+    if ctx.get("weather"):
+        parts.append(str(ctx["weather"]))
+    if ctx.get("sensor"):
+        parts.append(f"{ctx['sensor']}: {ctx.get('sensor_state') or ''}".rstrip(": "))
+    if not parts and ctx.get("label"):
+        parts.append(f"{ctx['label']} an {ctx.get('camera') or 'Kamera'}")
+    return " · ".join(parts)
 
 
 processor = Processor()
@@ -504,7 +1162,12 @@ def notify_event_changed(event_id: str) -> None:
 
 
 def close_stale_events() -> None:
-    """Beim Start: noch aktive Events aus früheren Läufen beenden."""
+    """Beim Start: noch aktive Events aus früheren Läufen beenden. R1: Meldet der Worker einen dieser Tracks in
+    den ersten 2 min wieder, wird das Event fortgesetzt (Processor.startup/_resume_track)."""
     with SessionLocal() as s:
+        active = [(int(c), int(t), str(e)) for c, t, e in s.execute(
+            select(Event.camera_id, Event.track_id, Event.id).where(Event.active.is_(True))).all()
+            if t is not None]
         s.execute(update(Event).where(Event.active.is_(True)).values(active=False, end_ts=Event.last_seen))
         s.commit()
+    processor.startup(active)

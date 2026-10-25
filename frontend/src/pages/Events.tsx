@@ -7,7 +7,7 @@ import type { VGEvent } from "../lib/types";
 import { ALL_LABELS, KIND_NAME, labelColor, labelName } from "../lib/labels";
 import { fmtDateTime, fmtDuration, fmtShort, localToIso } from "../lib/format";
 import { Empty, Img, LabelIcon, LabelPill, Loading, SearchSelect } from "../components/ui";
-import { EventDetailDialog } from "../components/EventBits";
+import { AlertBadge, EventDetailDialog } from "../components/EventBits";
 
 const PAGE = 48;
 
@@ -34,6 +34,7 @@ export function EventGrid({ items, onPick }: { items: VGEvent[]; onPick: (e: VGE
               </div>
               <div className="meta"><span className="row" style={{ gap: 4 }}><CamIcon />{e.camera_name}</span><span className="row" style={{ gap: 4 }}><Clock />{fmtShort(e.start_ts)}</span></div>
               {e.rules?.length > 0 && <div className="meta" style={{ color: "var(--warn)" }}><Zap />{e.rules.join(", ")}</div>}
+              <AlertBadge e={e} />
             </div>
           </div>
         );
@@ -56,7 +57,7 @@ function EventTable({ items, onPick }: { items: VGEvent[]; onPick: (e: VGEvent) 
               <td>{e.camera_name}</td>
               <td className="mono" style={{ whiteSpace: "nowrap" }}>{fmtDateTime(e.start_ts)}</td>
               <td>{e.active ? <span className="badge bad"><span className="dot" />aktiv</span> : fmtDuration(e.start_ts, e.end_ts)}</td>
-              <td>{e.rules?.length ? <span className="badge warn"><Zap size={11} />{e.rules.length}</span> : <span className="muted">–</span>}</td>
+              <td>{e.rules?.length ? <span className="badge warn"><Zap size={11} />{e.rules.length}</span> : <span className="muted">–</span>} <AlertBadge e={e} /></td>
               <td><span className="feed-icons" style={{ margin: 0 }}><ImageIcon className={e.snapshot_url ? "has" : ""} /><Film className={e.clip_url ? "has" : ""} /></span></td>
             </tr>
           ))}

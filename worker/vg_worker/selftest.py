@@ -2,6 +2,21 @@
 
     python -m vg_worker.selftest rtsp://testcam:8554/cam1 [rtsp://testcam:8554/cam2 ...]
         [--seconds 20] [--fps 5] [--no-face] [--no-plate] [--no-pet] [--clip] [--replicate N]
+        [--inventory] [--inventory-interval 3] [--vocab datei.json] [--pose] [--gestures]
+
+--pose / --gestures schalten die Pose-Stufe (C1: Haltung, D1: Gesten) für alle Kameras ein (Lasttest W2), z. B.
+    python -m vg_worker.selftest rtsp://testcam:8554/cam3 --pose --seconds 120
+
+--reid schaltet die Personen-Wiedererkennung (C2) für alle Kameras ein; /api/internal/reid beantwortet eine
+In-Memory-Galerie (Kosinus ≥ 0,70), gezählt werden Aufrufe, Verknüpfungen und neue Einträge (Lasttest W4).
+
+--face-fullres schneidet Gesichter aus dem Hauptstrom in voller Auflösung (Identitäten 07, Paket B; zusätzlicher
+Leser nur auf Anforderung); Gesichter werden je Track gesammelt (vorläufig/endgültig), der Fake beantwortet die
+Phasen wie CONTRACT ID.F (neue Identität nur ab --face-new-min-q/--face-new-min-size), z. B.
+    python -m vg_worker.selftest rtsp://testcam:8554/camhd --face-fullres --seconds 60
+
+--inventory schaltet die Inventar-Pipeline (Gegenstände) für die erste Kamera ein, z. B.
+    python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 --inventory --seconds 60
 
 Identification calls are answered by an in-memory fake (cosine matching), messages are counted.
 """
@@ -30,6 +45,23 @@ def main():
     ap.add_argument("--no-pet", action="store_true")
     ap.add_argument("--clip", action="store_true", help="also test snapshot + clip export")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--inventory", action="store_true", help="inventory pipeline on the first camera")
+    ap.add_argument("--inventory-interval", type=float, default=3.0)
+    ap.add_argument("--no-tiling", action="store_true")
+    ap.add_argument("--health", action="store_true",
+                    help="Kamera-Gesundheit (C5) mitprüfen; Referenzbilder dann nur in einem temporären Ordner")
+    ap.add_argument("--pose", action="store_true", help="Pose/Haltung (C1) auf allen Kameras")
+    ap.add_argument("--gestures", action="store_true", help="Gesten (D1) auf allen Kameras (impliziert Pose)")
+    ap.add_argument("--history", action="store_true", help="Zeitmaschine (B1) auf allen Kameras")
+    ap.add_argument("--history-interval", type=float, default=30.0)
+    ap.add_argument("--history-tiling", action="store_true")
+    ap.add_argument("--reid", action="store_true", help="Wiedererkennung über Kameras (C2) auf allen Kameras")
+    ap.add_argument("--face-fullres", action="store_true", help="Gesichter aus voller Auflösung (Identitäten 07)")
+    ap.add_argument("--face-track-faces", type=int, default=5)
+    ap.add_argument("--face-new-min-q", type=float, default=0.35)
+    ap.add_argument("--face-new-min-size", type=int, default=80)
+    ap.add_argument("--face-threshold", type=float, default=0.30)
+    ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -42,11 +74,24 @@ def main():
 
     from .gpu import gpu_info
     from .pipeline import Pipeline
+    # Kamera-Gesundheit: Selbsttest-Kameras haben IDs 1..N wie echte Kameras – Referenzbilder dürfen nie im
+    # gemeinsamen Medienordner landen (sie würden health/cam<N>_*.jpg echter Kameras überschreiben)
+    if a.health:
+        import tempfile
+        settings.MEDIA_DIR = tempfile.mkdtemp(prefix="vg-selftest-media-")
+        print(f"health checks on, media (references) in {settings.MEDIA_DIR}")
+    else:
+        settings.HEALTH_ENABLED = False
 
     counts: Counter = Counter()
     labels_started: Counter = Counter()
     cmd_results: list[dict] = []
     max_objects = Counter()
+    postures: Counter = Counter()          # Haltungswechsel (Track-Attribut posture)
+    gestures_seen: list[dict] = []
+    lying_tracks: dict[tuple[int, int], float] = {}   # (cam, track) -> längste gemeldete Liegedauer
+    inventory_last: dict[int, dict] = {}
+    inventory_changes: Counter = Counter()
     lock = threading.Lock()
 
     def publish(topic: str, payload: dict, qos: int = 0, retain: bool = False):
@@ -59,21 +104,104 @@ def main():
                     labels_started[payload["label"]] += 1
                 if payload["type"] == "update" and payload.get("identity"):
                     counts["track_update_with_identity"] += 1
+                attr = payload.get("attributes") or {}
+                if attr.get("posture"):
+                    key = (payload["camera_id"], payload["track_id"])
+                    if attr["posture"] == "lying":
+                        lying_tracks[key] = max(lying_tracks.get(key, 0.0),
+                                                float(payload.get("last_seen") or payload["ts"])
+                                                - float(attr.get("posture_since") or payload["ts"]))
+                    if payload["type"] != "end":
+                        postures[attr["posture"]] += 1
+            elif kind == "gesture":
+                gestures_seen.append(payload)
+            elif kind == "history" and payload.get("extend"):
+                counts["history_extend"] += 1
             elif kind == "detections":
                 max_objects[payload["camera_id"]] = max(max_objects[payload["camera_id"]], len(payload["objects"]))
             elif kind == "cmd_result":
                 cmd_results.append(payload)
+            elif kind == "inventory":
+                if payload.get("stopped"):
+                    counts["inventory_stopped"] += 1
+                    return
+                if not payload.get("snapshot_path") and payload["camera_id"] in inventory_last:
+                    payload = dict(payload, snapshot_path=inventory_last[payload["camera_id"]].get("snapshot_path"))
+                inventory_last[payload["camera_id"]] = payload
+                for ch in payload.get("changes") or []:
+                    inventory_changes[ch["type"]] += 1
 
     # fake backend identify: cosine matching, new identity if below threshold
     db: dict[str, list[tuple[int, np.ndarray | str]]] = {"face": [], "pet": [], "plate": []}
     idc = [0]
     id_calls: Counter = Counter()
+    face_stats: Counter = Counter()          # Identitäten 07: Phasen/Entscheidungen/Quellen
+    face_vals: dict[str, list[float]] = {"size_main": [], "size_detect": [], "q_main": [], "q_detect": [],
+                                         "sharp": [], "yaw": [], "n_faces": []}
+
+    def face_identify(body: dict) -> dict:
+        """Fake von CONTRACT ID.F: Mittel der besten 3 Ähnlichkeiten je Identität, Abstand zum Zweitbesten."""
+        phase = body.get("phase") or "single"
+        emb = np.asarray(body["embedding"], dtype=np.float32)
+        assert abs(float(np.linalg.norm(emb)) - 1.0) < 1e-3, "embedding not normalized"
+        for k in ("face_size", "yaw", "pitch", "sharpness", "day_night", "source_res"):
+            assert k in body, f"{k} fehlt"
+        face_stats[f"phase_{phase}"] += 1
+        smp = body.get("samples") or []
+        if phase == "final":
+            assert 1 <= len(smp) <= a.face_track_faces and body.get("n_faces") == len(smp), body.get("n_faces")
+            face_vals["n_faces"].append(len(smp))
+        for x in (smp or [body]):
+            src = x.get("source_res") or "?"
+            face_stats[f"src_{src}"] += 1
+            if src in ("main", "detect"):
+                face_vals[f"size_{src}"].append(float(x.get("face_size") or 0))
+                face_vals[f"q_{src}"].append(float(x.get("quality") or 0))
+            if x.get("sharpness") is not None:
+                face_vals["sharp"].append(float(x["sharpness"]))
+            if x.get("yaw") is not None:
+                face_vals["yaw"].append(abs(float(x["yaw"])))
+        per: dict[int, list[float]] = {}
+        for iid, e in db["face"]:
+            per.setdefault(iid, []).append(float(np.dot(e, emb)))
+        scores = sorted(((float(np.mean(sorted(v, reverse=True)[:3])), iid) for iid, v in per.items()), reverse=True)
+        best, second = (scores[0] if scores else (-1.0, None)), (scores[1][0] if len(scores) > 1 else None)
+        thr = a.face_threshold
+        out = {"identity_id": None, "display_name": None, "name": None, "score": max(0.0, best[0]), "is_new": False,
+               "second_score": second, "threshold": thr, "learned": False, "phase": phase}
+        if best[1] is not None and best[0] >= thr:
+            if second is not None and best[0] - second < 0.05:
+                out["decision"] = "ambiguous"
+            else:
+                out.update(identity_id=best[1], display_name=f"face #{best[1]}", decision="match")
+                if phase == "final":
+                    for x in smp:
+                        if float(x.get("quality") or 0) >= 0.30:
+                            db["face"].append((best[1], np.asarray(x["embedding"], dtype=np.float32)))
+                            out["learned"] = True
+        elif phase == "provisional":
+            out["decision"] = "none"
+        else:
+            qs = [float(x.get("quality") or 0) for x in (smp or [body])]
+            ss = [float(x.get("face_size") or 0) for x in (smp or [body])]
+            if max(qs) >= a.face_new_min_q and max(ss) >= a.face_new_min_size:
+                idc[0] += 1
+                for x in (smp or [body]):
+                    db["face"].append((idc[0], np.asarray(x["embedding"], dtype=np.float32)))
+                out.update(identity_id=idc[0], display_name=f"face #{idc[0]}", decision="new", is_new=True, learned=True)
+            else:
+                out["decision"] = "none"
+        face_stats[f"{phase}_{out['decision']}"] += 1
+        return out
 
     def identify(body: dict):
         kind = body["kind"]
         with lock:
             id_calls[kind] += 1
-            assert os.path.exists(os.path.join(settings.MEDIA_DIR, body["crop_path"])), body["crop_path"]
+            if body.get("crop_path") or kind != "face":
+                assert os.path.exists(os.path.join(settings.MEDIA_DIR, body["crop_path"])), body["crop_path"]
+            if kind == "face":
+                return face_identify(body)
             if kind == "plate":
                 for iid, t in db[kind]:
                     if t == body["plate_text"]:
@@ -95,7 +223,28 @@ def main():
             db[kind].append((idc[0], emb))
             return {"identity_id": idc[0], "display_name": f"{kind} #{idc[0]}", "name": None, "score": best[1], "is_new": True}
 
-    p = Pipeline(publish, identify)
+    reid_db: list[tuple[str, np.ndarray]] = []
+    reid_stats = Counter()
+
+    def reid(body: dict) -> dict:
+        # C2: Fake der Backend-Galerie (nur RAM, wie im Backend)
+        emb = np.asarray(body["embedding"], dtype=np.float32)
+        assert abs(float(np.linalg.norm(emb)) - 1.0) < 1e-2, "reid embedding not normalized"
+        reid_stats["calls"] += 1
+        best, best_s = None, -1.0
+        for key, e in reid_db:
+            sc = float(np.dot(e, emb))
+            if sc > best_s:
+                best, best_s = key, sc
+        if best is not None and best_s >= 0.70:
+            reid_stats["linked"] += 1
+            return {"presence_key": best, "identity_id": None, "score": best_s, "is_new": False, "identity": None}
+        key = f"p-{len(reid_db):04d}"
+        reid_db.append((key, emb))
+        reid_stats["new"] += 1
+        return {"presence_key": key, "identity_id": None, "score": max(best_s, 0.0), "is_new": True, "identity": None}
+
+    p = Pipeline(publish, identify, reid)
     t0 = time.time()
     p.load_detector()
     print(f"detector loaded in {time.time() - t0:.1f}s: {p.detector_status}")
@@ -107,8 +256,27 @@ def main():
             cams.append({"id": cid, "name": f"test{cid}", "enabled": True, "detect_url_rtsp": u, "main_rtsp": u,
                          "detect_fps": a.fps, "labels": [], "min_score": 0.5,
                          "face_recognition": not a.no_face, "plate_recognition": not a.no_plate,
+                         "face_fullres": a.face_fullres and not a.no_face,
                          "pet_recognition": not a.no_pet,
+                         "pose_enabled": a.pose or a.gestures, "gesture_enabled": a.gestures,
+                         "history_enabled": a.history, "history_interval_s": a.history_interval,
+                         "history_tiling": a.history_tiling, "reid_enabled": a.reid,
                          "zones": [{"id": "left", "name": "links", "polygon": [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]}]})
+    if a.inventory:
+        if a.vocab:
+            import json
+            with open(a.vocab, encoding="utf-8") as fh:
+                vocab = json.load(fh)
+        else:
+            vocab = [{"label": lab, "name_de": de, "prompts": pr, "min_score": None} for lab, de, pr in (
+                ("lamp", "Lampe", ["lamp"]), ("book", "Buch", ["book"]), ("remote", "Fernbedienung", ["remote control"]),
+                ("table", "Tisch", ["table", "dining table"]), ("mug", "Tasse", ["mug", "cup"]),
+                ("phone", "Handy", ["cell phone", "smartphone"]), ("keys", "Schlüssel", ["keys", "key ring"]),
+                ("eyeglasses", "Brille", ["eyeglasses"]), ("bottle", "Flasche", ["bottle"]),
+                ("plant", "Pflanze", ["potted plant"]))]
+        cams[0].update({"inventory_enabled": True, "inventory_interval_s": a.inventory_interval,
+                        "inventory_min_score": 0.35, "inventory_tiling": not a.no_tiling, "inventory_vocab": vocab})
+    p.set_settings({"face_track_faces": a.face_track_faces})
     p.apply_config(cams)
     p.start()
     # give identification models time to load (they load lazily in background)
@@ -123,6 +291,20 @@ def main():
         print(f"[{time.time() - t_start:5.1f}s] perf={p.perf()} gpu={g} cams={{{cam_s}}}")
         print(f"         models={p.models_status()}")
         print(f"         msgs={dict(counts)} id_calls={dict(id_calls)} id_stats={p.identifier.stats}")
+        if a.pose or a.gestures:
+            print(f"         pose={p.pose.perf()} posture_updates={dict(postures)} lying_tracks={len(lying_tracks)} "
+                  f"gestures={[g['gesture'] for g in gestures_seen]}")
+        if a.history:
+            print(f"         history={p.history.perf()} status={p.history.status_text()}")
+        if a.reid:
+            print(f"         reid={p.reid.perf()} status={p.reid.status_text()} gallery={dict(reid_stats)}")
+        if a.inventory:
+            with lock:
+                inv = dict(inventory_last)
+            for cid_, m in inv.items():
+                its = ", ".join(f"{i['label']}:{i['state'][0]}{i['score']:.2f}" for i in m["items"])
+                print(f"         inventory cam {cid_}: {m['width']}x{m['height']} every {m['interval_s']}s "
+                      f"model={m['model']} [{its}] changes={dict(inventory_changes)}")
 
     if a.clip:
         first = cams[0]["id"]
@@ -158,7 +340,40 @@ def main():
     print(f"max objects/frame : {dict(max_objects)}")
     print(f"faces found       : {p.identifier.stats['face_found']}, identify calls {dict(id_calls)}, identities {[(k, len(v)) for k, v in db.items()]}")
     print(f"identify stats    : {p.identifier.stats}")
+    if not a.no_face:
+        def _q(v):
+            return (f"n={len(v)} p10/med/p90={np.percentile(v, 10):.0f}/{np.median(v):.0f}/{np.percentile(v, 90):.0f}"
+                    if v else "n=0")
+
+        def _qf(v):
+            return (f"n={len(v)} p10/med/p90={np.percentile(v, 10):.2f}/{np.median(v):.2f}/{np.percentile(v, 90):.2f}"
+                    if v else "n=0")
+        print(f"face perf         : {p.identifier.faces.perf()}  counts {dict(p.identifier.faces.counts)}  "
+              f"model avg {p.identifier.face.avg_ms:.1f} ms/job, queue dropped {p.identifier.face.dropped}")
+        print(f"face phases       : {dict(sorted(face_stats.items()))}")
+        print(f"face size main    : {_q(face_vals['size_main'])}  quality {_qf(face_vals['q_main'])}")
+        print(f"face size detect  : {_q(face_vals['size_detect'])}  quality {_qf(face_vals['q_detect'])}")
+        print(f"face sharp/|yaw|  : {_q(face_vals['sharp'])} / {_q(face_vals['yaw'])}; n_faces {_q(face_vals['n_faces'])}")
+        print(f"face identities   : {len({i for i, _ in db['face']})}")
     print(f"models            : {p.models_status()}")
+    if a.pose or a.gestures:
+        print(f"pose perf         : {p.pose.perf()}")
+        print(f"posture updates   : {dict(postures)}; lying tracks {len(lying_tracks)}: "
+              f"{sorted(round(v, 1) for v in lying_tracks.values())}")
+        print(f"gestures          : {len(gestures_seen)} {Counter(g['gesture'] for g in gestures_seen)}")
+    if a.history:
+        print(f"history perf      : {p.history.perf()}  status {p.history.status_text()}  "
+              f"messages {counts.get('history', 0)} (extend {counts.get('history_extend', 0)})")
+    if a.reid:
+        print(f"reid perf         : {p.reid.perf()}  status {p.reid.status_text()}  gallery {dict(reid_stats)} "
+              f"entries {len(reid_db)}")
+    if a.inventory:
+        print(f"inventory perf    : {p.inventory.perf()}  changes {dict(inventory_changes)}")
+        for cid_, m in inventory_last.items():
+            for i in m["items"]:
+                print(f"  cam {cid_} {i['state']:9s} {i['label']:12s} {i['score']:.2f} bbox={i['bbox']} hits={i['hits']} "
+                      f"crop={i['crop_path']}")
+            print(f"  snapshot (letzte Änderung): {m.get('snapshot_path')}")
     os._exit(0)
 
 

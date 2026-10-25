@@ -8,16 +8,20 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
 from .config import config
 from .db import SessionLocal
 from .models import Rule
+from .schemas import (CondInventory, CondInventoryUntouched, CondSensor, CondTrackCameFrom, CondWeather,
+                      GestureTriggerOptions, PostureTriggerOptions, SensorTriggerOptions, TimeTriggerOptions,
+                      TriggerOptionsNone)
 
 log = logging.getLogger("vg.rules")
 
@@ -39,6 +43,249 @@ def reload() -> None:
 def all_rules() -> list[dict[str, Any]]:
     with _lock:
         return list(_rules)
+
+
+# ------------------------------------------------------------------ Registry (Regel-Engine v2)
+#
+# Trigger und Bedingungen werden hier registriert statt fest verdrahtet. Fach-Module registrieren beim Import
+# eigene Typen (W2: Trigger posture/gesture, W3: Trigger/Bedingung sensor) bzw. reichen den Evaluator einer hier
+# angelegten Bedingung nach (A1: rule_conditions.py). Erneutes Registrieren desselben Namens überschreibt.
+
+
+@dataclass
+class TriggerContext:
+    """W2: Kontext für Track-Trigger-Evaluatoren (posture, gesture, …), siehe register_trigger(evaluate=…)."""
+    rule: dict[str, Any]
+    track: "TrackState"
+    msg: dict[str, Any]                  # Worker-Nachricht (Track oder z. B. vg/internal/gesture); bei tick: {}
+    now: float                           # lokale Unix-s
+    phase: str                           # start|update|end|tick|gesture|…
+    state: dict[str, Any]                # je Regel+Track persistent (TrackState.trigger_state[rule_id])
+
+
+# Evaluator liefert die Zonen, in denen ausgelöst wird, oder None (nicht auslösen)
+TriggerEvaluator = Callable[[TriggerContext], Optional[list[str]]]
+
+
+@dataclass(frozen=True)
+class TriggerSpec:
+    name: str
+    track_based: bool                    # True: aus Track-Nachrichten (Event-Bezug); False: Regel ohne Event → Notification
+    options_model: type[BaseModel]       # validiert rules.trigger_options
+    label_de: str = ""
+    evaluate: Optional[TriggerEvaluator] = None   # W2: für Track-Trigger außer enter/leave/dwell
+
+
+@dataclass
+class CondContext:
+    """Kontext für die Auswertung einer Bedingung (zum Zeitpunkt der Prüfung, ggf. nach condition_delay_s)."""
+    rule: dict[str, Any]
+    now: datetime                                 # UTC
+    camera_id: Optional[int] = None               # auslösende Kamera (None bei trigger=time)
+    track: Optional["TrackState"] = None          # nur bei Track-Triggern
+    event_id: Optional[str] = None
+    trigger_ts: Optional[float] = None            # Unix-s der Auslösung (vor condition_delay_s)
+    trigger_zones: list[str] = field(default_factory=list)   # Zonen, in denen der Trigger feuerte
+
+
+@dataclass
+class CondResult:
+    ok: bool
+    ctx: dict[str, Any] = field(default_factory=dict)     # zusätzliche Platzhalter, z. B. items/item_place/weather
+    item_ids: list[int] = field(default_factory=list)      # betroffene Gegenstände (→ Notification.item_ids)
+    image_path: Optional[str] = None                      # passendes Bild (z. B. Crop des Gegenstands)
+    reason: str = ""                                      # Klartext fürs Log, warum (nicht) erfüllt
+    snapshot_path: Optional[str] = None                   # Übersichtsbild zum Gegenstand (A1, Regeln ohne Event)
+    camera_id: Optional[int] = None                       # Kamera des betroffenen Gegenstands (A1)
+    details: list[dict[str, Any]] = field(default_factory=list)   # je Bedingung {type, ok, reason} (Prüfung im UI)
+
+
+ConditionEvaluator = Callable[[dict[str, Any], CondContext], CondResult]
+
+
+@dataclass
+class ConditionSpec:
+    name: str
+    model: type[BaseModel]               # validiert einen Eintrag in rules.conditions (Feld `type` = name)
+    track_only: bool = False             # nur bei Track-Triggern sinnvoll (z. B. track_came_from)
+    evaluate: Optional[ConditionEvaluator] = None
+    label_de: str = ""
+
+
+TRIGGERS: dict[str, TriggerSpec] = {}
+CONDITIONS: dict[str, ConditionSpec] = {}
+
+
+BUILTIN_TRACK_TRIGGERS = ("enter", "leave", "dwell")
+
+
+def register_trigger(name: str, *, track_based: bool, options_model: type[BaseModel] = TriggerOptionsNone,
+                     label_de: str = "", evaluate: Optional[TriggerEvaluator] = None) -> TriggerSpec:
+    """Registriert (oder überschreibt) einen Trigger. Ein erneuter Aufruf ohne `evaluate` behält den bisherigen
+    Evaluator (so kann ein Fach-Modul den Evaluator nachreichen, ohne die Optionen zu ändern)."""
+    prev = TRIGGERS.get(name)
+    spec = TriggerSpec(name=name, track_based=track_based, options_model=options_model, label_de=label_de or name,
+                       evaluate=evaluate or (prev.evaluate if prev else None))
+    TRIGGERS[name] = spec
+    return spec
+
+
+def track_evaluator(name: Optional[str]) -> Optional[TriggerEvaluator]:
+    """Evaluator eines Nicht-Standard-Track-Triggers (W2: posture, gesture), sonst None."""
+    if not name or name in BUILTIN_TRACK_TRIGGERS:
+        return None
+    spec = TRIGGERS.get(name)
+    return spec.evaluate if spec and spec.track_based else None
+
+
+def register_condition(name: str, model: type[BaseModel], *, evaluate: Optional[ConditionEvaluator] = None,
+                       track_only: bool = False, label_de: str = "") -> ConditionSpec:
+    prev = CONDITIONS.get(name)
+    spec = ConditionSpec(name=name, model=model, track_only=track_only,
+                         evaluate=evaluate or (prev.evaluate if prev else None), label_de=label_de or name)
+    CONDITIONS[name] = spec
+    return spec
+
+
+def is_track_trigger(name: Optional[str]) -> bool:
+    spec = TRIGGERS.get(name or "enter")
+    return spec.track_based if spec else True
+
+
+def validate_rule_parts(trigger: str, options: dict[str, Any], conditions: list[dict[str, Any]]
+                        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Prüft trigger/trigger_options/conditions gegen die Registry (für schemas.RuleIn). ValueError → 422."""
+    spec = TRIGGERS.get(trigger)
+    if spec is None:
+        raise ValueError(f"Unbekannter Trigger: {trigger} (erlaubt: {', '.join(TRIGGERS)})")
+    try:
+        opts = spec.options_model(**(options or {})).model_dump(mode="json")
+    except ValidationError as e:
+        raise ValueError(f"trigger_options für {trigger}: {_first_error(e)}") from None
+    out: list[dict[str, Any]] = []
+    for i, c in enumerate(conditions or []):
+        typ = (c or {}).get("type") if isinstance(c, dict) else None
+        cs = CONDITIONS.get(str(typ))
+        if cs is None:
+            raise ValueError(f"Bedingung {i + 1}: unbekannter Typ {typ!r} (erlaubt: {', '.join(CONDITIONS)})")
+        if cs.track_only and not spec.track_based:
+            raise ValueError(f"Bedingung {i + 1} ({typ}) geht nur mit Track-Triggern, nicht mit {trigger}")
+        try:
+            out.append(cs.model(**c).model_dump(mode="json"))
+        except ValidationError as e:
+            raise ValueError(f"Bedingung {i + 1} ({typ}): {_first_error(e)}") from None
+    return opts, out
+
+
+def _first_error(e: ValidationError) -> str:
+    err = e.errors()[0] if e.errors() else {}
+    loc = ".".join(str(x) for x in err.get("loc") or [])
+    return f"{loc}: {err.get('msg')}" if loc else str(err.get("msg") or e)
+
+
+def evaluate_conditions(rule: dict[str, Any], ctx: CondContext, *, all_details: bool = False) -> CondResult:
+    """UND-Verknüpfung aller Bedingungen der Regel. Fehlt ein Evaluator oder wirft er, gilt die Bedingung als
+    NICHT erfüllt (lieber kein Hinweis als ein falscher). Platzhalter/Item-IDs der Einzelergebnisse werden vereint.
+    `all_details=True` prüft auch nach der ersten nicht erfüllten Bedingung weiter (für „Jetzt prüfen“ im UI)."""
+    total = CondResult(ok=True)
+    first_fail: Optional[CondResult] = None
+    for c in rule.get("conditions") or []:
+        typ = str(c.get("type"))
+        spec = CONDITIONS.get(typ)
+        if spec is None or spec.evaluate is None:
+            log.warning("Regel '%s': Bedingung %s ohne Auswertung – gilt als nicht erfüllt", rule.get("name"), typ)
+            r = CondResult(ok=False, reason=f"{typ}: nicht verfügbar")
+        else:
+            try:
+                r = spec.evaluate(c, ctx)
+            except Exception:
+                log.exception("Regel '%s': Bedingung %s fehlgeschlagen", rule.get("name"), typ)
+                r = CondResult(ok=False, reason=f"{typ}: Fehler bei der Auswertung")
+        total.details.append({"type": typ, "ok": bool(r.ok), "reason": r.reason})
+        if not r.ok:
+            if first_fail is None:
+                first_fail = r
+            if not all_details:
+                break
+            continue
+        for k, v in r.ctx.items():
+            if v not in (None, "") or k not in total.ctx:
+                total.ctx[k] = v
+        total.item_ids += [i for i in r.item_ids if i not in total.item_ids]
+        total.image_path = total.image_path or r.image_path
+        total.snapshot_path = total.snapshot_path or r.snapshot_path
+        total.camera_id = total.camera_id if total.camera_id is not None else r.camera_id
+    if first_fail is not None:
+        if all_details:   # Platzhalter der erfüllten Bedingungen bleiben für die Vorschau erhalten
+            total.ok, total.reason = False, first_fail.reason
+            return total
+        first_fail.details = total.details
+        return first_fail
+    total.reason = "; ".join(d["reason"] for d in total.details if d.get("reason"))
+    return total
+
+
+# ------------------------------------------------------------------ Zeit-Trigger (A1)
+
+TIME_GRACE_S = 15 * 60   # verpasste Zeitpunkte (Backend-Neustart) werden bis 15 min später nachgeholt
+
+
+def time_rule_due(rule: dict[str, Any], now: datetime, last_key: Optional[str]) -> Optional[str]:
+    """Ist die Zeit-Regel jetzt fällig? Liefert den Lauf-Schlüssel („YYYY-MM-DD HH:MM“, lokal) oder None.
+
+    Fällig ab `at` + `condition_delay_s` bis `TIME_GRACE_S` danach, höchstens einmal je Tag und `at`
+    (`last_key` = zuletzt ausgeführter Schlüssel, aus der DB). Wochentage aus `schedule.days`."""
+    if not rule.get("enabled") or rule.get("trigger") != "time":
+        return None
+    at = (rule.get("trigger_options") or {}).get("at")
+    if not at:
+        return None
+    try:
+        minutes = _hm(at)
+    except Exception:
+        return None
+    loc = now.astimezone(config.tz)
+    delay = float(rule.get("condition_delay_s") or 0)
+    # heute und gestern prüfen (at + Verzögerung kann über Mitternacht reichen)
+    for back in (0, 1):
+        day = (loc - timedelta(days=back)).date()
+        sched = rule.get("schedule") or {}
+        days = sched.get("days")
+        if days is not None and day.weekday() not in days:
+            continue
+        base = datetime(day.year, day.month, day.day, minutes // 60, minutes % 60, tzinfo=config.tz)
+        due = base + timedelta(seconds=delay)
+        key = f"{day.isoformat()} {at}"
+        if due <= loc < due + timedelta(seconds=TIME_GRACE_S) and key != last_key:
+            return key
+    return None
+
+
+# Eingebaute Trigger
+register_trigger("enter", track_based=True, label_de="betritt")
+register_trigger("leave", track_based=True, label_de="verlässt")
+register_trigger("dwell", track_based=True, label_de="verweilt")
+register_trigger("time", track_based=False, options_model=TimeTriggerOptions, label_de="zu einer Uhrzeit")
+# W2 (C1/D1): Evaluatoren reicht pose_events.py per register_trigger(..., evaluate=…) nach
+register_trigger("posture", track_based=True, options_model=PostureTriggerOptions, label_de="Haltung (z. B. liegt am Boden)")
+register_trigger("gesture", track_based=True, options_model=GestureTriggerOptions, label_de="Geste")
+
+# W1-Bedingungen (Auswertung: A1 in rule_conditions.py per register_condition(..., evaluate=…))
+register_condition("inventory", CondInventory, label_de="Gegenstand da/weg")
+register_condition("inventory_untouched", CondInventoryUntouched, label_de="Gegenstand unberührt")
+register_condition("weather", CondWeather, label_de="Wetter")
+register_condition("track_came_from", CondTrackCameFrom, track_only=True, label_de="kam aus Zone")
+SENSOR_STATE_DE = {"on": "an", "off": "aus", "ok": "ok", "low": "knapp", "out": "leer", "unknown": "unklar"}
+
+
+def sensor_state_de(state: Optional[str]) -> str:
+    """W3: Platzhalter {sensor_state} (deutsch)."""
+    return SENSOR_STATE_DE.get(state or "unknown", state or "")
+
+
+# W3 (A3): virtueller Sensor – Regel ohne Event (events.processor.sensor_changed); Bedingung in rule_conditions.py
+register_trigger("sensor", track_based=False, options_model=SensorTriggerOptions, label_de="virtueller Sensor wechselt")
+register_condition("sensor", CondSensor, label_de="Sensor ist …")
 
 
 # ------------------------------------------------------------------ Track-Zustand
@@ -63,10 +310,21 @@ class TrackState:
     fired_dwell: set[int] = field(default_factory=set)
     fired_leave: set[int] = field(default_factory=set)
     clip_requested: bool = False
+    # A1: Reihenfolge der betretenen Zonen (Richtung „hinaus“ ohne Pose-Modell) und Eintrittszeiten
+    zones_visited: list[str] = field(default_factory=list)
+    zone_entries: list[tuple[str, float]] = field(default_factory=list)   # (zone_id, lokale Eintrittszeit), max. 50
+    # W2: Zustand der Track-Trigger-Evaluatoren je Regel (TriggerContext.state)
+    trigger_state: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def set_zones(self, zones: list[str], now: float) -> None:
         zs = [str(z) for z in (zones or [])]
         for z in zs:
+            if z not in self.zone_since:
+                self.zone_entries.append((z, now))
+                if len(self.zone_entries) > 50:
+                    del self.zone_entries[0]
+                if z not in self.zones_visited:
+                    self.zones_visited.append(z)
             self.zone_since.setdefault(z, now)
         for z in list(self.zone_since):
             if z not in zs:

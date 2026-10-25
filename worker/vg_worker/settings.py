@@ -27,6 +27,12 @@ def _bool(name: str, default: bool) -> bool:
     return _env(name, "1" if default else "0").lower() in ("1", "true", "yes", "on")
 
 
+# --- Identität (D3-Vorbereitung) --------------------------------------------
+# Kennung dieses Workers in allen MQTT-Nachrichten (`worker_id`) und in der MQTT-client_id.
+# Erlaubt: [A-Za-z0-9_-], 1..64 Zeichen (Topic-Segment, späterer Schlüssel der Tabelle `workers`).
+WORKER_ID = _env("VG_WORKER_ID", "local").strip()
+WORKER_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+
 # --- services -------------------------------------------------------------
 BACKEND_URL = _env("VG_BACKEND_URL", "http://backend:8000").rstrip("/")
 MQTT_HOST = _env("VG_MQTT_HOST", "mosquitto")
@@ -67,14 +73,76 @@ TRACK_UPDATE_MIN_S = _float("VG_TRACK_UPDATE_MIN_S", 1.0)
 FACE_MODEL = _env("VG_FACE_MODEL", "buffalo_l")
 FACE_MIN_DET = _float("VG_FACE_MIN_DET", 0.6)
 FACE_MIN_SIZE = _int("VG_FACE_MIN_SIZE", 36)            # px (shorter side of face box)
-FACE_MAX_IDENTIFY = _int("VG_FACE_MAX_IDENTIFY", 3)     # identify calls per track
-FACE_INTERVAL_S = _float("VG_FACE_INTERVAL_S", 0.4)     # per track
+FACE_INTERVAL_S = _float("VG_FACE_INTERVAL_S", 0.4)     # je Track: Abstand der Gesichts-Jobs beim Sammeln
+# Identitäten 07 (Paket B, face_track.py): Gesichter über die ganze Track-Dauer sammeln
+FACE_INTERVAL_SLOW_S = _float("VG_FACE_INTERVAL_SLOW_S", 2.0)   # … sobald face_track_faces gute Gesichter da sind
+FACE_GOOD_Q = _float("VG_FACE_GOOD_Q", 0.5)                     # „gutes“ Gesicht fürs Verlangsamen
+FACE_MAX_JOBS_TRACK = _int("VG_FACE_MAX_JOBS_TRACK", 120)       # Gesichts-Jobs je Track höchstens
+FACE_MAX_JOBS_PER_S = _float("VG_FACE_MAX_JOBS_PER_S", 15.0)    # global (alle Kameras), Rest wird verworfen
+FACE_FREE_JOBS = _int("VG_FACE_FREE_JOBS", 3)                   # erste n Jobs je Track ohne globales Budget
+FACE_PROVISIONAL_MIN_Q = _float("VG_FACE_PROVISIONAL_MIN_Q", 0.2)   # vorläufige Zuordnung ab dieser Qualität
+FACE_FINAL_AFTER_S = _float("VG_FACE_FINAL_AFTER_S", 30.0)      # erste endgültige Zuordnung spätestens nach n s
+FACE_TRACK_OUTLIER = _float("VG_FACE_TRACK_OUTLIER", 0.3)       # Kosinus zum Track-Mittel, darunter Ausreißer
+FACE_SAMPLE_MAX_PX = _int("VG_FACE_SAMPLE_MAX_PX", 320)         # gespeicherte Gesichtsbilder höchstens so groß
+FACE_CROP_MAX_PX = _int("VG_FACE_CROP_MAX_PX", 960)             # Kopf-Ausschnitt aus dem Vollbild höchstens so groß
+# Vollbild-Leser (fullres.py) für face_fullres: zusätzlicher ffmpeg auf dem Hauptstrom, nur auf Anforderung
+FACE_FULLRES_FPS = _float("VG_FACE_FULLRES_FPS", 2.0)           # Bilder/s des Vollbild-Lesers
+FACE_FULLRES_KEEP = _int("VG_FACE_FULLRES_KEEP", 3)             # Vollbilder im RAM je Kamera
+FACE_FULLRES_MAX_DT_S = _float("VG_FACE_FULLRES_MAX_DT_S", 0.12)   # max. Zeitabstand Analysebild ↔ Vollbild
+FACE_FULLRES_WAIT_S = _float("VG_FACE_FULLRES_WAIT_S", 1.5)     # so lange auf ein passendes Vollbild warten
+FACE_FULLRES_IDLE_S = _float("VG_FACE_FULLRES_IDLE_S", 30.0)    # Leser endet so lange nach der letzten Person
 PLATE_DETECTOR = _env("VG_PLATE_DETECTOR", "yolo-v9-t-384-license-plate-end2end")
 PLATE_OCR = _env("VG_PLATE_OCR", "cct-xs-v2-global-model")
 PLATE_MIN_CONF = _float("VG_PLATE_MIN_CONF", 0.5)
 PLATE_INTERVAL_S = _float("VG_PLATE_INTERVAL_S", 0.4)
 PET_MODEL = _env("VG_PET_MODEL", "vit_small_patch14_dinov2.lvd142m")
 PET_DELAY_S = _float("VG_PET_DELAY_S", 1.5)             # identify pets after this track age (or at end)
+
+# --- inventory (Gegenstände, langsame Pipeline auf ausgewählten Kameras) ---------------------
+GO2RTC_URL = _env("VG_GO2RTC_URL", "http://go2rtc:1984").rstrip("/")   # Fallback-Quelle für Keyframes
+INVENTORY_MODEL = _env("VG_INVENTORY_MODEL", "yoloe-11m-seg.pt")      # YOLOE (Text-Prompts) oder COCO-YOLO
+INVENTORY_IMGSZ = _int("VG_INVENTORY_IMGSZ", 1280)                     # Gesamtbild
+INVENTORY_TILES = _env("VG_INVENTORY_TILES", "2x2")                    # Kacheln "SxZ" (Spalten x Zeilen), "0" = aus
+INVENTORY_TILE_IMGSZ = _int("VG_INVENTORY_TILE_IMGSZ", 960)            # Auflösung je Kachel
+INVENTORY_OVERLAP = _float("VG_INVENTORY_OVERLAP", 0.15)               # Überlappung der Kacheln
+INVENTORY_MAX_BUSY = _float("VG_INVENTORY_MAX_BUSY", 0.25)             # max. GPU-Zeitanteil der Inventar-Pipeline
+INVENTORY_HALF = _bool("VG_INVENTORY_HALF", True)
+INVENTORY_MIN_CONF = _float("VG_INVENTORY_MIN_CONF", 0.05)             # Untergrenze für predict(conf=…)
+INVENTORY_SOURCE = _env("VG_INVENTORY_SOURCE", "auto").lower()        # auto | buffer | go2rtc | rtsp
+INVENTORY_CROP_MIN_S = _float("VG_INVENTORY_CROP_MIN_S", 60.0)         # neuer Crop je Gegenstand höchstens alle n s
+INVENTORY_UNLOAD_S = _float("VG_INVENTORY_UNLOAD_S", 600.0)            # Modell entladen, wenn so lange keine Kamera aktiv
+INVENTORY_PERSON_HOLD_S = _float("VG_INVENTORY_PERSON_HOLD_S", 3.0)    # Personen so lange als Verdeckung werten
+
+# --- Kamera-Gesundheit (C5, nur CPU) --------------------------------------
+HEALTH_ENABLED = _bool("VG_HEALTH", True)                              # globaler Schalter der Bildprüfung
+HEALTH_INTERVAL_S = _float("VG_HEALTH_INTERVAL_S", 10.0)               # Prüfabstand je Kamera
+HEALTH_PUBLISH_S = _float("VG_HEALTH_PUBLISH_S", 30.0)                 # vg/internal/health spätestens alle n s
+
+# --- Pose / Haltung / Gesten (C1/D1) -----------------------------------------
+POSE_MODEL = _env("VG_POSE_MODEL", "yolo11n-pose.pt")                  # messungen.md §2: n genügt (s bringt nichts)
+POSE_IMGSZ = _int("VG_POSE_IMGSZ", 640)                                # Ganzbild
+POSE_MIN_CONF = _float("VG_POSE_MIN_CONF", 0.25)
+POSE_FPS = _float("VG_POSE_FPS", 2.0)                                  # Haltung: Bilder/s je Kamera (nur mit Person)
+GESTURE_FPS = _float("VG_GESTURE_FPS", 5.0)                            # Gesten-Kameras
+POSE_MAX_BATCH = _int("VG_POSE_MAX_BATCH", 8)                          # Kameras je Pose-Batch
+POSE_MAX_BUSY = _float("VG_POSE_MAX_BUSY", 0.2)                        # max. GPU-Zeitanteil der Pose-Stufe
+POSE_MATCH_IOU = _float("VG_POSE_MATCH_IOU", 0.3)                      # Pose-Person ↔ Track
+POSE_UNLOAD_S = _float("VG_POSE_UNLOAD_S", 600.0)                      # Modell entladen ohne Pose-Kamera
+LYING_GRACE_S = _float("VG_LYING_GRACE_S", 30.0)                       # Vorgabe für fall_track_grace_s (Settings gewinnen)
+
+# --- Personen-Wiedererkennung über Kameras (C2, ReID) ----------------------
+# OSNet x0_25 (MSMT17, torchreid, MIT) als ONNX; Standard CPU (≈ 6 ms je Ausschnitt, 0 VRAM – reidtest).
+REID_MODEL_URL = _env("VG_REID_MODEL_URL", "https://huggingface.co/kornia/osnet/resolve/main/osnet_x0_25_msmt17.onnx")
+REID_MODEL_SHA256 = _env("VG_REID_MODEL_SHA256", "e78604f4ccda49b8f41cd0f8f7303800ce75d2361895ebb0729513c1bf53d277")
+REID_DEVICE = _env("VG_REID_DEVICE", "cpu").lower()                   # cpu | cuda
+REID_THREADS = _int("VG_REID_THREADS", 2)                              # CPU-Threads der ONNX-Sitzung
+REID_INTERVAL_S = _float("VG_REID_INTERVAL_S", 3.0)                    # je Track höchstens alle n s ein Embedding
+REID_MAX_PER_TRACK = _int("VG_REID_MAX_PER_TRACK", 5)                  # höchstens n Embeddings je Track
+REID_MIN_HEIGHT = _int("VG_REID_MIN_HEIGHT", 128)                      # Box-Höhe im Detect-Bild (px)
+REID_MIN_SCORE = _float("VG_REID_MIN_SCORE", 0.5)                      # Detektions-Score des Tracks
+REID_FLIP = _bool("VG_REID_FLIP", False)                               # Mittel aus Bild + Spiegelbild (bringt laut reidtest nichts)
+REID_MAX_BATCH = _int("VG_REID_MAX_BATCH", 16)
+REID_UNLOAD_S = _float("VG_REID_UNLOAD_S", 600.0)                      # Modell entladen ohne ReID-Kamera
 
 # --- misc -----------------------------------------------------------------
 STATUS_INTERVAL_S = _float("VG_STATUS_INTERVAL_S", 5.0)

@@ -4,6 +4,7 @@ import { Boxes, Cpu, Radio, Server } from "lucide-react";
 import { api } from "../../lib/api";
 import { Loading, Empty } from "../../components/ui";
 import { StatusBadge } from "../Live";
+import { HealthBadge } from "../../components/HealthBadge";
 import { useLive } from "../../lib/store";
 import { fmtAgo } from "../../lib/format";
 
@@ -23,6 +24,21 @@ function Gauge({ value, max, label, display, sub, warn = 0.7, bad = 0.9 }: { val
       {sub && <div className="gs">{sub}</div>}
     </div>
   );
+}
+
+// R1: Modellnamen und Zustände deutsch (Rohwerte vom Worker/vlm-Dienst)
+const MODEL_DE: Record<string, string> = {
+  detector: "Detektor", face: "Gesicht", plate: "Kennzeichen", pet: "Tier", inventory: "Gegenstände",
+  embed: "Exemplar-Abgleich", pose: "Haltung & Gesten", history: "Zeitmaschine", reid: "Wiedererkennung über Kameras",
+  vlm: "Frag die Kamera",
+};
+const STATE_DE: [RegExp, string][] = [
+  [/^ready\b/, "bereit"], [/^idle\b/, "im Leerlauf"], [/^off\b/, "aus"], [/^loading\b/, "lädt"], [/^error\b/, "Fehler"],
+  [/^paused\b/, "pausiert"], [/^disabled\b/, "aus"],
+];
+function modelState(v: string): string {
+  for (const [re, de] of STATE_DE) if (re.test(v)) return v.replace(re, de);
+  return v;
 }
 
 export function SystemPage() {
@@ -62,15 +78,15 @@ export function SystemPage() {
           <div className="card-head"><Boxes size={18} color="var(--accent)" /><h3>Modelle</h3></div>
           <div className="card-body">
             {models.length === 0 ? <div className="muted">Keine Modellinformationen.</div> : (
-              <dl className="kv">{models.map(([k, v]) => <Fragment key={k}><dt>{{ detector: "Detektor", face: "Gesicht", plate: "Kennzeichen", pet: "Tier" }[k] ?? k}</dt>
-                <dd className="mono">{typeof v === "object" ? JSON.stringify(v) : String(v)}</dd></Fragment>)}</dl>
+              <dl className="kv">{models.map(([k, v]) => <Fragment key={k}><dt>{MODEL_DE[k] ?? k}</dt>
+                <dd className="mono">{typeof v === "object" ? JSON.stringify(v) : modelState(String(v))}</dd></Fragment>)}</dl>
             )}
           </div>
         </div>
         <div className="card" style={{ overflow: "auto" }}>
           <div className="card-head"><h3>Kameras</h3></div>
           <table className="table">
-            <thead><tr><th>Kamera</th><th>Status</th><th>FPS</th><th>Inferenz</th><th>Auflösung</th><th>Zuletzt</th></tr></thead>
+            <thead><tr><th>Kamera</th><th>Status</th><th title="Kamera-Gesundheit: verdeckt, unscharf, zu dunkel, eingefroren, verschoben">Bild</th><th>FPS</th><th>Inferenz</th><th>Auflösung</th><th>Zuletzt</th></tr></thead>
             <tbody>
               {cameras.map((c) => {
                 const s = live[c.id] ?? c.status;
@@ -78,6 +94,7 @@ export function SystemPage() {
                   <tr key={c.id}>
                     <td><b>{c.name}</b> <span className="muted mono">cam_{c.id}</span></td>
                     <td><StatusBadge status={s} /></td>
+                    <td>{s?.state === "disabled" ? "–" : <HealthBadge health={s?.health} full />}</td>
                     <td className="mono">{s?.fps != null ? s.fps.toFixed(1) : "–"}</td>
                     <td className="mono">{s?.inference_ms != null ? `${s.inference_ms.toFixed(1)} ms` : "–"}</td>
                     <td className="mono">{s?.width ? `${s.width}×${s.height}` : "–"}</td>

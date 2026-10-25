@@ -15,4 +15,7 @@ ffmpeg:
   youtube: "-re -fflags nobuffer+genpts -i {input}"
 log:
   level: info
+  # R1: Warnungen des Moduls streams enthalten die Quell-URL samt Kamera-Passwort (producer.go: url=rtsp://user:pw@…)
+  # → nur Fehler; Ausfälle meldet ohnehin die Kamera-Gesundheit im Backend
+  streams: error
 streams: {}

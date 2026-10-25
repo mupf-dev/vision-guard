@@ -50,3 +50,21 @@ def gpu_info() -> dict:
     except Exception:  # noqa: BLE001
         out["temp"] = None
     return out
+
+
+def mem_mb() -> tuple[int, int] | None:
+    """(frei, gesamt) in MiB laut NVML – ganze GPU, alle Prozesse (unter WSL2 zuverlässiger als
+    ``torch.cuda.mem_get_info``, das andere Prozesse nicht sieht). None ohne NVML."""
+    _init()
+    if _handle is None:
+        return None
+    try:
+        m = _nv.nvmlDeviceGetMemoryInfo(_handle)
+        return int(m.free // (1024 * 1024)), int(m.total // (1024 * 1024))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def free_mb() -> int | None:
+    m = mem_mb()
+    return m[0] if m else None

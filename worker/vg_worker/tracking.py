@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import supervision as sv
 
-from . import settings
+from . import ptz_view, settings
 from .util import crop_norm, new_media_path, point_in_polygon, write_jpeg
 
 log = logging.getLogger("vg.tracking")
@@ -58,16 +58,42 @@ class Track:
     dirty_reason: set = field(default_factory=set)
     last_update_msg: float = 0.0
     # identification bookkeeping (shared with identify.Identifier via `ids`)
-    ids: dict = field(default_factory=lambda: {"lock": threading.Lock(), "face_sent": 0, "face_quality": 0.0,
-                                               "face_last": 0.0, "plate_reads": {}, "plate_sent": set(),
+    # "face": face_track.TrackFaces (Identitäten 07, lazy angelegt)
+    ids: dict = field(default_factory=lambda: {"lock": threading.Lock(), "plate_reads": {}, "plate_sent": set(),
                                                "plate_last": 0.0, "plate_tries": 0, "pet_done": False})
     pending: int = 0                    # outstanding identification jobs/HTTP calls
     ended: bool = False
+    # Pose (C1): zuletzt per Track-update gemeldete Bewegung und Zeitpunkt
+    motion_sent: float | None = None
+    motion_sent_ts: float = 0.0
+    released: bool = False              # Nachlauf beendet (an der Stelle steht jetzt jemand)
 
     def obj(self) -> dict:
         return {"track_id": self.tid, "label": self.label, "score": round(self.score, 3),
                 "bbox": [round(v, 4) for v in self.bbox], "zones": list(self.zones),
                 "identity": self.identity, "attributes": dict(self.attributes)}
+
+
+def _iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0
+    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _overlap_of(a, b) -> float:
+    """Anteil der Fläche von a, der in b liegt."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    area = max(1e-12, (a[2] - a[0]) * (a[3] - a[1]))
+    return ix * iy / area
+
+
+def _center_dist(a, b) -> float:
+    return float(np.hypot((a[0] + a[2] - b[0] - b[2]) / 2.0, (a[1] + a[3] - b[1] - b[3]) / 2.0))
 
 
 class CameraTracker:
@@ -84,6 +110,12 @@ class CameraTracker:
         self.last_objects: list[dict] = []
         self.last_frame_size = (0, 0)
         self.tracker: sv.ByteTrack | None = None
+        self.last_ts = 0.0
+        # C1: Nachlauf für liegende Personen (Settings fall_track_grace_s); wirkt nur mit pose_enabled
+        self.lying_grace_s = settings.LYING_GRACE_S
+        # Identitäten 07 (Paket B): vor dem Track-Ende die endgültige Gesichtszuordnung anstoßen;
+        # (camera_id, Track) -> True, wenn eine Anfrage unterwegs ist (dann wartet das Ende wie bei pending)
+        self.on_track_ending = None
 
     # ------------------------------------------------------------------ config
     def configure(self, cfg: dict):
@@ -102,8 +134,10 @@ class CameraTracker:
                 self.by_ext.clear()
 
     def _zones_of(self, bbox) -> list[str]:
-        x = (bbox[0] + bbox[2]) / 2.0
-        y = bbox[3]
+        # Fußpunkt knapp ins Bild ziehen: am unteren Rand abgeschnittene Personen (y2 = 1,0) lagen sonst nie in
+        # einer Zone, die bis zum Bildrand reicht (Punkt-in-Polygon ist am Rand „außen“) – z. B. Sofa-Ausschluss
+        x = min(max((bbox[0] + bbox[2]) / 2.0, 0.001), 0.999)
+        y = min(max(bbox[3], 0.001), 0.999)
         out = []
         for z in self.cfg.get("zones") or []:
             poly = z.get("polygon") or []
@@ -118,6 +152,8 @@ class CameraTracker:
             cfg = self.cfg
             labels = set(cfg.get("labels") or [])
             min_score = float(cfg.get("min_score") or 0.5)
+            # PTZ: Zonen gelten nur in der Grundposition – sonst behalten Tracks ihre Zonen (keine Wechsel)
+            zones_live = ptz_view.at_home(self.camera_id)
             h, w = frame.shape[:2]
             self.last_frame_size = (w, h)
             floor = max(settings.DETECT_MIN_CONF, min(0.1, min_score))
@@ -135,6 +171,7 @@ class CameraTracker:
             msgs: list[dict] = []
             objects: list[dict] = []
             touched: list[Track] = []
+            cur_ext = {int(x) for x in tracked.tracker_id} if len(tracked) else set()
             for k in range(len(tracked)):
                 ext = int(tracked.tracker_id[k])
                 x1, y1, x2, y2 = (float(v) for v in tracked.xyxy[k])
@@ -144,10 +181,21 @@ class CameraTracker:
                 tid = self.by_ext.get(ext)
                 tr = self.tracks.get(tid) if tid is not None else None
                 if tr is None or tr.ended:
-                    tid = _next_track_id()
-                    tr = Track(tid=tid, ext_id=ext, first_seen=ts, last_seen=ts, bbox=bbox, score=score)
-                    self.tracks[tid] = tr
-                    self.by_ext[ext] = tid
+                    # nur eine wieder gefundene *liegende* Person anhängen (Box breiter als ~hoch), sonst neuer Track
+                    flat = (bbox[2] - bbox[0]) * w > 1.0 * (bbox[3] - bbox[1]) * h
+                    held = self._held_lying(bbox, ts, cur_ext) if label == "person" and flat else None
+                    if held is not None:
+                        # C1: liegende Person nach Track-Abriss wiedergefunden → derselbe Track (Liegedauer bleibt)
+                        log.info("camera %s: lying track %s re-attached after %.1fs", self.camera_id, held.tid,
+                                 ts - held.last_seen)
+                        tr = held
+                        tr.ext_id = ext
+                        self.by_ext[ext] = tr.tid
+                    else:
+                        tid = _next_track_id()
+                        tr = Track(tid=tid, ext_id=ext, first_seen=ts, last_seen=ts, bbox=bbox, score=score)
+                        self.tracks[tid] = tr
+                        self.by_ext[ext] = tid
                 tr.last_seen = ts
                 tr.bbox = bbox
                 tr.score = score
@@ -158,7 +206,7 @@ class CameraTracker:
                 if not tr.confirmed:
                     tr.label = tr.label_votes.most_common(1)[0][0]
                 # zones
-                zs = self._zones_of(bbox)
+                zs = self._zones_of(bbox) if zones_live else tr.zones
                 if zs != tr.zones:
                     if tr.confirmed:
                         for z in zs:
@@ -191,6 +239,8 @@ class CameraTracker:
                     objects.append(tr.obj())
                     touched.append(tr)
 
+            self._release_stood_up(touched, w, h)
+
             # updates: zone change / identity / attributes immediately, better crop at most 1/s
             for tr in touched:
                 if tr.dirty_reason or (tr.crop_dirty and ts - tr.last_crop_write >= settings.TRACK_UPDATE_MIN_S
@@ -200,6 +250,7 @@ class CameraTracker:
                     msgs.append(self._msg(tr, "update", ts))
 
             self.last_objects = objects
+            self.last_ts = ts
             det_msg = {"camera_id": self.camera_id, "ts": round(ts, 3), "width": w, "height": h, "objects": objects}
             return det_msg, msgs, touched
 
@@ -210,9 +261,12 @@ class CameraTracker:
         with self.lock:
             for tid, tr in list(self.tracks.items()):
                 idle = now - tr.last_seen
-                if not force and idle < settings.TRACK_END_S:
+                end_s = settings.TRACK_END_S
+                if self._lying_hold(tr):
+                    end_s = max(end_s, self.lying_grace_s)
+                if not force and idle < end_s:
                     # identity/attributes resolved while object is not visible in the current frame
-                    if tr.confirmed and tr.dirty_reason & {"identity", "attributes"}:
+                    if tr.confirmed and tr.dirty_reason & {"identity", "attributes", "pose"}:
                         msgs.append(self._msg(tr, "update", now))
                     continue
                 if not tr.confirmed:
@@ -220,6 +274,15 @@ class CameraTracker:
                     continue
                 if not force and tr.pending > 0 and idle < settings.TRACK_END_S + 6.0:
                     continue
+                if self.on_track_ending is not None and not tr.ids.get("end_hooked"):
+                    tr.ids["end_hooked"] = True
+                    try:
+                        waiting = self.on_track_ending(self.camera_id, tr)
+                    except Exception:  # noqa: BLE001
+                        log.exception("track end hook failed")
+                        waiting = False
+                    if waiting and not force and tr.pending > 0 and idle < settings.TRACK_END_S + 6.0:
+                        continue
                 tr.ended = True
                 if tr.crop_dirty:
                     self._write_crop(tr, now)
@@ -237,6 +300,10 @@ class CameraTracker:
             tr = self.tracks.get(tid)
             if tr is None:
                 return
+            if identity and tr.attributes.get("identity_source") == "reid":
+                # W4 (C2): eigene Erkennung (Gesicht) hat Vorrang vor der über ReID weitergegebenen Identität
+                tr.attributes["identity_source"] = identity.get("kind") or "face"
+                tr.dirty_reason.add("attributes")
             if identity and identity != tr.identity:
                 tr.identity = identity
                 tr.dirty_reason.add("identity")
@@ -245,6 +312,123 @@ class CameraTracker:
                 if new != tr.attributes:
                     tr.attributes = new
                     tr.dirty_reason.add("attributes")
+
+    def clear_face_identity(self, tid: int):
+        """Identitäten 07: endgültige Zuordnung ergab none/ambiguous → vorläufige Gesichts-Identität entfernen
+        (eine per ReID übernommene Identität bleibt)."""
+        with self.lock:
+            tr = self.tracks.get(tid)
+            if tr is None or tr.identity is None or tr.attributes.get("identity_source") == "reid":
+                return
+            if (tr.identity.get("kind") or "face") != "face":
+                return
+            tr.identity = None
+            tr.dirty_reason.add("identity")
+
+    # ------------------------------------------------------------------ ReID (C2)
+    def set_reid(self, tid: int, presence_key: str, identity: dict | None = None):
+        """Antwort von /api/internal/reid übernehmen: `presence_key` als Attribut; eine über ReID weitergegebene
+        Identität nur, wenn der Track noch keine eigene hat (`identity_source: "reid"`)."""
+        with self.lock:
+            tr = self.tracks.get(tid)
+            if tr is None or tr.ended:
+                return
+            a = tr.attributes
+            if presence_key and a.get("presence_key") != presence_key:
+                a["presence_key"] = presence_key
+                tr.dirty_reason.add("attributes")
+            if identity and identity.get("id") is not None and tr.identity is None:
+                tr.identity = {"id": identity["id"], "display_name": identity.get("display_name"),
+                               "name": identity.get("name"), "kind": identity.get("kind") or "face"}
+                a["identity_source"] = "reid"
+                tr.dirty_reason.add("identity")
+
+    # ------------------------------------------------------------------ Pose (C1/D1)
+    def _lying_hold(self, tr: Track) -> bool:
+        return (bool(self.cfg.get("pose_enabled")) and self.lying_grace_s > 0 and tr.confirmed and not tr.released
+                and tr.label == "person" and tr.attributes.get("posture") == "lying")
+
+    def _held_lying(self, bbox: list[float], ts: float, cur_ext: set[int]) -> Track | None:
+        """Liegender Track ohne aktuelle Detektion an (fast) derselben Stelle."""
+        best, best_d = None, 1e9
+        for tr in self.tracks.values():
+            if tr.ended or not self._lying_hold(tr) or ts - tr.last_seen < 0.05:
+                continue
+            if tr.ext_id in cur_ext:
+                continue          # ByteTrack führt den Track in diesem Bild selbst
+            d = _center_dist(bbox, tr.bbox)
+            if _iou(bbox, tr.bbox) >= 0.2 or d < 0.1:
+                if d < best_d:
+                    best, best_d = tr, d
+        return best
+
+    def _release_stood_up(self, visible: list[Track], w: int, h: int):
+        """Gehaltener Liegend-Track (gerade nicht detektiert) und an seiner Stelle steht/sitzt jetzt eine Person
+        (aufrechte Box deckt ≥ 30 % der Liegend-Box ab) → Person ist vermutlich aufgestanden: Nachlauf beenden."""
+        held = [t for t in self.tracks.values() if t.confirmed and not t.ended and t not in visible
+                and self._lying_hold(t)]
+        if not held:
+            return
+        for v in visible:
+            if v.label != "person" or v.attributes.get("posture") == "lying":
+                continue
+            if (v.bbox[2] - v.bbox[0]) * w >= 0.8 * (v.bbox[3] - v.bbox[1]) * h:
+                continue
+            for t in held:
+                if _overlap_of(t.bbox, v.bbox) >= 0.3 and not t.released:
+                    log.info("camera %s: lying track %s released (person upright at the same place, track %s)",
+                             self.camera_id, t.tid, v.tid)
+                    t.released = True
+
+    def person_tracks(self) -> list[dict]:
+        """Bestätigte Personen-Tracks für die Pose-Stufe (`held` = gerade nicht detektiert, liegend gehalten)."""
+        with self.lock:
+            out = []
+            for tr in self.tracks.values():
+                if not tr.confirmed or tr.ended or tr.label != "person":
+                    continue
+                held = tr.last_seen < self.last_ts - 1e-3
+                if held and not self._lying_hold(tr):
+                    continue
+                out.append({"tid": tr.tid, "bbox": list(tr.bbox), "zones": list(tr.zones),
+                            "identity": tr.identity, "held": held})
+            return out
+
+    def set_pose(self, tid: int, posture: str, since: float, motion: float | None, changed: bool):
+        """Geglättete Haltung übernehmen. Track-update bei Haltungswechsel sofort, bei deutlich geänderter
+        Bewegung höchstens alle 3 s (für `max_motion` im Backend)."""
+        with self.lock:
+            tr = self.tracks.get(tid)
+            if tr is None or tr.ended:
+                return
+            a = tr.attributes
+            if posture != "unknown" and (changed or a.get("posture") != posture):
+                if a.get("posture") != posture:
+                    a["posture"] = posture
+                    a["posture_since"] = round(since, 3)
+                    tr.dirty_reason.add("attributes")
+            if motion is not None:
+                m = round(float(motion), 3)
+                a["motion"] = m
+                ts = self.last_ts or time.time()
+                if (tr.motion_sent is None or abs(m - tr.motion_sent) > 0.02) and ts - tr.motion_sent_ts >= 3.0:
+                    tr.motion_sent, tr.motion_sent_ts = m, ts
+                    tr.dirty_reason.add("pose")
+
+    def pose_keepalive(self, box: list[float], ts: float):
+        """Pose-Modell sieht eine Person, die der Detektor nicht liefert: liegenden Track an dieser Stelle halten
+        (nur wenn die Pose-Box selbst flach ist – eine aufgestandene Person hält den Liegend-Track nicht)."""
+        fw, fh = self.last_frame_size
+        if fw and fh and (box[2] - box[0]) * fw <= 1.0 * (box[3] - box[1]) * fh:
+            return
+        with self.lock:
+            for tr in self.tracks.values():
+                if tr.ended or not self._lying_hold(tr):
+                    continue
+                if _iou(box, tr.bbox) >= 0.2 or _center_dist(box, tr.bbox) < 0.1:
+                    if ts > tr.last_seen:
+                        tr.last_seen = ts
+                    return
 
     def change_pending(self, tid: int, delta: int):
         with self.lock:

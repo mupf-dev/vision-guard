@@ -30,7 +30,7 @@ arbeiten. Projektüberblick: [README.md](README.md). Verbindliche Schnittstellen
 ## Stack starten und testen
 
 ```bash
-cp .env.example .env && ./testcam/download-videos.sh
+cp .env.example .env && ./testcam/download-videos.sh   # SECRET_KEY setzen (openssl rand -hex 32), sonst startet das Backend nicht
 docker compose up -d --build                     # alles
 docker compose up -d --build --no-deps backend   # einzelnen Dienst neu bauen
 docker compose logs -f worker
@@ -42,7 +42,7 @@ In einer WSL-Sandbox ohne systemd muss der Docker-Daemon ggf. manuell gestartet 
 | Was | Wie |
 |---|---|
 | Oberfläche | http://localhost:8080 (admin/admin) |
-| API-Doku | http://localhost:8080/api/docs |
+| API-Doku | http://localhost:8080/api/docs (nur nach Anmeldung im Browser oder mit API-Key; `VG_PUBLIC_DOCS=1` = offen) |
 | Backend direkt | `docker compose exec backend python -c "import httpx; ..."` (Port 8000 nur intern) |
 | MQTT mitlesen | `docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -v -C 20` |
 | Frontend ohne Backend | `cd frontend && corepack pnpm install && corepack pnpm dev:mock` (Port 5173) |
@@ -65,17 +65,26 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Thema | Datei(en) |
 |---|---|
 | Compose, Volumes, GPU | `docker-compose.yml`, `.env.example` |
-| Auth (Cookie/JWT) | `backend/app/auth.py`, `backend/app/routers/auth.py` |
+| Auth (Cookie/JWT, API-Keys) | `backend/app/auth.py`, `backend/app/routers/auth.py`, `backend/app/routers/tokens.py` |
+| Medien-Auslieferung, signierte Links | `backend/app/routers/media.py`, `backend/app/media_sign.py` |
 | YouTube-Quellen (yt-dlp) | `backend/app/youtube.py`, Template `youtube` in `go2rtc/go2rtc.yaml` |
 | Kameras, go2rtc-Sync | `backend/app/routers/cameras.py`, `backend/app/go2rtc.py`, `backend/app/sync.py` |
 | Track → Event, Aktionen | `backend/app/events.py` |
-| Regel-Bedingungen, Templates, Webhooks | `backend/app/rules.py` |
+| Regel-Bedingungen, Templates, Webhooks | `backend/app/rules.py` (Registry `register_trigger`/`register_condition`) |
+| Bedingungs-Auswertung (Inventar, Wetter, Herkunft) | `backend/app/rule_conditions.py` |
+| Hinweise (Notifications), Push (ntfy/Pushover) | `backend/app/notifications.py`, `backend/app/push.py`, `backend/app/routers/notifications.py` |
+| Track-Hooks für Fachmodule | `backend/app/events.py::on_track` |
+| Kamera-Gesundheit (Backend) | `backend/app/health.py`, `state.set_camera_health` |
 | Identitätsabgleich | `backend/app/identity.py` |
+| Gesichts-Abgleich/Galerie, Sammelaktionen, Nachtlauf | `backend/app/face_match.py`, `identity_bulk.py`, `nightly.py`, `routers/nightly.py` |
+| Messung Gesichts-Identitäten (nur lesend) | `scripts/face_stats.py` |
+| Oberfläche Mehrfachauswahl, Gesichtserkennung/Nachtlauf | `frontend/src/pages/IdentityBulk.tsx`, `frontend/src/pages/admin/FaceSettings.tsx` |
 | Datenbankmodell | `backend/app/models.py` (`create_all`, keine Migrationen – Spalten nur additiv mit Default ändern) |
 | Kamera-Ingest (ffmpeg) | `worker/vg_worker/ingest.py` |
 | YOLO-Batching | `worker/vg_worker/detector.py`, `worker/vg_worker/pipeline.py` |
 | Tracking, Zonen | `worker/vg_worker/tracking.py` |
 | Gesicht/Kennzeichen/Tier | `worker/vg_worker/identify.py` |
+| Gesichtsqualität, Track-Sammlung, Vollbild-Leser | `worker/vg_worker/face_quality.py`, `face_track.py`, `fullres.py` |
 | Ringpuffer, Clips, Snapshots | `worker/vg_worker/recorder.py` |
 | API-Client, Typen | `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts` |
 | Live-Socket/Store | `frontend/src/lib/useLiveSocket.ts`, `frontend/src/lib/store.ts` |
@@ -83,6 +92,15 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Zonen-Editor | `frontend/src/components/ZoneEditor.tsx` |
 | Admin-Seiten | `frontend/src/pages/admin/` |
 | nginx-Routen | `frontend/nginx.conf` |
+| MCP-Server (Tools für KI-Agenten) | `mcp/server.py`, Tools je Thema `mcp/tools/<thema>.py`, Selbsttest `mcp/selftest.py` |
+| Frag die Kamera (lokales Bildmodell, GPU-Lease) | Dienst `vlm/` (Profil `vlm`, [vlm/README.md](vlm/README.md)), `backend/app/vlm.py`, `cloud_vlm.py`, `routers/ask.py`, `frontend/src/components/AskCamera.tsx` |
+| Virtuelle Sensoren, Vorräte, Einkaufsliste (A3+C4) | `worker/vg_worker/sensors.py`, `backend/app/sensors.py` (Hysterese, `vlm`-Fenster `VG_SENSOR_VLM_GAP_S`), `backend/app/vlm_measure.py` (W4 C4-VLM: Anzahl/leer per Bildmodell, Messwerkzeug `scripts/vlm_supply_bench.py`), `routers/sensors.py`, `frontend/src/pages/Supplies.tsx`, `pages/admin/Sensors.tsx`, `mcp/tools/sensors.py` |
+| Zeitmaschine (B1, SigLIP 2, pgvector) | `worker/vg_worker/history.py`, `backend/app/history.py`, `history_query.py` (deutsch→englisch), `routers/history.py`, `frontend/src/pages/History.tsx`, `mcp/tools/history.py` |
+| Person über mehrere Kameras / Anwesenheit (C2, OSNet auf der CPU, Galerie nur im RAM) | `worker/vg_worker/reid.py`, `backend/app/reid.py`, `routers/presence.py`, `frontend/src/pages/Presence.tsx`, `pages/admin/ReidSettings.tsx`, `mcp/tools/people.py`, Messung `worker/vg_worker/tests_feasibility/reidtest.py` |
+| Embedding-Dienst (geteiltes DINOv2, W2) | Worker `worker/vg_worker/embed.py`, Backend `backend/app/embed_client.py` |
+| Rückfragen „Bitte bestätigen“ (W2) | `backend/app/review.py`, `backend/app/routers/review.py`, `frontend/src/pages/Review.tsx` |
+| LLM-Client (optional, Standard aus) | `backend/app/llm_client.py`, Test-Server ohne Kosten `scripts/llm_mock.py` |
+| Track-Trigger mit Evaluator (posture/gesture) | `backend/app/rules.py` (`register_trigger(..., evaluate=…)`), `backend/app/events.py` |
 
 Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](worker/README.md),
 [frontend/README.md](frontend/README.md).
@@ -94,7 +112,39 @@ Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](wo
 - Kennzeichen- und Tier-Identifikation sind implementiert, aber noch nicht mit echten Szenen validiert.
 - Clips werden auf ganze 2-s-Segmente gerundet (etwas länger als eingestellt).
 - `buffalo_l` (InsightFace) nur nicht-kommerziell; YOLO11 unter AGPL-3.0.
-- Medien unter `/media/*` sind ohne Login abrufbar (zufällige UUID-Pfade) – vor Produktivbetrieb absichern.
+- **Gesichter-Nachtlauf** (`nightly_mode`): Standard `preview` – berechnet nur einen Bericht. Automatisch
+  zusammengeführt werden nur unbenannte Fragmente ohne Lernsperre, nie zwei benannte; `apply` bzw. „Jetzt anwenden“
+  nur mit Anmeldung im Browser. Test-Identitäten nie gegen echte Daten anwenden: bei `POST
+  /api/nightly/reports/{id}/apply` immer `idx` mit den eigenen Test-Aktionen angeben.
+- Das Löschen einer Kamera entfernt ihre Ereignisse und daraus entstandenen Identitäten **nicht** – nach Tests mit
+  Testkameras Ereignisse (`DELETE /api/events/{id}`) und Test-Identitäten (`POST /api/identities/bulk-delete`) selbst
+  entfernen.
+- Neue Gesichtsqualität (ab Paket B) ist strenger als die alte; `face_new_min_quality`/`face_sample_min_quality`
+  nach einigen Tagen Betrieb mit `scripts/face_stats.py` prüfen.
+- Medien unter `/media/*` liefert das Backend nur mit Cookie, API-Key (Bearer) oder signiertem Link (`?exp=&sig=`)
+  aus (`backend/app/routers/media.py`, `media_sign.py`). Signierte Links sind bis zum Ablauf für jeden nutzbar, der
+  sie kennt (TTL `media_link_ttl_h`). `VG_MEDIA_PUBLIC=1` schaltet auf das alte, ungeschützte Verhalten zurück.
+- `VG_SECRET_KEY` ist zugleich Pepper der API-Key-Hashes und Schlüssel der Medien-Signaturen: ein Wechsel macht
+  alle Sitzungen, API-Keys und signierten Links ungültig.
+- API-Keys (Admin → „API-Zugänge“) öffnen kein go2rtc-Live-Video und können keine Keys verwalten.
+- **PTZ:** nur ONVIF (kein Hersteller-API). Kameras melden ihre Position meist nicht (Reolink E1 Pro: nur
+  `ContinuousMove`, Presets; `GetStatus` meldet auch während der Fahrt `IDLE`, `GotoPreset` blockiert bis ≈ 4,5 s).
+  Die Grundposition ist ein gespeichertes Preset; „in der Grundposition“ heißt: zuletzt dorthin gefahren und seitdem
+  nicht bewegt. Wer die Kamera mit der Hersteller-App bewegt, wird erst über die Kamera-Gesundheit („verschoben“)
+  bemerkt. Bewegungen immer mit ONVIF-`Timeout`, damit die Kamera auch ohne `Stop` anhält (WLAN). Verfolgen arbeitet
+  mit kurzen Impulsen auf je einer Achse (`FOLLOW_*` in `ptz.py`); gemessen an der E1 Pro: Geschwindigkeit wirkt
+  nicht, 0,5 s ≈ ⅓ Bildbreite, Bewegung erst 1,1–1,2 s nach dem Befehl im Detect-Bild, Impulse < 0,25 s teils
+  verschluckt. Schrittweite und Richtung lernt der Regler zur Laufzeit nach (Log beim Ende der Verfolgung). Das Standbild
+  (`/snapshot.jpg`, go2rtc `frame.jpeg`) ist der letzte Keyframe und läuft nach einer Fahrt einige Sekunden nach.
+  Tests ohne PTZ-Kamera: `scripts/fake_onvif.py` simuliert ein ONVIF-Gerät (Presets, Fahrten, Aufruf-Protokoll) und
+  läuft im Netz von `testcam`, sodass eine Kamera mit `rtsp://user:pw@testcam:8554/cam1` und ONVIF-Port 8000 echte
+  Personen-Detektionen für „Verfolgen“ liefert:
+  `docker run -d --rm --name vg-fakeonvif --network container:$(docker compose ps -q testcam) -v "$PWD/scripts:/app:ro" python:3.12-slim python -u /app/fake_onvif.py 8000` Auch mit
+  `write` ändern/sehen sie keine Push-Ziele, LLM-Adresse, Standort, Berichtsversand oder `public_base_url`
+  (`routers/misc.py::SESSION_ONLY_SETTINGS`).
+- MQTT von außen (Host-Port `MQTT_PORT`) ist **nur lesend** (Listener 1884 mit ACL); schreiben können nur Dienste
+  im Docker-Netz (Listener 1883). Testnachrichten daher per `docker compose exec mosquitto mosquitto_pub …`.
+- go2rtc loggt das Modul `streams` nur ab `error`, weil dessen Warnungen die Kamera-URL mit Passwort enthalten.
 
 ## Commits
 

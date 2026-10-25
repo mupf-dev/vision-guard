@@ -8,11 +8,21 @@ import { LivePage } from "./pages/Live";
 import { EventsPage } from "./pages/Events";
 import { IdentitiesPage } from "./pages/Identities";
 import { StatsPage } from "./pages/Stats";
+import { ObjectsPage } from "./pages/Objects";
+import { NotificationsPage } from "./pages/Notifications";
+import { ReviewPage } from "./pages/Review";
+import { PetsPage } from "./pages/Pets";
+import { ReportsPage } from "./pages/Reports";
+import { HistoryPage } from "./pages/History";
+import { SuppliesPage } from "./pages/Supplies";
+import { PresencePage } from "./pages/Presence";
+import { SensorsPage } from "./pages/admin/Sensors";
 import { AdminLayout } from "./pages/admin/AdminLayout";
 import { CamerasPage } from "./pages/admin/Cameras";
 import { RulesPage } from "./pages/admin/Rules";
 import { SettingsPage } from "./pages/admin/Settings";
 import { SystemPage } from "./pages/admin/System";
+import { TokensPage } from "./pages/admin/Tokens";
 import { Loading } from "./components/ui";
 import { Toasts } from "./components/Toasts";
 
@@ -45,13 +55,23 @@ export function App() {
           <Route path="ereignisse" element={<EventsPage />} />
           <Route path="identitaeten" element={<IdentitiesPage />} />
           <Route path="identitaeten/:identityId" element={<IdentitiesPage />} />
+          <Route path="gegenstaende" element={<ObjectsPage />} />
+          <Route path="hinweise" element={<NotificationsPage />} />
+          <Route path="bestaetigen" element={<ReviewPage />} />
+          <Route path="tiere" element={<PetsPage />} />
+          <Route path="berichte" element={<ReportsPage />} />
+          <Route path="zeitmaschine" element={<HistoryPage />} />
+          <Route path="vorraete" element={<SuppliesPage />} />
+          <Route path="anwesenheit" element={<PresencePage />} />
           <Route path="statistik" element={<StatsPage />} />
           <Route path="admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="kameras" replace />} />
             <Route path="kameras" element={<CamerasPage />} />
             <Route path="regeln" element={<RulesPage />} />
+            <Route path="sensoren" element={<SensorsPage />} />
             <Route path="einstellungen" element={<SettingsPage />} />
             <Route path="system" element={<SystemPage />} />
+            <Route path="zugaenge" element={<TokensPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from .db import SessionLocal
 from .models import Camera
-from .util import slugify
+from .util import camera_slug
 
 _lock = threading.Lock()
 _cams: dict[int, dict[str, Any]] = {}
@@ -19,10 +19,18 @@ def reload() -> None:
             c.id: {
                 "id": c.id,
                 "name": c.name,
-                "slug": slugify(c.name),
+                "slug": camera_slug(c.name),
                 "enabled": c.enabled,
+                "health_enabled": True if c.health_enabled is None else bool(c.health_enabled),
                 "labels": list(c.labels or []),
+                "room": c.room,
                 "zones": {z.get("id"): z.get("name") or z.get("id") for z in (c.zones or []) if isinstance(z, dict)},
+                # W2 (C3): Zweck je Zone (nur Zonen mit purpose), z. B. {"z_napf": "food"}
+                "zone_purpose": {z.get("id"): z.get("purpose") for z in (c.zones or [])
+                                 if isinstance(z, dict) and z.get("purpose")},
+                "pose_enabled": bool(c.pose_enabled),
+                "gesture_enabled": bool(c.gesture_enabled),
+                "reid_enabled": bool(c.reid_enabled),   # W4 (C2)
             }
             for c in rows
         }

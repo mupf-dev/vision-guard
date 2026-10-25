@@ -4,6 +4,11 @@ import type { ContentRect } from "./LivePlayer";
 import type { DetObject, Zone } from "../lib/types";
 import { labelColor, labelName } from "../lib/labels";
 import { useSyncedFrame, useVideoMonitor } from "../lib/overlaySync";
+import { useLive } from "../lib/store";
+import { GESTURE_NAME, POSTURE_NAME, fmtDuration } from "../lib/pose";
+import type { GestureMsg, Posture } from "../lib/types";
+
+const GESTURE_SHOW_MS = 4000;
 
 /**
  * Zum Video synchronisierte Objekte einer Kamera (für Zähler in Kachel/Toolbar, grob getaktet).
@@ -23,10 +28,12 @@ export function DetectionOverlay({
   const anchor = useRef<HTMLDivElement>(null);
   useVideoMonitor(cameraId, anchor);
   const f = useSyncedFrame(cameraId, compact ? 200 : 100);
+  const g = useLive((s) => s.gestures[cameraId]);
+  const gesture = g && Date.now() - g.at < GESTURE_SHOW_MS ? g : undefined;
   return (
     <>
       <div ref={anchor} hidden />
-      <OverlaySvg rect={rect} objects={f.objects} zones={zones} showZones={showZones} compact={compact} dim={f.stalled} />
+      <OverlaySvg rect={rect} objects={f.objects} zones={zones} showZones={showZones} compact={compact} dim={f.stalled} gesture={gesture} />
       {f.stalled && (
         <div className="overlay-stall" style={{ left: rect.x + rect.w / 2, top: rect.y + rect.h / 2 }} title="Das Videobild aktualisiert sich nicht – Boxen sind eingefroren">
           <PauseCircle size={compact ? 13 : 15} />Video hängt
@@ -36,9 +43,19 @@ export function DetectionOverlay({
   );
 }
 
+/** W2 C1: Haltung als Zusatz im Label, „liegt“ mit Dauer (posture_since = Worker-Uhr, Unix-s) */
+function postureText(o: DetObject): { text: string; alarm: boolean } | null {
+  const p = o.attributes?.posture as Posture | undefined;
+  if (!p || p === "unknown") return null;
+  if (p !== "lying") return { text: POSTURE_NAME[p], alarm: false };
+  const since = Number(o.attributes?.posture_since);
+  const dur = Number.isFinite(since) && since > 0 ? Math.max(0, Date.now() / 1000 - since) : null;
+  return { text: dur != null ? `liegt ${fmtDuration(dur)}` : "liegt", alarm: true };
+}
+
 const OverlaySvg = memo(function OverlaySvg({
-  rect, objects, zones, showZones, compact, dim,
-}: { rect: ContentRect; objects: DetObject[]; zones?: Zone[]; showZones?: boolean; compact?: boolean; dim?: boolean }) {
+  rect, objects, zones, showZones, compact, dim, gesture,
+}: { rect: ContentRect; objects: DetObject[]; zones?: Zone[]; showZones?: boolean; compact?: boolean; dim?: boolean; gesture?: GestureMsg & { at: number } }) {
   const { x, y, w, h } = rect;
   const fs = compact ? 11 : 13;
   return (
@@ -56,9 +73,12 @@ const OverlaySvg = memo(function OverlaySvg({
         {objects.map((o) => {
           const [x1, y1, x2, y2] = o.bbox;
           const bx = x1 * w, by = y1 * h, bw = Math.max(1, (x2 - x1) * w), bh = Math.max(1, (y2 - y1) * h);
-          const c = labelColor(o.label);
+          const pt = postureText(o);
+          const c = pt?.alarm ? "#ef4444" : labelColor(o.label);
           const name = o.identity?.display_name ?? (o.attributes?.plate_text ? String(o.attributes.plate_text) : null);
-          const main = `${labelName(o.label)} ${Math.round(o.score * 100)}%`;
+          const main = `${labelName(o.label)} ${Math.round(o.score * 100)}%${pt ? ` · ${pt.text}` : ""}`;
+          const gt = gesture && gesture.track_id === o.track_id ? `Geste: ${GESTURE_NAME[gesture.gesture] ?? gesture.gesture}` : null;
+          const gw = gt ? gt.length * fs * 0.58 + 12 : 0;
           const sub = compact ? null : `#${o.track_id}`;
           const text = name ? `${name} · ${main}` : main;
           const tw = (text.length + (sub ? sub.length + 1 : 0)) * fs * 0.58 + 12;
@@ -79,6 +99,12 @@ const OverlaySvg = memo(function OverlaySvg({
                   {sub && <tspan fillOpacity={0.6} dx={4}>{sub}</tspan>}
                 </text>
               </g>
+              {gt && (
+                <g className="tag gesture-tag">
+                  <rect x={Math.max(0, Math.min(bx, w - gw))} y={Math.min(by + bh + 2, h - fs - 8)} width={gw} height={fs + 8} rx={4} fill="#a78bfa" fillOpacity={0.95} />
+                  <text x={Math.max(0, Math.min(bx, w - gw)) + 6} y={Math.min(by + bh + 2, h - fs - 8) + fs + 3} fontSize={fs} fill="#05080d">{gt}</text>
+                </g>
+              )}
             </g>
           );
         })}

@@ -16,8 +16,11 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
 | `go2rtc.py` | Stream-Sync `cam_N` / `cam_N_detect`, `frame.jpeg`-Proxy, URL-Probe über temporären Stream `probe_<hex>` |
 | `mqtt_bus.py` | paho-mqtt 2, abonniert `vg/internal/#`, LWT `{prefix}/available` |
 | `events.py` | Track → Event (ein Track = ein Event), Regel-Auswertung, Aktionen, Zähler `{prefix}/{kamera_slug}/{label}` |
-| `rules.py` | Bedingungen (Zeitplan inkl. über Mitternacht, Identität, Zonen, Dwell), Templates, Webhooks |
+| `rules.py` | Bedingungen (Zeitplan inkl. über Mitternacht, Identität, Zonen, Dwell), Registry für Trigger/Bedingungen, Zeit-Trigger-Fälligkeit, Templates, Webhooks |
+| `rule_conditions.py` | Auswertung `conditions`: Gegenstand da/weg, unberührt, Regen, kam aus Zone (A1) |
+| `weather.py` | Regenwahrscheinlichkeit von Open-Meteo (ohne Key, Cache 30 min, `VG_WEATHER_URL` für Tests) |
 | `identity.py` | Kosinus-Abgleich (numpy, In-Memory-Cache) für face/pet, Levenshtein für Kennzeichen |
+| `reid.py`, `routers/presence.py` | C2: RAM-Galerie (presence_key ↔ Embeddings/Tracks/Identität), `POST /api/internal/reid`, `GET/DELETE /api/presence`, WS `presence` |
 | `retention.py` | Events älter `retention_days_events`, Dateien in snapshots/crops/clips älter `retention_days_media` |
 | `ws.py`, `state.py`, `registry.py` | WebSocket-Hub, flüchtiger Status, Kamera-Cache |
 
@@ -31,9 +34,28 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
   Cooldown pro Regel+Kamera. Dwell wird bei Updates und jede Sekunde geprüft.
   Snapshot: Auftrag an Worker (`vg/internal/cmd/{id}`); ohne Antwort nach 5 s holt das Backend
   selbst ein Bild von go2rtc. Clip: höchstens ein Auftrag pro Event.
+- **Hinweise (A1)**: Regeln mit `conditions` prüfen diese erst `condition_delay_s` nach dem Auslösen (eigener
+  Thread-Pool, nie im Track-Thread); erfüllt → Aktionen + Notification. Zeit-Regeln (`trigger=time`) prüft der
+  Tick alle 20 s; der letzte Lauf steht in `kv.rule_time_runs`, verpasste Zeitpunkte werden bis 15 min nachgeholt.
+  `POST /api/rules/check` prüft einen Entwurf sofort (UI „Jetzt prüfen“).
+- **Virtuelle Sensoren (A3/C4)** (`sensors.py`): Zustandsautomat im Speicher (DB wird im Effekt-Thread
+  nachgezogen). Ein abweichender Rohzustand braucht `confirm_n` Messungen in Folge; verdeckte Messungen zählen nicht.
+  `inventory_count` zählt `present`-Gegenstände im Bereich (Tick je `interval_s`), `vlm` fragt `vlm.ask` (A2) nur bei
+  Bildänderung, offenem Kandidaten oder nach `vlm_max_age_s`; `verify_vlm` lässt einen billigen Wechsel vom
+  Bildmodell bestätigen. C4-VLM (W4, `vlm_measure.py`): `vlm` mit `params.measure` `count` (Anzahl, `min_count` ≤ 3)
+  bzw. `fill` (nur ok/leer); `inventory_count` mit `verify_vlm` lässt Wechsel vom Bildmodell nachzählen (≤ 1×/5 min).
+  Messwerkzeug: `scripts/vlm_supply_bench.py`. Bestätigter Wechsel → `sensor_history`, Standbild (go2rtc, ≤ 1/min), WS `sensor`, MQTT
+  `{prefix}/sensor/{slug}` (+ `/attributes`), Regeln mit `trigger: sensor` (nur zwischen bekannten Zuständen).
+  Vorräte (`supply`) → Einkaufsliste (`shopping.py`, `shopping_list_auto`) und Hinweis `source: sensor`.
+  Ohne Messwerte seit `max(5 × interval_s, 120 s)` → `unknown`.
 - **Identitäten**: neue unbenannte → „Person #N“ / „Tier #N“ (Zähler je Art), „Kennzeichen <Text>“.
   Max. 20 Samples je Identität (beste Qualität bleibt), Crops werden nach `identities/<id>/` kopiert.
   `identify` mit `camera_id`+`track_id` verknüpft die Identität direkt mit dem aktiven Event.
+- **Anwesenheit (C2)**: Track-Hook für Personen/Hunde/Katzen, jeder Track gehört genau einem `presence_key`.
+  ReID-Embeddings (nur `reid_enabled`-Kameras) werden gegen die Galerie abgeglichen (Kosinus, Maximum je Eintrag,
+  Schwelle `reid_match_threshold`), nur gegen Einträge ohne gleichzeitig aktiven Track. Gesicht hat Vorrang: eine
+  eigene Identität benennt den Eintrag bzw. löst einen per ReID verknüpften Track heraus. Identität wird per ReID nur
+  ab Schwelle + 0,1 weitergegeben. Alles nur im RAM, Verfall nach `reid_ttl_min`, Neustart = leer.
 - Aktive Events aus einem früheren Lauf werden beim Start beendet; Tracks ohne Lebenszeichen
   (60 s) werden automatisch beendet.
 

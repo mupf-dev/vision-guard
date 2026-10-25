@@ -6,6 +6,14 @@ import type { Camera, CameraInput, CameraTestResult } from "../../lib/types";
 import { ALL_LABELS, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, Img, LabelIcon, Loading, Range, Switch } from "../../components/ui";
 import { ZoneEditor } from "../../components/ZoneEditor";
+import { CameraInventoryTab } from "./CameraInventory";
+import { HeartPulse, Package, PersonStanding } from "lucide-react";
+import { CameraHealthTab } from "./CameraHealth";
+import { CameraAskSection } from "./CameraAsk";
+import { CameraHistorySection } from "./CameraHistory";
+import { CameraPtzTab, PTZ_DEFAULT } from "./CameraPtz";
+import { Move } from "lucide-react";
+import { HealthBadge } from "../../components/HealthBadge";
 import { StatusBadge } from "../Live";
 import { toast, useLive } from "../../lib/store";
 import { isMock, mockSnapshot } from "../../lib/mock";
@@ -13,18 +21,60 @@ import { isMock, mockSnapshot } from "../../lib/mock";
 const EMPTY: CameraInput = {
   name: "", url: "", detect_url: null, enabled: true, detect_fps: 5, labels: ["person", "car", "dog", "cat"], min_score: 0.5,
   face_recognition: true, plate_recognition: true, pet_recognition: true, zones: [],
+  room: null, inventory_enabled: false, inventory_interval_s: 3, inventory_labels: [], inventory_min_score: 0.35,
+  inventory_tiling: false, health_enabled: true,
+  pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {}, inventory_suppress: [],
+  vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
+  reid_enabled: false,
+  ptz_enabled: false, ptz: PTZ_DEFAULT,
+  face_fullres: true,
 };
 
 function strip(c: Camera): CameraInput {
-  const { id: _id, status: _s, ...rest } = c;
-  void _id; void _s;
+  const { id: _id, status: _s, ptz_state: _p, ...rest } = c;
+  void _id; void _s; void _p;
   return { ...EMPTY, ...rest };
+}
+
+/** W2 (C1/D1): Haltung/Sturz und Gesten je Kamera (Pose-Modell yolo11n-pose, nur bei Personen im Bild) */
+function PersonAnalysis({ f, set }: { f: CameraInput; set: <K extends keyof CameraInput>(k: K, v: CameraInput[K]) => void }) {
+  const sys = useQuery({ queryKey: ["system"], queryFn: api.system, staleTime: 10_000, enabled: f.pose_enabled || f.gesture_enabled || f.reid_enabled });
+  const models = sys.data?.worker?.models as Record<string, string> | undefined;
+  const model = models?.pose;
+  const reidModel = models?.reid;
+  const noPerson = !f.labels.includes("person");
+  return (
+    <div className="field span-2"><label><PersonStanding size={13} style={{ verticalAlign: -2 }} /> Personenanalyse</label>
+      <div className="row-wrap" style={{ gap: 24 }}>
+        <Switch checked={f.pose_enabled} onChange={(v) => set("pose_enabled", v)} label="Haltung / Sturz erkennen" />
+        <Switch checked={f.gesture_enabled} onChange={(v) => set("gesture_enabled", v)} label="Armgesten erkennen" />
+        <Switch checked={f.reid_enabled} onChange={(v) => set("reid_enabled", v)} label="Wiedererkennung über Kameras" />
+      </div>
+      <span className="hint muted" style={{ fontSize: 12 }}>
+        Rechnet ein Pose-Modell (≈ 0,1 GB Grafikspeicher), nur solange eine Person im Bild ist: Haltung 2×/s, Gesten 5×/s.
+        Auslösen über Regeln mit „Haltung“ bzw. „Geste“; Sofa/Bett als Zone anlegen und in der Regel ausschließen.
+        {(f.pose_enabled || f.gesture_enabled) && model ? <> Modell: <b>{model}</b>.</> : null}
+      </span>
+      {f.reid_enabled && (
+        <span className="hint muted" style={{ fontSize: 12 }}>
+          Wiedererkennung: verknüpft Personen ohne erkanntes Gesicht anhand von Kleidung und Statur mit anderen Kameras
+          (Seite „Anwesenheit“). Rechnet auf dem Prozessor (kein Grafikspeicher), nur für Personen ab ≈ 128 px Höhe.
+          Die Merkmale bleiben nur im Arbeitsspeicher und verfallen nach der eingestellten Zeit – nichts wird gespeichert.
+          Nur ein Hinweis: bei ähnlicher Kleidung sind Verwechslungen möglich.
+          {reidModel ? <> Modell: <b>{reidModel}</b>.</> : null}
+        </span>
+      )}
+      {(f.pose_enabled || f.gesture_enabled || f.reid_enabled) && noPerson && (
+        <span className="hint" style={{ fontSize: 12, color: "var(--warn)" }}>„Person“ ist bei den erkannten Objekten nicht ausgewählt – ohne Personen-Tracks gibt es keine Personenanalyse.</span>
+      )}
+    </div>
+  );
 }
 
 function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState<CameraInput>(cam ? strip(cam) : EMPTY);
-  const [tab, setTab] = useState<"general" | "zones">("general");
+  const [tab, setTab] = useState<"general" | "zones" | "inventory" | "health" | "ptz">("general");
   const [test, setTest] = useState<{ url: string; res?: CameraTestResult; busy?: boolean; err?: string } | null>(null);
   const set = <K extends keyof CameraInput>(k: K, v: CameraInput[K]) => setF((p) => ({ ...p, [k]: v }));
   const valid = f.name.trim() && f.url.trim();
@@ -59,6 +109,9 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
       <div className="tabs" style={{ marginTop: -8 }}>
         <button className={tab === "general" ? "on" : ""} onClick={() => setTab("general")}><Cctv size={15} />Allgemein</button>
         <button className={tab === "zones" ? "on" : ""} onClick={() => setTab("zones")}><MapPin size={15} />Zonen<span className="count">{f.zones.length}</span></button>
+        <button className={tab === "inventory" ? "on" : ""} onClick={() => setTab("inventory")}><Package size={15} />Gegenstände{f.inventory_enabled && <span className="count">an</span>}</button>
+        <button className={tab === "health" ? "on" : ""} onClick={() => setTab("health")}><HeartPulse size={15} />Zustand{cam?.status?.health?.state === "warn" && <span className="count" style={{ color: "var(--warn)" }}>!</span>}</button>
+        <button className={tab === "ptz" ? "on" : ""} onClick={() => setTab("ptz")}><Move size={15} />Schwenken{f.ptz_enabled && <span className="count">an</span>}</button>
       </div>
       {tab === "general" ? (
         <div className="form-grid">
@@ -91,7 +144,16 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
               <Switch checked={f.pet_recognition} onChange={(v) => set("pet_recognition", v)} label="Haustiere" />
             </div>
           </div>
+          <PersonAnalysis f={f} set={set} />
+          <CameraAskSection f={f} set={set} />
+          <CameraHistorySection f={f} set={set} />
         </div>
+      ) : tab === "inventory" ? (
+        <CameraInventoryTab f={f} set={set} cameraId={cam?.id} />
+      ) : tab === "health" ? (
+        <CameraHealthTab cam={cam} f={f} set={set} />
+      ) : tab === "ptz" ? (
+        <CameraPtzTab f={f} set={set} cameraId={cam?.id} savedEnabled={!!cam?.ptz_enabled} />
       ) : (
         <ZoneEditor cameraId={cam?.id ?? null} zones={f.zones} onChange={(z) => set("zones", z)} />
       )}
@@ -130,7 +192,7 @@ export function CamerasPage() {
             <div key={c.id} className={`list-item ${c.enabled ? "" : "disabled"}`} style={{ animationDelay: `${i * 30}ms` }}>
               <Img src={isMock ? mockSnapshot(c.id) : api.snapshotUrl(c.id)} className="cam-thumb" fallback={<div className="cam-thumb" style={{ display: "grid", placeItems: "center", color: "var(--line-2)" }}><Cctv size={26} /></div>} />
               <div className="grow">
-                <div className="title">{c.name}<StatusBadge status={live[c.id] ?? c.status} enabled={c.enabled} /><span className="badge outline mono">cam_{c.id}</span></div>
+                <div className="title">{c.name}<StatusBadge status={live[c.id] ?? c.status} enabled={c.enabled} />{c.enabled && c.health_enabled && <HealthBadge health={(live[c.id] ?? c.status)?.health} />}<span className="badge outline mono">cam_{c.id}</span></div>
                 <div className="sub mono">{c.url}</div>
                 <div className="row-wrap" style={{ marginTop: 6, gap: 6 }}>
                   <span className="badge">{c.detect_fps} fps</span>
@@ -139,6 +201,10 @@ export function CamerasPage() {
                   {c.face_recognition && <span className="badge info">Gesichter</span>}
                   {c.plate_recognition && <span className="badge warn">Kennzeichen</span>}
                   {c.pet_recognition && <span className="badge ok" style={{ animation: "none" }}>Tiere</span>}
+                  {(c.pose_enabled || c.gesture_enabled || c.reid_enabled) && <span className="badge info" title="Personenanalyse"><PersonStanding size={11} />{[c.pose_enabled && "Haltung", c.gesture_enabled && "Gesten", c.reid_enabled && "Wiedererkennung"].filter(Boolean).join(" + ")}</span>}
+                  {c.inventory_enabled && <span className="badge accent" title={`alle ${c.inventory_interval_s} s · ${c.inventory_labels.length ? `${c.inventory_labels.length} Gegenstände` : "gesamtes Vokabular"}`}><Package size={11} />Gegenstände</span>}
+                  {c.ptz_enabled && <span className="badge info" title="Schwenken/Neigen über ONVIF"><Move size={11} />PTZ{c.ptz?.patrol?.enabled ? " · Patrouille" : ""}{c.ptz?.follow?.enabled ? " · Verfolgen" : ""}</span>}
+                  {c.room && <span className="badge outline">{c.room}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>{c.labels.map(labelName).join(", ")}</span>
                 </div>
               </div>

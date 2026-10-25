@@ -72,11 +72,29 @@ src/
                              Doppelklick auf Kante = Punkt einfügen, Rechtsklick = Punkt löschen)
     EventBits.tsx            Feed-Eintrag, Ereignis-Detaildialog (Clip/Snapshot/Ausschnitt, Attribute, Regeln)
     ui.tsx                   Dialog, Confirm, Switch, Range, ChipSelect, SearchSelect, LabelPill …
-  pages/
-    Login, Live (Kachelraster + Fokusansicht /live/:id + Live-Feed), Events (/ereignisse, Filter in URL,
-    Deep-Link ?ev=<id>), Identities (/identitaeten[/:id], Umbenennen, Notizen, Samples, Merge, Löschen),
-    Stats (/statistik), admin/{Cameras, Rules, Settings, System}
+  pages/                     (Routen siehe src/App.tsx)
+    Login                    /login
+    Live                     / und /live/:id – Kachelraster, Fokusansicht, Live-Feed, „Frag die Kamera“
+    Events                   /ereignisse – Filter in der URL, Deep-Link ?ev=<id>, Quittieren von Notfällen
+    Identities               /identitaeten[/:id] – Umbenennen, Notizen, Samples, Lernsperre, Merge (auch Teil-Merge), Vorschläge
+    Objects (+ ObjectChanges, MyItems)
+                             /gegenstaende – Übersicht/Suche, Veränderungen, eigene Exemplare
+    Notifications            /hinweise – Hinweise mit Bild, Push-Zustellung
+    Review                   /bestaetigen – Rückfragen (Ja/Nein/Überspringen, Tasten J/N/S), Verlauf
+    Pets                     /tiere – Haustier-Tagebuch
+    Reports                  /berichte – Tagesberichte, Vorschau
+    History                  /zeitmaschine – Bildsuche mit eigenen Worten, Filmstreifen
+    Supplies                 /vorraete – Vorrats-Sensoren und Einkaufsliste
+    Presence                 /anwesenheit – wer ist wo (auch über Kameras)
+    Stats                    /statistik
+    admin/                   /admin/{kameras, regeln, sensoren, einstellungen, system, zugaenge}
+                             Cameras (Allgemein, Zonen, Gegenstände, Zustand), Rules (Auslöser, Bedingungen,
+                             Aktionen inkl. Push), Sensors, Settings (je Thema eine Karte *Settings.tsx, Sprungmarken),
+                             System (GPU, Modelle, Kameras), Tokens (API-Zugänge)
 ```
+
+Navigation (R1): fünf Hauptpunkte (Live, Ereignisse, Identitäten, Gegenstände, Hinweise), seltene Seiten unter
+„Mehr“, dann Administration; unter 1000 px ein Menü mit allen Punkten (`components/Layout.tsx`).
 
 ## Hinweise
 
