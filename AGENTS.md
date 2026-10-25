@@ -78,11 +78,13 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Identitätsabgleich | `backend/app/identity.py` |
 | Gesichts-Abgleich/Galerie, Sammelaktionen, Nachtlauf | `backend/app/face_match.py`, `identity_bulk.py`, `nightly.py`, `routers/nightly.py` |
 | Messung Gesichts-Identitäten (nur lesend) | `scripts/face_stats.py` |
+| Oberfläche Mehrfachauswahl, Gesichtserkennung/Nachtlauf | `frontend/src/pages/IdentityBulk.tsx`, `frontend/src/pages/admin/FaceSettings.tsx` |
 | Datenbankmodell | `backend/app/models.py` (`create_all`, keine Migrationen – Spalten nur additiv mit Default ändern) |
 | Kamera-Ingest (ffmpeg) | `worker/vg_worker/ingest.py` |
 | YOLO-Batching | `worker/vg_worker/detector.py`, `worker/vg_worker/pipeline.py` |
 | Tracking, Zonen | `worker/vg_worker/tracking.py` |
 | Gesicht/Kennzeichen/Tier | `worker/vg_worker/identify.py` |
+| Gesichtsqualität, Track-Sammlung, Vollbild-Leser | `worker/vg_worker/face_quality.py`, `face_track.py`, `fullres.py` |
 | Ringpuffer, Clips, Snapshots | `worker/vg_worker/recorder.py` |
 | API-Client, Typen | `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts` |
 | Live-Socket/Store | `frontend/src/lib/useLiveSocket.ts`, `frontend/src/lib/store.ts` |
@@ -110,6 +112,15 @@ Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](wo
 - Kennzeichen- und Tier-Identifikation sind implementiert, aber noch nicht mit echten Szenen validiert.
 - Clips werden auf ganze 2-s-Segmente gerundet (etwas länger als eingestellt).
 - `buffalo_l` (InsightFace) nur nicht-kommerziell; YOLO11 unter AGPL-3.0.
+- **Gesichter-Nachtlauf** (`nightly_mode`): Standard `preview` – berechnet nur einen Bericht. Automatisch
+  zusammengeführt werden nur unbenannte Fragmente ohne Lernsperre, nie zwei benannte; `apply` bzw. „Jetzt anwenden“
+  nur mit Anmeldung im Browser. Test-Identitäten nie gegen echte Daten anwenden: bei `POST
+  /api/nightly/reports/{id}/apply` immer `idx` mit den eigenen Test-Aktionen angeben.
+- Das Löschen einer Kamera entfernt ihre Ereignisse und daraus entstandenen Identitäten **nicht** – nach Tests mit
+  Testkameras Ereignisse (`DELETE /api/events/{id}`) und Test-Identitäten (`POST /api/identities/bulk-delete`) selbst
+  entfernen.
+- Neue Gesichtsqualität (ab Paket B) ist strenger als die alte; `face_new_min_quality`/`face_sample_min_quality`
+  nach einigen Tagen Betrieb mit `scripts/face_stats.py` prüfen.
 - Medien unter `/media/*` liefert das Backend nur mit Cookie, API-Key (Bearer) oder signiertem Link (`?exp=&sig=`)
   aus (`backend/app/routers/media.py`, `media_sign.py`). Signierte Links sind bis zum Ablauf für jeden nutzbar, der
   sie kennt (TTL `media_link_ttl_h`). `VG_MEDIA_PUBLIC=1` schaltet auf das alte, ungeschützte Verhalten zurück.

@@ -12,6 +12,10 @@ RAM-Ringpuffer, Push aufs Handy, MQTT-Nachricht oder Webhook.
 - **Objekterkennung** mit YOLO11 auf der NVIDIA-GPU, Batching über alle Kameras, ByteTrack-Tracking
 - **Identifikation:** Gesichter (InsightFace), Kennzeichen (fast-alpr), Haustiere (DINOv2-Embeddings).
   Unbekannte bekommen automatisch eine ID („Person #12“) und lassen sich später benennen oder zusammenführen.
+  Gesichter werden je Track gesammelt und nach Qualität (Größe, Kopfdrehung, Schärfe) bewertet, bei Kameras über
+  1920 px aus der vollen Auflösung geschnitten; Mehrfachauswahl zum Zusammenführen/Löschen mit Verlauf und
+  „Zurücksetzen“; ein **Nachtlauf** bündelt Fragmente, kuratiert die Bildergalerie und passt Schwellen je Person an
+  (Standard: nur Probelauf mit Vorschau, Anwenden nach Freigabe in Einstellungen → Nachtlauf)
 - **Regel-Engine:** Kamera, Zone, Objektklasse, Konfidenz, Identität (bekannt/unbekannt/bestimmt),
   Auslöser (betritt/verlässt/verweilt), Zeitplan, Cooldown → Snapshot, Clip, MQTT, Webhook
 - **Virtuelle Sensoren und Vorräte:** Bildbereiche als Schalter (Licht an/aus per Helligkeit, Blinken,

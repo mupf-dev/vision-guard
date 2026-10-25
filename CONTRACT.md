@@ -2135,3 +2135,10 @@ Zusammenführungen mit „Zurücksetzen“. Kamera-Dialog: Schalter „Gesichter
 Umsetzung (Paket D): `frontend/src/pages/admin/FaceSettings.tsx` – Karten „Gesichtserkennung“ und „Nachtlauf
 (Gesichter)“ (Sprungmarken `#s-gesichter`, `#s-nachtlauf`) mit „Probelauf jetzt“, Berichtsliste und Berichtsdialog
 (Vorschaubilder Quelle → Ziel, Auswahl je Aktion, „Jetzt anwenden (N)“ mit Bestätigung). WS `nightly` lädt neu.
+
+Ergänzungen der Integration (Pakete A–D, additiv):
+- Der Zusammenführen-Dialog der Identitäts-Detailansicht prüft die Bildgrenze des Ziels wie das Backend
+  (`sample_limit`: benannte Gesichter `face_max_samples_named`, sonst 20) statt fest 20.
+- `face_fullres` (Setting) ist nach dem Lasttest der Integration auch in der bestehenden Installation eingeschaltet
+  (16 Kameras unverändert ≈ 61 Bilder/s; `cam_3` mit Vollbild-Leser ohne messbaren Einbruch, siehe
+  `docs/plan/07-identitaeten-fortschritt.md`). `nightly_mode` bleibt `preview`.

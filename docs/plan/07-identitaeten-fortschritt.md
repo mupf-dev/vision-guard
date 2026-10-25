@@ -65,7 +65,7 @@ Beobachtungszeitraum ≈ 0,5 Tage, Schwelle `face_match_threshold` 0,30.
 | B Worker-Gesichter (Qualität, Track-Sammlung, volle Auflösung) | erledigt, gemergt (siehe unten) |
 | C Zuordnungslogik (Backend) | erledigt, gemergt (siehe unten) |
 | D Nachtlauf | erledigt (Probelauf-Modus in dieser Installation, siehe unten) |
-| Integration (Merge A–C, Build, Deploy) | erledigt; Messung „nachher“ nach einem Tag Betrieb offen |
+| Integration (Merge A–C, Build, Deploy, Ende-zu-Ende, Lasttest, Probelauf echt) | erledigt (siehe unten); Messung nach einem Tag Betrieb offen |
 
 ## Paket A – Mehrfachauswahl (Stand 2026-10-25)
 
@@ -249,5 +249,80 @@ defer_remove)`, damit `bulk_merge` Dateien weiterhin erst nach dem Commit lösch
   1 Galerie (1 Ausreißer), 2 Schwellen je Person, kein Aufräumen. Zeilenzahlen vorher/nachher identisch
   (Identitäten 75, Bilder 317, Negative 0, Verlauf 0, gesetzte Schwellen 0). `nightly_mode` bleibt `preview`.
 - Hinweis: In dieser Installation steht `face_fullres` in den gespeicherten Settings noch auf `false` (vor Paket B
-  gespeichert) – bei Bedarf unter Einstellungen → Gesichtserkennung einschalten.
+  gespeichert) – bei der Integration nach dem Lasttest eingeschaltet (siehe unten).
+
+## Integration und Ende-zu-Ende im Haupt-Stack (2026-10-25 ≈ 10:30–11:00)
+
+Ausgangsstand: höchste IDs `identities` 135, `identity_samples` 647, `cameras` 3, `rules` 2, `identity_merges` 0,
+`nightly_reports` 1, `api_tokens` 16 (0 aktiv). Backup `~/vision-guard-backups/vg-20261025-103233-vor-integration07.sql.gz`
+(chmod 600; keine Schemaänderung).
+
+**Ende-zu-Ende** (Testkamera 11 = `rtsp://testcam:8554/cam1`, danach vollständig entfernt):
+- MQTT `vg/internal/track/11` (4 min): 28 Starts, 123 Updates (45 mit `identity.phase:"provisional"`), 26 Enden – alle
+  26 Personen-Tracks enden mit `phase:"final"`. Neue Beispielbilder tragen `quality`, `face_size`, `yaw`, `sharpness`,
+  `day_night` (z. B. 4 Bilder, Qualität Mittel 0,36, Breite 77 px). `/api/system`: `perf.face` mit `faces_per_min`,
+  `final_per_min`, `dropped`.
+- Track-Konsolidierung wirkt: in ≈ 15 min Testkamera entstand nur **1** neue Gesichts-Identität; alle übrigen Tracks
+  wurden wiedererkannt.
+- **Befund:** Die Identitäten **84–91** stammen von einer früher gelöschten Testkamera 10 (`cam1`, 07:17–07:23 UTC,
+  45 Ereignisse, vor dem Kickoff) – das Löschen einer Kamera entfernt Ereignisse/Identitäten nicht. Sie zählen in
+  allen Messungen „echter“ Daten mit (8 von 41 Gesichts-Identitäten). Nicht gelöscht (nicht von diesem Lauf
+  angelegt); Empfehlung: in der Oberfläche prüfen und per Mehrfachauswahl löschen. Die Testkamera hat ihnen 6 Bilder
+  und neue `last_seen` gegeben – beides wieder zurückgesetzt (Bilder gelöscht, `last_seen` aus dem Backup).
+- **Mehrfachauswahl über die Oberfläche** (headless Chromium gegen `localhost:8080`, synthetische Test-Identitäten
+  137–141 über `/api/internal/identify phase:"final"`): Auswahl 2 → „Zusammenführen …“ → Ziel gewählt → 139 in 138
+  aufgegangen (Verlauf `actor:"bulk"`); 140 per „Löschen …“ gelöscht; keine JS-Fehler, kein seitliches Scrollen.
+  Screenshots `scratchpad/ident/i1-merge-echt.png`, `i2-loeschen-echt.png` (nicht im Repo).
+- **Nachtlauf anwenden:** Test-Fragment 141 (Ähnlichkeit 0,69–0,74 zu 137) → Probelauf schlägt `merge 141 → 137`
+  (0,78, Zweitbester 0,09) vor, daneben die echten Aktionen; `apply {idx:[0]}` wendet **nur** die Test-Aktion an
+  (Bericht `trigger:"apply"`, `applied:true`, Verlauf `actor:"nightly"` + `nightly_report_id`, Hinweis erzeugt).
+  Echte Identitäten unverändert.
+- Aufräumen: Test-Identitäten (Mehrfach-Löschen), 107 Test-Ereignisse samt Medien, Kamera 11, Verlauf, Test-Berichte
+  und Hinweis entfernt. Danach: Beispielbild-IDs identisch zum Backup, Zeilen wie Ausgangsstand (Ereignisse nur
+  durch `cam_3` mehr). Keine API-Keys angelegt.
+
+**Fehler behoben:** Zusammenführen-Dialog der Detailansicht nutzte fest 20 Bilder als Grenze → jetzt wie das Backend
+`sample_limit` (benannte Gesichter `face_max_samples_named` = 40), `frontend/src/pages/Identities.tsx`.
+
+**Lasttest 16 Kameras** (integriert, `--face-fullres`, `flock ~/vg-gpu.lock`, parallel zum Haupt-Stack): 60,8 Bilder/s,
+7,0 ms je Bild, Batch Ø 5,9, GPU-Spitze 4608 MiB, 0 Fehler bei `identify` – wie Paket B (59–61 Bilder/s).
+`dropped` 74 Gesichts-Jobs (Budget 15/s greift wie vorgesehen).
+
+**`cam_3` mit/ohne volle Auflösung** (je 12 Proben über 2 min, Medianwerte):
+
+| `face_fullres` | Bilder/s `cam_3` | Inferenz ms | CPU Worker | VRAM gesamt | Vollbild-Ausschnitte/min | Gesichter/min |
+|---|---|---|---|---|---|---|
+| aus | 9,7 | 30,2 | 64 % | 3004 MiB | 0 | 0 |
+| an | 9,5 | 16,2 | 65 % | 3004 MiB | 37 | 29 |
+
+Kein messbarer Einbruch (Leser 2880×1616 @ 2 fps, nur solange eine Person im Bild ist) → **`face_fullres` in dieser
+Installation eingeschaltet** (Entscheidung 2 des Nutzers). Je Kamera abschaltbar.
+
+**Probelauf an echten Daten** (Bericht 4, nur Vorschau; alle Zeilenzahlen vorher = nachher: Identitäten 76, Bilder 319,
+Verlauf 0, Rückfragen 10): 41 Gesichts-Identitäten, 39 unbenannt → 2 sichere Zusammenführungen in benannte Personen
+(0,71/Zweitbester 0,52 mit 20 Bildern/69 Ereignissen; 0,58/0,41 mit 19 Bildern/11 Ereignissen), 5 Rückfragen
+(0,42–0,55), 1 Galerie (1 Ausreißer als Negativ), 2 Schwellen je Person (0,27 und 0,28), kein Aufräumen.
+
+**Messung jetzt und „nachher“** (`scripts/face_stats.py`; „nachher“ = Aktionen von Bericht 4 per SQL in einer
+Transaktion nachgebildet, danach ROLLBACK – ohne Galerie-Kürzung):
+
+| Kennzahl | Kickoff | jetzt | nach Probelauf |
+|---|---|---|---|
+| Gesichts-Identitäten (benannt) | 35 (2) | 41 (2) | 39 (2) |
+| Einzelbild / 1–2 Bilder | 54 % / 60 % | 54 % / 63 % | 56 % / 67 % |
+| Bilder benannt #15 / #19 | – | 20 / 20 | 40 / 39 |
+| Fragmente #15 ≥ 0,40 / ≥ 0,55 | 6 / 2 | 6 / 2 | 7 / 1 |
+| Fragmente #19 ≥ 0,40 / ≥ 0,55 | 2 / 1 | 2 / 1 | 2 / 1 |
+| unbenannte Paare ≥ 0,40 / ≥ 0,55 | 10 / 1 | 10 / 0 | 3 / 0 |
+| max. Ähnlichkeit zwischen Benannten | 0,17 | 0,17 | 0,17 |
+| Ähnlichkeit innen (Median) | – | 0,49 | 0,54 |
+
+Lesart: Der Probelauf führt die zwei großen Fragmente zusammen und macht die Unbenannten deutlich trennschärfer
+(Paare ≥ 0,40: 10 → 3); die restlichen Fragmente der Benannten liegen unter der Auto-Grenze und gehen als Rückfragen
+an den Nutzer. Die Einzelbild-Quote sinkt erst durch neue Aufnahmen (Track-Konsolidierung) und das Aufräumen nach
+`nightly_cleanup_days`. Die 8 Testkamera-Reste (84–91) verfälschen die Quoten leicht.
+
+**Offen:** Vorschau (Bericht 4) unter Einstellungen → Nachtlauf freigeben; Testkamera-Reste 84–91 löschen; Messung
+nach einigen Tagen Betrieb wiederholen (Schwellen `face_new_min_quality`/`face_sample_min_quality`); `nightly_mode`
+erst nach Freigabe auf `apply` stellen.
 
