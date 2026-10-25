@@ -95,6 +95,9 @@ class Pipeline:
         self.inventory = InventoryEngine(publish, self.gpu, lambda cid: self.cams.get(cid))
         # Kamera-Gesundheit (C5): eigener CPU-Thread, Prüfbilder aus dem Ingest
         self.health = HealthMonitor(publish, self._cams_snapshot)
+        # W2 (K2): Embedding-Dienst vg/internal/embed mit dem geteilten DINOv2 der Tiererkennung
+        from .embed import EmbedService
+        self.embed = EmbedService(publish, self.identifier.pet)
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
@@ -119,6 +122,7 @@ class Pipeline:
         self._stop.set()
         self.inventory.stop()
         self.health.stop()
+        self.embed.stop()
         with self.lock:
             cams = list(self.cams.values())
             self.cams.clear()
@@ -349,6 +353,7 @@ class Pipeline:
         d = {"detector": self.detector_status}
         d.update(self.identifier.status())
         d["inventory"] = self.inventory.status_text()
+        d["embed"] = self.embed.status()
         return d
 
     def perf(self) -> dict:
@@ -356,9 +361,9 @@ class Pipeline:
         h = [x for x in self.batch_hist if now - x[0] <= 10]
         if not h:
             return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf(),
-                    "health": self.health.perf()}
+                    "health": self.health.perf(), "embed": self.embed.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
                 "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
-                "inventory": self.inventory.perf(), "health": self.health.perf()}
+                "inventory": self.inventory.perf(), "health": self.health.perf(), "embed": self.embed.perf()}

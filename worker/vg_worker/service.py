@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import re
 import signal
 import threading
@@ -75,7 +76,15 @@ class Service:
             return
         self.mqtt_connected = True
         log.info("MQTT connected to %s:%s", settings.MQTT_HOST, settings.MQTT_PORT)
-        client.subscribe([("vg/internal/config", 1), ("vg/internal/cmd/+", 1)])
+        # W2 (K2): Nagle aus – paho setzt kein TCP_NODELAY; bei laufendem Datenstrom verzögerte das kleine
+        # Antworten (vg/internal/embed_result) um ~40 ms (Delayed ACK)
+        try:
+            sock = client.socket()
+            if sock is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:  # noqa: BLE001
+            pass
+        client.subscribe([("vg/internal/config", 1), ("vg/internal/cmd/+", 1), ("vg/internal/embed", 1)])
         self.reload_ev.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
@@ -90,6 +99,9 @@ class Service:
         if msg.topic == "vg/internal/config":
             log.info("config change notification received")
             self.reload_ev.set()
+        elif msg.topic == "vg/internal/embed":   # W2: Embedding-Anfragen (geteiltes DINOv2)
+            if not msg.retain:
+                self.pipeline.embed.submit(payload)
         elif msg.topic.startswith("vg/internal/cmd/"):
             if msg.retain:
                 return   # never execute stale retained commands

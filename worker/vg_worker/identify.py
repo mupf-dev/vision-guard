@@ -260,7 +260,12 @@ class PlateModel(ModelWorker):
 
 # ============================================================================ pets
 class PetModel(ModelWorker):
+    """DINOv2 (timm) – Tier-Wiedererkennung; seit W2 auch geteiltes Modell des Embedding-Dienstes (embed.py)."""
     key = "pet"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.infer_lock = threading.Lock()
 
     def load(self):
         import timm
@@ -283,24 +288,34 @@ class PetModel(ModelWorker):
         self.process(Job(0, 0, np.zeros((100, 100, 3), np.uint8), 0, {}))
         self.status = f"{name} ({'CUDA fp16' if self.device == 'cuda' else 'CPU'})"
 
-    def process(self, job: Job) -> dict | None:
+    def _prep(self, img: np.ndarray) -> np.ndarray:
         import cv2
-        torch = self.torch
-        img = job.image
         h, w = img.shape[:2]
         # pad to square (keeps aspect), then resize
         s = max(h, w)
         canvas = np.zeros((s, s, 3), np.uint8)
         canvas[(s - h) // 2:(s - h) // 2 + h, (s - w) // 2:(s - w) // 2 + w] = img
-        x = cv2.resize(canvas, (self.size, self.size), interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
-        with torch.inference_mode():
-            t = torch.from_numpy(x).to(self.device).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        return cv2.resize(canvas, (self.size, self.size), interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
+
+    def embed_batch(self, images: list[np.ndarray]) -> np.ndarray:
+        """L2-normierte Embeddings (N×384) für BGR-Bilder. Thread-sicher (geteilt mit embed.EmbedService, W2);
+        nur aufrufen, wenn das Modell geladen ist (`ready()`)."""
+        torch = self.torch
+        x = np.stack([self._prep(im) for im in images])
+        with self.infer_lock, torch.inference_mode():
+            t = torch.from_numpy(x).to(self.device).permute(0, 3, 1, 2).float() / 255.0
             t = (t - self.mean) / self.std
             if self.device == "cuda":
                 t = t.half()
             f = self.model(t).float()
             f = torch.nn.functional.normalize(f, dim=1)
-        emb = f[0].cpu().numpy().astype(np.float32)
+        return f.cpu().numpy().astype(np.float32)
+
+    def ready(self) -> bool:
+        return self.model is not None and not self.status.startswith(("error", "loading", "idle"))
+
+    def process(self, job: Job) -> dict | None:
+        emb = self.embed_batch([job.image])[0]
         return {"embedding": emb, "quality": float(job.extra.get("quality", 0.0))}
 
 
