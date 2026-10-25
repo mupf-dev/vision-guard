@@ -121,3 +121,81 @@ Vertrag und Gerüst für A1, B2 und C5 stehen in CONTRACT.md, Abschnitt „Nacht
   Defaults `inventory_confirm_n` 3 / `inventory_miss_m` 10 nur für neue Installationen – die gespeicherten Werte
   der laufenden Installation (2/3) habe ich **nicht** geändert (Einstellungen → Gegenstände).
 - **Offen für die Fach-Agenten:** siehe Bericht K1 bzw. CONTRACT.md W1.B–W1.G.
+
+## Welle 1 – Integration (2026-10-25, nachts, autonom)
+
+### Ergebnis
+
+Alle drei Fach-Zweige wurden per `git merge --no-ff` in `feature/inventar-gesichter-mcp` übernommen:
+
+| Auftrag | Zweig | Merge | Abnahme |
+|---|---|---|---|
+| A1 Proaktive Hinweise | `w1/a1-hinweise` | `18dbe04` | Kriterien 1–6 im Teststack erfüllt; im Haupt-Stack Zeit-Regel + `rules/check` + MCP geprüft |
+| B2 Was hat sich verändert? | `w1/b2-veraenderungen` | `b855d78` | Worker-Neustart ohne „neu/weg“-Paar (Haupt-Stack belegt), < 120 s gefiltert (Teststack) |
+| C5 Kamera-Gesundheit | `w1/c5-kamerazustand` | `e5f0ece` | Verdecken/Verschieben/Einfrieren ≤ 90 s (Teststack), `cam_3` nachts ohne Befund |
+
+Einziger Konflikt: `frontend/src/styles.css` (A1 `.contain-img` und
+C5 `.health-*` jeweils am Ende angehängt) – beide Seiten übernommen. `types.ts`, `api.ts`, `mock.ts`, `CONTRACT.md`
+wurden automatisch zusammengeführt. Nachgetragen: `mcp/selftest.py` erwartet jetzt auch `list_notifications` und
+`get_camera_health` (Hinweis aus A1). Worktrees entfernt, `w1/*`-Zweige und die alten `worktree-wf_*`-Zweige
+(alle bereits enthalten) gelöscht.
+
+Nach dem Merge: `py_compile` aller Backend-/Worker-/MCP-Module ok, `corepack pnpm build` (tsc + vite) grün,
+`docker compose up -d --build` → alle Dienste laufen, backend und mcp `healthy`. Logs nach dem Neustart: keine
+Fehler; Worker meldet `camera 3: automatic night reference set` (C5). Die Warnung des Segment-Recorders aus W0
+trat diesmal nicht auf.
+
+### Ende-zu-Ende-Prüfung im Haupt-Stack (Test-API-Key read+write, am Ende widerrufen → 401)
+
+- **A1:** `POST /api/rules/check` mit „Laptop sichtbar“ an Kamera 3 → `ok:true` mit Lage „vermutlich auf dem
+  Stuhl“; „Schlüssel sichtbar“ → `ok:false`; `track_came_from` bei `time` → 422 (deutsche Meldung).
+  Zeit-Regel auf jetzt + 2 min (am Tag der Zeitumstellung, 02:37 MEZ nach Rückstellung) löste **genau einmal**
+  aus: Notification ohne Event, `data.trigger=time`, Übersichtsbild, Text „Laptop: Wohnzimmer, vermutlich auf dem
+  Stuhl“; kein zweites Auslösen in den folgenden Minuten. Seite „Hinweise“ zeigt den Eintrag (Screenshot geprüft).
+- **B2:** `GET /inventory/changes?since=3h` → „Seit 00:35: 3 neu (…)“ (Zeit korrekt in MESZ vor der Umstellung);
+  `since=yesterday` 14 neu; `since=40d` → 422 „Zeitraum außerhalb der Aufbewahrung“. Nach dem Worker-Neustart
+  durch den Rebuild (neue Session): `since=15m&include_transient=1` → keine Veränderungen. Reiter
+  „Veränderungen“ mit Vorher/Nachher-Bildern geprüft (Screenshot).
+- **C5:** `GET /cameras/3/health` → `ok`, Modus `night`, Nachtreferenz angelegt, signierte Referenz-URL ohne
+  Anmeldung abrufbar (200 image/jpeg). Systemseite zeigt „Bild OK“. Keine Gesundheits-Hinweise erzeugt.
+- **MCP:** `selftest.py` OK (ohne Key 401, 9 Tools). `list_notifications` liefert den Hinweis mit signiertem
+  Bild; `get_camera_health` per Name → „in Ordnung“; unbekannte Kamera bzw. Zeitangabe → `isError` mit deutscher
+  Meldung.
+- **Aufgeräumt:** Testregel und Notification gelöscht, Key widerrufen und lokale Schlüsseldatei vernichtet.
+
+### Messwerte (Lasttest nach dem Merge)
+
+`flock ~/vg-gpu.lock docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://testcam:8554/cam1
+rtsp://testcam:8554/cam2 --replicate 8 --seconds 60 --health`, parallel zum Haupt-Worker (`cam_3` mit Inventar).
+
+| Messgröße | Wert |
+|---|---|
+| VRAM Haupt-Worker allein (NVML, Gerät gesamt) | 2 466 MiB |
+| VRAM-Spitze Haupt-Worker + Selftest 16 Kameras | 4 077 MiB (Selftest-Meldung), NVML-Abtastung alle 2 s max. 3 935 MiB |
+| Selftest 16 Kameras | alle online, 4,95–5,26 fps je Kamera, gleitend ≈ 80 fps, Batch Ø 54,1 ms bei Ø 8,15 Bildern, 6,6 ms/Bild |
+| Selftest Ergebnisse | 96 Tracks gestartet und beendet, 232 Gesichter, 104 Identify-Aufrufe, 0 Fehler |
+| Bildprüfung C5 (CPU) | 2,6–3,8 ms je Prüfung, 16 Kameras; 0 VRAM |
+| `cam_3` während des Lasttests (33 Status-Proben) | 4,65–5,13 fps, Ø 4,99 fps; `inference_ms` max. 34,9 |
+
+Gegenüber W0 (4 141 MiB Spitze, Ø 4,99 fps an `cam_3`) unverändert – Welle 1 bringt kein zusätzliches VRAM.
+
+### Abweichungen und Entscheidungen
+
+- Nichts wurde abgeschaltet oder zurückgenommen; alle drei Features laufen mit ihren Standardwerten.
+- Die gespeicherten Werte `inventory_confirm_n`/`inventory_miss_m` = 2/3 der laufenden Installation habe ich
+  (wie K1) **nicht** geändert – das ist eine Nutzerentscheidung (Einstellungen → Gegenstände; Empfehlung 3/10).
+- `push.py`: C5 sendet bei ntfy-Servern ohne Anhänge die Meldung ohne Bild statt sie zu verlieren (gilt auch für A1).
+- „Seit heute Morgen“ im Reiter Veränderungen bedeutet vor 06:00 Uhr „seit gestern 06:00“ – so belassen.
+
+### Offene Punkte
+
+- Abnahmen mit echten Gegenständen tagsüber an `cam_3`: Schlüssel/Fernbedienung hinlegen und wegnehmen (A1, B2);
+  Verdecken/Drehen an der echten Kamera (C5, bisher nur Testvideos).
+- C5: eine ganze Nacht und der Wechsel IR → Farbe am Morgen (Tag-Referenz wird beim ersten Farbbild angelegt);
+  Fehlalarme in der Dämmerung beobachten. „Eingefroren“ erkennt nur praktisch identische Bilder.
+- B2: viele „neu“-Einträge durch Flackern/neu vergebene Worker-IDs (Stühle, Kissen) – ID-Zusammenführung und 3/10
+  würden helfen.
+- A1: Prüfungen, die auf `condition_delay_s` warten, gehen bei einem Backend-Neustart verloren (Vertrag).
+- Das Zugriffslog des Backends enthält signierte Medien-URLs inkl. `sig` (zeitlich begrenzt, bestand schon vor W1);
+  ggf. Query im Access-Log kürzen.
+- `kv.rule_time_runs` behält den Eintrag der gelöschten Testregel (harmlos).
