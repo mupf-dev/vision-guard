@@ -41,6 +41,8 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "history_enabled": bool(c.history_enabled),
         "history_interval_s": c.history_interval_s if c.history_interval_s is not None else 30,
         "history_tiling": bool(c.history_tiling),
+        # W4 (C2)
+        "reid_enabled": bool(c.reid_enabled),
         "status": state.status_for(c.id, c.enabled),
     }
 

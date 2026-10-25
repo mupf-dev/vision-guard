@@ -41,6 +41,9 @@ from . import vlm
 from .routers import ask as ask_router
 from .routers import history as history_router
 from .routers import sensors as sensors_router
+# Welle 4: Person über mehrere Kameras (C2)
+from . import reid as presence_reid
+from .routers import presence as presence_router
 from .sync import load_cameras
 from .util import ensure_media_dirs
 from .ws import hub
@@ -82,7 +85,9 @@ def _w2_tick() -> None:
     for name, fn in (("review", review.tick), ("review_effects", review_effects.tick), ("pet_diary", pet_diary.tick),
                      ("report", daily_report.tick),
                      # W3
-                     ("vlm", vlm.tick), ("sensors", virtual_sensors.tick), ("history", time_machine.tick)):
+                     ("vlm", vlm.tick), ("sensors", virtual_sensors.tick), ("history", time_machine.tick),
+                     # W4
+                     ("reid", presence_reid.tick)):
         try:
             fn()
         except Exception:
@@ -144,6 +149,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(camera_health.startup)
     await asyncio.to_thread(pet_diary.startup)
     await asyncio.to_thread(virtual_sensors.startup)
+    await asyncio.to_thread(presence_reid.startup)     # W4 (C2): Track-Hook der Anwesenheit
     # W2: Worker-Nachrichten an Fach-Module (vg/internal/<kind>/…)
     register_handler("embed_result", embed_client.handle_result, direct=True)
     register_handler("gesture", pose_events.handle_gesture)
@@ -182,6 +188,7 @@ for r in (review_router.router, review_router.public_router, pets_router.router,
 # W3: ask zuerst (POST /api/cameras/{id}/ask mit Scope read, eigener Router ohne router-weites require_user)
 for r in (ask_router.router, sensors_router.router, history_router.router):
     app.include_router(r)
+app.include_router(presence_router.router)   # W4 (C2)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):
