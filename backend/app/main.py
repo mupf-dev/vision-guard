@@ -4,12 +4,14 @@ import contextlib
 import logging
 import os
 
-from fastapi import FastAPI, WebSocket
+from fastapi import Depends, FastAPI, WebSocket
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
 from . import go2rtc, registry, retention, settings_store, state
-from .auth import ws_user
+from .auth import require_user, ws_user
 from .config import DEFAULT_LABELS, VERSION, config, secret_key_problem, weak_admin_password
 from .db import SessionLocal, init_db
 from .events import close_stale_events, processor
@@ -80,26 +82,31 @@ def seed_demo() -> None:
         s.commit()
 
 
-def _w2_tick() -> None:
-    """W2: Ticks der Fach-Module (jedes drosselt sich selbst); Fehler eines Moduls stoppen die anderen nicht."""
-    for name, fn in (("review", review.tick), ("review_effects", review_effects.tick), ("pet_diary", pet_diary.tick),
-                     ("report", daily_report.tick),
-                     # W3
-                     ("vlm", vlm.tick), ("sensors", virtual_sensors.tick), ("history", time_machine.tick),
-                     # W4
-                     ("reid", presence_reid.tick)):
+def _run_ticks(ticks) -> None:
+    """Ticks der Fach-Module (jedes drosselt sich selbst); Fehler eines Moduls stoppen die anderen nicht."""
+    for name, fn in ticks:
         try:
             fn()
         except Exception:
             log.exception("Tick %s fehlgeschlagen", name)
 
 
-async def _ticker() -> None:
+# Refinement 1: drei getrennte Takte – ein langsames Fachmodul (z. B. review_effects-Abgleich, HTTP-Abfrage des
+# vlm-Dienstes) verzögert nicht mehr Dwell/Haltung/Wiederholungen (processor) und die Inventar-Veraltung.
+CORE_TICKS = (("events", lambda: processor.tick()), ("inventory", lambda: inventory_memory.tick()))
+W2_TICKS = (("review", review.tick), ("review_effects", review_effects.tick), ("pet_diary", pet_diary.tick),
+            ("report", daily_report.tick),
+            # W3
+            ("sensors", virtual_sensors.tick), ("history", time_machine.tick),
+            # W4
+            ("reid", presence_reid.tick))
+IO_TICKS = (("vlm", vlm.tick),)   # HTTP mit Zeitlimit – eigener Takt
+
+
+async def _ticker(ticks) -> None:
     while True:
         await asyncio.sleep(1)
-        await asyncio.to_thread(processor.tick)
-        await asyncio.to_thread(inventory_memory.tick)
-        await asyncio.to_thread(_w2_tick)
+        await asyncio.to_thread(_run_ticks, ticks)
 
 
 async def _retention_loop() -> None:
@@ -158,7 +165,8 @@ async def lifespan(app: FastAPI):
     register_handler("history", time_machine.handle_worker_frame)
     bus.start()
     bus.publish_config_changed()
-    tasks = [asyncio.create_task(t) for t in (_ticker(), _retention_loop(), _go2rtc_startup_sync())]
+    tasks = [asyncio.create_task(t) for t in (_ticker(CORE_TICKS), _ticker(W2_TICKS), _ticker(IO_TICKS),
+                                                _retention_loop(), _go2rtc_startup_sync())]
     log.info("VisionGuard Backend %s gestartet", VERSION)
     try:
         yield
@@ -168,8 +176,12 @@ async def lifespan(app: FastAPI):
         bus.stop()
 
 
+# Refinement 1: Swagger/OpenAPI nur nach Anmeldung (Cookie oder API-Key), da API/MCP von außen erreichbar sein
+# dürfen; VG_PUBLIC_DOCS=1 schaltet auf das alte, offene Verhalten zurück.
+PUBLIC_DOCS = os.getenv("VG_PUBLIC_DOCS", "0") in ("1", "true", "yes")
 app = FastAPI(title="VisionGuard", version=VERSION, lifespan=lifespan,
-              docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+              docs_url="/api/docs" if PUBLIC_DOCS else None,
+              openapi_url="/api/openapi.json" if PUBLIC_DOCS else None, redoc_url=None)
 app.add_middleware(media_router.SignedUrlsMiddleware)   # ?signed=1 → signierte Medien-URLs
 app.add_middleware(
     CORSMiddleware,
@@ -193,6 +205,16 @@ app.include_router(presence_router.router)   # W4 (C2)
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):
     app.include_router(r)
+
+
+if not PUBLIC_DOCS:
+    @app.get("/api/openapi.json", include_in_schema=False, dependencies=[Depends(require_user)])
+    def openapi_json():
+        return JSONResponse(app.openapi())
+
+    @app.get("/api/docs", include_in_schema=False, dependencies=[Depends(require_user)])
+    def swagger_ui():
+        return get_swagger_ui_html(openapi_url="/api/openapi.json", title="VisionGuard – API")
 
 
 @app.get("/api/health", include_in_schema=False)
