@@ -1570,8 +1570,14 @@ Camera/`CameraIn`/`GET /api/internal/cameras`: zusätzlich `reid_enabled` (PUT o
 - Abgleich: Kosinus, Maximum über die Embeddings eines Eintrags. Kandidaten nur ohne **gleichzeitig aktiven anderen
   Track** und ohne widersprechende Identität; verknüpft ab `reid_match_threshold`. Verknüpft wird nur, solange der
   Track allein in seinem Eintrag steht (danach kommen weitere Embeddings nur hinzu).
-- Gesicht hat Vorrang: Eine eigene Identität setzt die Identität des Eintrags; dieselbe Identität in zwei Einträgen
+- Gesicht hat Vorrang: Tracks mit eigener Identität (Gesicht/Tier) werden nie per ReID verknüpft, sie gehören zum
+  Eintrag ihrer Identität. Bekommt ein per ReID verknüpfter Track nachträglich eine eigene Identität, wird er samt
+  Embeddings in den Eintrag dieser Identität verschoben (der bisherige Eintrag wird **nicht** benannt) – außer die
+  Verknüpfung lag bei ≥ `reid_match_threshold + 0,1`, dann bekommt der Eintrag die Identität. Gründet ein
+  Track mit eigener Identität einen Eintrag, trägt der Eintrag diese Identität; dieselbe Identität in zwei Einträgen
   → zusammenführen; widersprechende Identität → Track wird herausgelöst.
+- Umgekehrte Richtung: Ein Track mit eigener Identität übernimmt einen **anonymen** Eintrag ohne aktiven Track, wenn
+  sein Embedding ab `reid_match_threshold + 0,1` passt (z. B. Person zuerst von hinten gesehen, dann mit Gesicht).
 - Verfall: Einträge ohne aktiven Track `reid_ttl_min` nach dem letzten Sehen (samt Embeddings). Embeddings von
   Kameras, deren `reid_enabled` abgeschaltet wurde, werden binnen 5 s verworfen. Backend-Neustart = leere Galerie.
   `presence_key` in alten Events ist danach nur noch eine Kennung ohne Bezug.
@@ -1587,10 +1593,11 @@ Camera/`CameraIn`/`GET /api/internal/cameras`: zusätzlich `reid_enabled` (PUT o
   "camera_id": 3, "camera_name": "Wohnzimmer", "room": "Wohnzimmer", "zones": ["z1"], "zone_names": ["Sofa"],
   "active": true, "since": "...", "last_seen": "...", "event_id": "uuid" | null,
   "thumb_url": "/media/crops/…jpg" | null,    // signiert mit ?signed=1
-  "trail": [ { "camera_id", "camera_name", "since", "last_seen", "active", "event_id", "via": "face|reid|track" } ] }
+  "trail": [ { "camera_id", "camera_name", "since", "last_seen", "active", "event_id", "score": 0.81 | null,
+               "via": "face|reid|track" } ] }
 ```
-- `GET /api/presence/status` → `{entries, active, embeddings, requests, linked, new, identity_given, merged,
-  expired}` (nur Zähler). `DELETE /api/presence` → 204, leert die Galerie sofort (Scope `write`).
+- `GET /api/presence/status` → `{entries, active, embeddings, requests, linked, new, adopted, identity_given,
+  merged, expired}` (nur Zähler). `DELETE /api/presence` → 204, leert die Galerie sofort (Scope `write`).
 - WS: `{"type":"presence","presence":Presence}` bei neuem Eintrag, Kamera-/Zonen-/Identitätswechsel, Track-Ende
   (je Eintrag höchstens alle 2 s, Start/Ende sofort); `{"type":"presence","presence":{"presence_key","deleted":true
   [,"merged_into"]}}` bei Verfall/Zusammenführung.

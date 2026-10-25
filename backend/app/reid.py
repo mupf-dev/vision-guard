@@ -70,7 +70,8 @@ class Gallery:
         self.lock = threading.RLock()
         self.entries: dict[str, Entry] = {}
         self.track_key: dict[tuple[int, int], str] = {}
-        self.stats = {"requests": 0, "linked": 0, "new": 0, "identity_given": 0, "merged": 0, "expired": 0}
+        self.stats = {"requests": 0, "linked": 0, "new": 0, "adopted": 0, "identity_given": 0, "merged": 0,
+                      "expired": 0}
         self._last_gc = 0.0
 
     # ---------------------------------------------------------------- Hilfen
@@ -172,6 +173,23 @@ class Gallery:
         if ref.own_identity and ref.own_identity.get("id") == ident["id"]:
             return e
         ref.own_identity = ident
+        thr = self._settings()[0]
+        if (e.identity is None and ref.link_score is not None and len(e.tracks) > 1
+                and ref.link_score < thr + IDENTITY_MARGIN):
+            # Über ReID nur knapp (unter Schwelle + 0,1) in einen Eintrag ohne Identität verknüpft: den Eintrag NICHT
+            # benennen (er kann eine andere Person enthalten), sondern den Track mit seinen Embeddings in den
+            # Eintrag seiner Identität verschieben (C2-Test: eine Fehlverknüpfung hätte sonst den falschen Namen
+            # an alle weiteren Tracks dieser anderen Person weitergegeben). Ab Schwelle + 0,1 gilt die Verknüpfung
+            # als sicher genug, um den Eintrag zu benennen – dieselbe Grenze wie beim Weitergeben eines Namens.
+            dst = self._by_identity(ident["id"])
+            if dst is None:
+                dst = self._new_entry(ref.label, time.time())
+                dst.identity = ident
+            ref.link_score = None
+            self._move_track(tk, e, dst)
+            self._maybe_broadcast(e, force=True)
+            self._maybe_broadcast(dst, force=True)
+            return dst
         if e.identity is None:
             other = self._by_identity(ident["id"])
             if other is not None and other is not e:
@@ -223,7 +241,9 @@ class Gallery:
             ref.last_seen = max(ref.last_seen, ts or now)
             own = ref.own_identity
             best, best_s = None, -1.0
-            alone = len(cur.tracks) == 1
+            # Tracks mit eigener Identität werden nie per ReID verknüpft (ihr Eintrag folgt der Identität);
+            # ihre Embeddings stärken nur den Eintrag dieser Identität
+            alone = len(cur.tracks) == 1 and not own
             if alone:
                 for e in self.entries.values():
                     if e is cur or e.label != "person" or not e.embeddings:
@@ -240,9 +260,7 @@ class Gallery:
                         best, best_s = e, s
             linked = False
             if best is not None and best_s >= thr:
-                # verknüpfen: Track (und ggf. seine Identität) in den gefundenen Eintrag
-                if cur.identity and best.identity is None:
-                    best.identity = cur.identity
+                # verknüpfen: Track mit seinen Embeddings in den gefundenen Eintrag
                 self._move_track(tk, cur, best)
                 if not cur.tracks:
                     self.entries.pop(cur.key, None)
@@ -251,7 +269,27 @@ class Gallery:
                 cur = best
                 linked = True
                 self.stats["linked"] += 1
-            elif not cur.embeddings:
+            elif own:
+                # Umgekehrte Richtung: Track mit eigener Identität (Gesicht) übernimmt einen anonymen Eintrag
+                # derselben Person (z. B. zuerst von hinten in einem anderen Raum gesehen) – strenger, erst ab
+                # Schwelle + 0,1, nur ohne gleichzeitig aktiven Track, höchstens ein Eintrag je Aufruf.
+                adopt, adopt_s = None, -1.0
+                for e in self.entries.values():
+                    if e is cur or e.identity is not None or e.label != "person" or not e.embeddings:
+                        continue
+                    if any(t.active for k, t in e.tracks.items() if k != tk):
+                        continue
+                    s_e = float((np.stack([x[0] for x in e.embeddings]) @ v).max())
+                    if s_e > adopt_s:
+                        adopt, adopt_s = e, s_e
+                if adopt is not None and adopt_s >= thr + IDENTITY_MARGIN:
+                    for t in adopt.tracks.values():
+                        if t.link_score is None and not t.own_identity:
+                            t.link_score = round(adopt_s, 4)
+                    self._merge(adopt, cur)
+                    best_s = adopt_s
+                    self.stats["adopted"] += 1
+            if not linked and not cur.embeddings:
                 self.stats["new"] += 1
             cur.embeddings.append((v, float(quality or 0.0), float(ts or now), tk))
             self._prune(cur)
@@ -368,7 +406,7 @@ class Gallery:
             "event_id": t.event_id, "thumb_url": f"/media/{thumb}" if thumb else None,
             "trail": [{"camera_id": x.camera_id, "camera_name": (registry.get(x.camera_id) or {}).get("name"),
                        "since": _iso(from_unix(x.first_seen)), "last_seen": _iso(from_unix(x.last_seen)),
-                       "active": bool(x.active), "event_id": x.event_id,
+                       "active": bool(x.active), "event_id": x.event_id, "score": x.link_score,
                        "via": ("face" if x.own_identity else ("reid" if x.link_score is not None else "track"))}
                       for x in trail],
         }
