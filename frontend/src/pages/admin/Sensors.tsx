@@ -323,8 +323,10 @@ function SensorDialog({ sensor, cams, onClose }: { sensor: VirtualSensor | null;
                 <Range value={f.vlm_max_age_s} min={vlmSupply ? VLM_SUPPLY_MIN_AGE : 60} max={21600} step={60} format={fmtSecs} onChange={(v) => set("vlm_max_age_s", v)} />
                 {vlmSupply && <span className="hint muted" style={{ fontSize: 12 }}>Vorräte mindestens alle 30 min – jede Frage pausiert kurz Gegenstandserkennung und Zeitmaschine. Bei sichtbarer Änderung im Bereich wird früher gefragt.</span>}
               </div>
-              <div className="field"><label>Bild gilt als verändert ab</label>
-                <Range value={f.change_threshold} min={0.02} max={0.5} step={0.01} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => set("change_threshold", v)} /></div>
+              {f.kind !== "inventory_count" && (  /* Zählsensoren: kein Änderungsmaß vom Worker */
+                <div className="field"><label>Bild gilt als verändert ab</label>
+                  <Range value={f.change_threshold} min={0.02} max={0.5} step={0.01} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => set("change_threshold", v)} /></div>
+              )}
             </>}
             <Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? "aktiv" : "ausgeschaltet"} />
           </div>

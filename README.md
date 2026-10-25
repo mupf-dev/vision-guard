@@ -14,7 +14,8 @@ Videoclip aus dem RAM-Ringpuffer, MQTT-Nachricht oder Webhook.
 - **Regel-Engine:** Kamera, Zone, Objektklasse, Konfidenz, Identität (bekannt/unbekannt/bestimmt),
   Auslöser (betritt/verlässt/verweilt), Zeitplan, Cooldown → Snapshot, Clip, MQTT, Webhook
 - **Virtuelle Sensoren und Vorräte:** Bildbereiche als Schalter (Licht an/aus per Helligkeit, Blinken,
-  Referenzbilder, Gegenstände zählen, Füllstand, Ja/Nein-Frage ans Bildmodell) – als Regel-Auslöser und -Bedingung,
+  Referenzbilder, Gegenstände zählen, Füllstand, Frage ans Bildmodell: Ja/Nein, Anzahl bis 3 oder „leer“) – als
+  Regel-Auslöser und -Bedingung,
   per MQTT und MCP; knappe Vorräte landen automatisch auf der Einkaufsliste
 - **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
 - **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
