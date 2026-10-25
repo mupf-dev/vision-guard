@@ -1,0 +1,5 @@
+# Dienst vlm (W3, A2) – zusätzlich zu den Pins der ersten Schicht im Dockerfile (gleich wie Dockerfile.bench)
+fastapi==0.115.6
+uvicorn==0.34.0
+paho-mqtt==2.1.0
+httpx==0.28.1

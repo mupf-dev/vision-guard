@@ -124,6 +124,35 @@ services:
       VG_MCP_PORT: "8100"
       VG_MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
 
+  # W3 (A2): „Frag die Kamera“ – lokales Bildmodell (Moondream 2 INT4), nur intern (vlm:8200).
+  # Start: docker compose --profile vlm up -d vlm. Lädt das Modell erst bei der ersten Frage und leiht sich dafür
+  # per GPU-Lease den Speicher des Inventars (YOLOE pausiert); nach vlm_idle_unload_s wieder frei.
+  # Gewichte einmalig ins Volume models (≈ 2 GB, Unterordner hf/).
+  vlm:
+    build: ./vlm
+    restart: unless-stopped
+    profiles: ["vlm"]
+    depends_on:
+      backend: { condition: service_healthy }
+      mosquitto: { condition: service_started }
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      VG_BACKEND_URL: http://backend:8000
+      VG_MQTT_HOST: mosquitto
+      VG_MQTT_PORT: "1883"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - models:/models
+    shm_size: 512m
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   # Simulierte Kameras zum Testen (RTSP: rtsp://testcam:8554/cam1, cam2)
   testcam:
     image: bluenviron/mediamtx:1.15.3-ffmpeg

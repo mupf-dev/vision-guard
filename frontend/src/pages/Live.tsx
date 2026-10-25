@@ -15,6 +15,7 @@ import { EventDetailDialog, FeedItem } from "../components/EventBits";
 import { labelColor, labelName } from "../lib/labels";
 import { fmtAgo } from "../lib/format";
 import { HealthBadge, HealthBanner } from "../components/HealthBadge";
+import { AskCameraButton } from "../components/AskCamera";
 
 function useStatus(cam: Camera): CameraStatus | null {
   const live = useLive((s) => s.status[cam.id]);
@@ -193,6 +194,7 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
         ))}
         <button className={`btn btn-sm ${showZones ? "active" : ""}`} onClick={() => set({ showZones: !showZones })}><Layers size={14} />Zonen</button>
         {!offline && <OverlaySyncControl cameraId={cam.id} />}
+        {!offline && <AskCameraButton camera={cam} />}
       </div>
       <div className="focus">
         <div className="focus-video">
