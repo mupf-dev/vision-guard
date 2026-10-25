@@ -94,3 +94,30 @@ Die empfohlenen Default-Änderungen (`inventory_confirm_n` 3, `inventory_miss_m`
   Neustart greift; sinnvoll wäre `-map 0:v` oder ein späterer Start nach erstem Bild – nicht W0-Umfang.
 - Retained `status`-Nachrichten der gelöschten Demo-Kameras 1/2 und alte `inventory`-Nachrichten ohne
   `worker_id` liegen noch im Broker; harmlos (Backend nimmt `local` an).
+
+## Welle 1 – Kickoff K1 (2026-10-25, nachts, autonom)
+
+Vertrag und Gerüst für A1, B2 und C5 stehen in CONTRACT.md, Abschnitt „Nachträge: Welle 1“ (W1.A–H).
+
+- **Gebaut:** Spalten `rules.trigger_options/conditions/condition_delay_s`, `cameras.health_enabled`; Tabellen
+  `notifications`, `camera_health_log`; Index `ix_inventory_history_camera_ts`; Settings `push_targets` (maskiert),
+  `notify_routes`, `push_max_per_rule_per_day`, `weather_location`, `retention_days_notifications`,
+  `inventory_change_min_s`, `health_alert_after_s`. Registry in `rules.py`, Hook `events.on_track`,
+  `notifications.py`, `push.py`, `routers/notifications.py` (inkl. `POST /settings/push_test`), Aktion `push`,
+  Aufbewahrung. Gerüste `rule_conditions.py` (A1) und `health.py` (C5) samt Verdrahtung (`main.py`,
+  `mqtt_bus.py`, `state.py`), damit die Fach-Agenten diese gemeinsamen Dateien nicht anfassen müssen.
+  MCP aufgeteilt in `mcp/tools/` mit Platzhaltern `notifications.py`, `changes.py`, `health.py`.
+  Frontend: Typen/API/Mock für alle W1-Endpunkte, Seite „Hinweise“ (Grundgerüst), Einstellungen →
+  „Benachrichtigungen“, Aktion „Push“ im Regel-Editor, Feld „Veränderungen: Mindestdauer“.
+- **Geprüft:** `py_compile` aller Backend-/MCP-Module, `corepack pnpm build` grün, backend/frontend/mcp neu gebaut
+  und `healthy`. Push gegen lokalen ntfy-Container (`binwiederhier/ntfy:v2.11.0`, nur im Docker-Netz):
+  `push_test` gespeichert und ungespeichert (mit `***`), Bild-Upload mit Umlauten (RFC 2047), Route `health`,
+  Tageslimit, Dedup, Pushover-Fehlertext ohne Zugangsdaten. E2E: simulierter Track (Label `k1test`, Kamera 3) →
+  Regel mit `push` → Notification mit Event und Bild, Push zugestellt; danach Event, Regel, Notification, Ziel und
+  retained Zähler-Topic entfernt. MCP-Selbsttest mit temporärem Read-Key OK (Key widerrufen).
+- **Entscheidungen:** Image `binwiederhier/ntfy` (im Auftrag stand „binwiederhecht“, das gibt es nicht).
+  Topic wird nicht maskiert (muss am Handy abonniert werden); Hinweis in der UI, Token/eigenen Server zu nutzen.
+  Je `push`-Aktion eine Notification; Regeln ohne `push` erzeugen keine (außer A1: mit `conditions`).
+  Defaults `inventory_confirm_n` 3 / `inventory_miss_m` 10 nur für neue Installationen – die gespeicherten Werte
+  der laufenden Installation (2/3) habe ich **nicht** geändert (Einstellungen → Gegenstände).
+- **Offen für die Fach-Agenten:** siehe Bericht K1 bzw. CONTRACT.md W1.B–W1.G.
