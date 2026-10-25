@@ -28,6 +28,9 @@ function KindIcon({ kind, size = 16 }: { kind: IdentityKind; size?: number }) {
 /** Lernsperre ist technisch für alle Arten möglich, der Schalter erscheint aber nur bei Gesichtern und Tieren. */
 const LOCKABLE: IdentityKind[] = ["face", "pet"];
 const MAX_SAMPLES = 20;
+/** Bildgrenze des Ziels wie im Backend (`face_match.sample_limit`): benannte Gesichter `face_max_samples_named`. */
+const sampleLimit = (t: Identity | undefined, named: number | undefined) =>
+  t && t.kind === "face" && t.name ? (named ?? MAX_SAMPLES) : MAX_SAMPLES;
 const fmtScore = (v: number) => v.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /* ---------- Zusammenführen in zwei Schritten ---------- */
@@ -49,6 +52,7 @@ function MergeDialog({ ident, initialTarget, onClose, onDone }: {
   const srcSamples = useQuery({ queryKey: ["samples", ident.id], queryFn: () => api.samples(ident.id) });
   const targetId = target[0];
   const tgtSamples = useQuery({ queryKey: ["samples", targetId], queryFn: () => api.samples(targetId), enabled: !!targetId });
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const tgt = all.data?.find((x) => x.id === targetId);
   const sourceUnknown = !ident.name;
 
@@ -78,7 +82,8 @@ function MergeDialog({ ident, initialTarget, onClose, onDone }: {
   const tgtManual = (tgtSamples.data ?? []).filter((x) => x.manual).length;
   const tgtTotal = tgtSamples.data?.length ?? tgt?.sample_count ?? 0;
   const manualAfter = tgtManual + picked.size;
-  const tooMany = manualAfter > MAX_SAMPLES;
+  const limit = sampleLimit(tgt, settings.data?.face_max_samples_named);
+  const tooMany = manualAfter > limit;
 
   const merge = useMutation({
     mutationFn: () => api.mergeIdentity(ident.id, targetId, noSamples ? null : [...picked]),
@@ -160,13 +165,13 @@ function MergeDialog({ ident, initialTarget, onClose, onDone }: {
             <>
               <div className="row">
                 <span className="dim" style={{ fontSize: 13 }}>
-                  {picked.size} von {src.length} ausgewählt · Ziel: {tgtTotal} Bilder, danach {manualAfter} manuelle von max. {MAX_SAMPLES}
+                  {picked.size} von {src.length} ausgewählt · Ziel: {tgtTotal} Bilder, danach {manualAfter} manuelle von max. {limit}
                 </span>
                 <span className="spacer" />
                 <button className="btn btn-sm btn-ghost" onClick={() => setPicked(new Set(src.map((x) => x.id)))}>Alle</button>
                 <button className="btn btn-sm btn-ghost" onClick={() => setPicked(new Set())}>Keine</button>
               </div>
-              {tooMany && <div className="badge bad" style={{ alignSelf: "flex-start" }}>max. {MAX_SAMPLES} manuelle Bilder im Ziel – weniger auswählen oder dort erst alte löschen</div>}
+              {tooMany && <div className="badge bad" style={{ alignSelf: "flex-start" }}>max. {limit} manuelle Bilder im Ziel – weniger auswählen oder dort erst alte löschen</div>}
               {srcSamples.isLoading ? <Loading /> : (
                 <div className="samples">
                   {src.map((x) => <PickSample key={x.id} s={x} on={picked.has(x.id)} onToggle={() => toggle(x.id)} />)}
