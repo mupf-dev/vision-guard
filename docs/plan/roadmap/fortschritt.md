@@ -315,3 +315,51 @@ Zwei vom Selbsttest ins Medien-Volume geschriebene Inventar-Bilder (`cam1_…`) 
 - **B3:** kein Test mit echtem lokalem Sprachmodell (Anteil plausibler Texte unbekannt) → Standard bleibt
   `template`; die Oberfläche zeigt nicht an, ob SMTP eingerichtet ist.
 - Selftest-Läufe schreiben Inventar-Bilder in das echte Medien-Volume (bestand vor W2).
+
+## Welle 3 – Kickoff K3 (2026-10-25, nachts, autonom)
+
+Vertrag und Gerüst für A2, A3+C4 und B1 stehen in CONTRACT.md, Abschnitt „Nachträge: Welle 3“ (W3.A–I).
+
+- **DB-Umzug auf pgvector (vor allen Fach-Agenten):** Backup per `pg_dump -Fc` nach
+  `~/vision-guard-backups/visionguard-20261025-042313-vor-pgvector.dump` (Verzeichnis 700, Datei 600, 196 KB);
+  Dump/Restore von `postgres:17-alpine` (Volume `db-data`, PG 17.11) nach `pgvector/pgvector:0.8.2-pg17-bookworm`
+  (neues Volume `db-data-pgv`, PG 17.10, Extension `vector` 0.8.2). **Zeilenzahlen aller 15 Tabellen identisch**
+  (u. a. events 83, inventory_history 2793, inventory_items 48, identity_samples 43, review_requests 10,
+  api_tokens 8); Sequenzen übernommen. Skripte ohne Zugangsdaten: `scripts/db-migrate-pgvector.sh` (stoppt die
+  Dienste, Wegwerf-Container auf dem alten Volume, Zählung, Dump, Restore, Vergleich, Start) und
+  `scripts/db-rollback-pgvector.sh [--dump-first]` (schreibt `docker-compose.override.yml` → alte DB; Datei steht in
+  `.gitignore`). Das alte Volume bleibt bis zur Abnahme von W3 als Rückfall.
+- **Gebaut:** Spalten `cameras.vlm_cloud_allowed/history_enabled/history_interval_s/history_tiling`; Tabellen
+  `ask_log`, `virtual_sensors`, `sensor_history`, `sensor_references`, `shopping_list` und – nur mit pgvector –
+  `history_frames` (`halfvec(768)`, HNSW-Index `halfvec_cosine_ops`); alle W3-Settings (`vlm_*`,
+  `retention_days_ask/_sensors/_history`, `shopping_list_auto`, `history_min_change` 0,05, `history_model`).
+  Gemeinsame Bausteine **fertig**: GPU-Lease im Worker (`gpu_lease.py`, Topics `vg/internal/gpu/request|granted|
+  release|released`, Ablauf/Verlängerung/„busy“, NVML-Messung, Referenz-Client `LeaseClient`, Prüfwerkzeug
+  `leasetest`), Frame-Tap (`frametap.py`, je Abnehmer eigener Thread, verwerfen statt queuen, `perf.taps`),
+  `HalfVec`-Typ ohne Zusatzpaket, `run_eventless_rule`/`sensor_changed` (Regeln ohne Event für `time` und `sensor`),
+  Trigger `sensor` + Bedingung `sensor` (ausgewertet), `require_read_limited` (Rate-Limit je Key),
+  `llm_client.complete(images=…, model=…)`, `embed`-Anfrage mit `model` (`siglip2`-Haken im Worker).
+  Platzhalter mit fertiger Verdrahtung: Backend `vlm.py`, `cloud_vlm.py`, `sensors.py` (inkl. fertigem
+  `internal_sensors`), `shopping.py`, `history.py`, Router `ask`/`sensors`/`history`; Worker `sensors.py`,
+  `history.py`; MCP `ask/sensors/history`; Seiten „Zeitmaschine“, „Vorräte“, Admin „Sensoren“, Einstellungs-Karten
+  „Frag die Kamera“, „Sensoren und Vorräte“, „Zeitmaschine“, Kamera-Abschnitte (Cloud-Fallback, Zeitmaschine),
+  Dialog `AskCamera.tsx` (noch nicht in der Live-Ansicht eingebunden – A2).
+- **Geprüft:** `py_compile`, `corepack pnpm build` grün; backend/worker/mcp/frontend neu gebaut, `healthy`.
+  **Lease-Abnahme:** Dummy-Anfrage (`leasetest --need-mb 3000`) → `granted` nach 0,40 s, YOLOE entladen,
+  `free_mb` 3799 (vorher ≈ 3536 frei), `models.inventory = "paused: GPU-Lease leasetest"`, nach `release` YOLOE in
+  0,0 s neu geladen (Warm-up 0,7 s), Inventar läuft weiter. Zweiter Halter → `busy`, Verlängerung 0,3 ms, Ablauf nach
+  `max_s` → `released` mit `reason:"expired"`. Frame-Tap-Test: schneller Abnehmer 100/100 Frames, langsamer
+  (0,5 s/Frame) verwirft statt zu stauen. pgvector: Einfügen/Lesen/`cosine_distance`-Sortierung über `HalfVec`.
+  REST mit temporären Keys (read / read+write, danach widerrufen → 401): Settings inkl. `vlm_cloud_model: ""` →
+  `null` und 422 bei unbekanntem Modell; Kamera-PUT ohne W3-Felder lässt sie unverändert; Regel `sensor` ohne
+  `sensor_id` → 422, mit `track_came_from` → 422; `POST /cameras/3/ask` mit Lese-Key → 503 (Platzhalter), der
+  11. Aufruf in der Minute → 429 mit `Retry-After`; ohne Key 401. `sensor_changed` startet die passende Regel
+  (Notification „K3-Testsensor ist an“), falscher Zustand startet nichts; Zeit-Regel nach dem Umbau unverändert
+  (Testdaten gelöscht). MCP-Selbsttest OK. Screenshots der neuen Seiten ohne JS-Fehler.
+- **Entscheidungen:** Ein `confirm_n` je Sensor statt `on_n/off_n` (gilt auch für level-Sensoren);
+  `inventory_count` und `vlm` rechnet das Backend, `brightness|blink|reference|fill` der Worker. Lease-`unloaded`
+  nennt alle registrierten Modelle, die nicht im VRAM sind. `ask` hat einen eigenen Router (sonst verlangte das
+  router-weite `require_user` Scope `write` für POST). Navigation: ab 1720 px Breite nur noch das aktive Ziel mit
+  Beschriftung (11 Hauptpunkte). Kein `pgvector`-Python-Paket (eigener Typ, keine neue Abhängigkeit).
+- **Offen für die Fach-Agenten:** siehe CONTRACT.md W3.C–W3.I. `scripts/llm_mock.py` versteht noch keine Bilder
+  (A2 erweitert). Compose-Dienst `vlm` legt A2 an.
