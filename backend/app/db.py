@@ -66,6 +66,11 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("identity_samples", "source", "varchar(16) NOT NULL DEFAULT 'auto'"),
     ("inventory_items", "identity_id", "integer NULL"),
     ("inventory_items", "identity_score", "double precision NULL"),
+    # Welle 3 (K3)
+    ("cameras", "vlm_cloud_allowed", "boolean NOT NULL DEFAULT false"),
+    ("cameras", "history_enabled", "boolean NOT NULL DEFAULT false"),
+    ("cameras", "history_interval_s", "double precision NOT NULL DEFAULT 30"),
+    ("cameras", "history_tiling", "boolean NOT NULL DEFAULT false"),
 ]
 
 
@@ -79,6 +84,53 @@ ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
     # Welle 2 (B4): Gegenstände je Exemplar
     ("ix_inventory_items_identity_id", "inventory_items", "identity_id"),
 ]
+
+# W3 (K3): Indizes der Tabellen mit Vektorspalten (nur mit pgvector). (Name, Tabelle, Spalten/Ausdruck, Methode)
+VECTOR_INDEXES: list[tuple[str, str, str, str]] = [
+    ("ix_history_frames_camera_ts", "history_frames", "camera_id, ts", "btree"),
+    ("ix_history_frames_ts", "history_frames", "ts", "btree"),
+    ("ix_history_frames_embedding", "history_frames", "embedding halfvec_cosine_ops", "hnsw"),
+]
+
+_vector: dict = {"available": False, "version": None}
+
+
+def vector_available() -> bool:
+    """True, wenn die pgvector-Extension in der Datenbank aktiv ist (nach init_db)."""
+    return bool(_vector["available"])
+
+
+def vector_version():
+    return _vector["version"]
+
+
+def _vector_tables() -> list:
+    return [t for t in Base.metadata.sorted_tables if t.info.get("vector")]
+
+
+def _init_vector() -> None:
+    """CREATE EXTENSION vector; danach Tabellen mit Vektorspalten + ihre Indizes. Fehler → B1 aus, Rest läuft."""
+    try:
+        with engine.begin() as c:
+            c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            ver = c.execute(text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")).scalar()
+    except Exception as e:  # noqa: BLE001
+        _vector.update(available=False, version=None)
+        log.warning("pgvector nicht verfügbar (%s) – Zeitmaschine (B1) bleibt abgeschaltet",
+                    str(e).splitlines()[0][:200])
+        return
+    _vector.update(available=True, version=ver)
+    Base.metadata.create_all(engine, tables=_vector_tables())
+    for name, table, columns, method in VECTOR_INDEXES:
+        if not (_IDENT.match(name) and _IDENT.match(table) and re.match(r"^[a-z]+$", method)):
+            raise ValueError(f"ungültiger Eintrag in VECTOR_INDEXES: {name!r}")
+        try:
+            with engine.begin() as c:
+                c.execute(text(f'CREATE INDEX IF NOT EXISTS "{name}" ON {table} USING {method} ({columns})'))
+        except Exception as e:  # noqa: BLE001
+            log.error("Vektor-Index %s auf %s konnte nicht angelegt werden: %s", name, table, e)
+    log.info("pgvector %s aktiv", ver)
+
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
@@ -105,6 +157,8 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     wait_for_db()
-    Base.metadata.create_all(engine)
+    # Tabellen mit Vektorspalten (info.vector) nur mit pgvector – siehe _init_vector
+    Base.metadata.create_all(engine, tables=[t for t in Base.metadata.sorted_tables if not t.info.get("vector")])
     _add_columns()
     _add_indexes()
+    _init_vector()

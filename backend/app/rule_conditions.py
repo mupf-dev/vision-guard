@@ -35,7 +35,7 @@ from . import registry, rules, settings_store, weather
 from .config import config
 from .db import SessionLocal
 from .models import Event, InventoryHistory, InventoryItem
-from .schemas import CondInventory, CondInventoryUntouched, CondTrackCameFrom, CondWeather
+from .schemas import CondInventory, CondInventoryUntouched, CondSensor, CondTrackCameFrom, CondWeather
 
 log = logging.getLogger("vg.rule_conditions")
 
@@ -281,6 +281,23 @@ def eval_track_came_from(cond: dict[str, Any], ctx: rules.CondContext) -> rules.
     return rules.CondResult(ok=False, reason=f"kam nicht aus {zn}")
 
 
+def eval_sensor(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondResult:
+    """W3 (A3): Sensor ist im verlangten Zustand (liest den bestätigten Zustand aus virtual_sensors)."""
+    from .models import VirtualSensor
+
+    with SessionLocal() as s:
+        vs = s.get(VirtualSensor, int(cond.get("sensor_id") or 0))
+        if vs is None:
+            return rules.CondResult(ok=False, reason=f"Sensor {cond.get('sensor_id')} unbekannt")
+        want = str(cond.get("state") or "on")
+        cur = vs.state or "unknown"
+        ok = bool(vs.enabled) and cur == want
+        reason = f"Sensor {vs.name}: {rules.sensor_state_de(cur)}" + ("" if ok else f" (verlangt {rules.sensor_state_de(want)})")
+        return rules.CondResult(ok=ok, reason=reason, camera_id=vs.camera_id,
+                                ctx={"sensor": vs.name, "sensor_state": rules.sensor_state_de(cur)})
+
+
+rules.register_condition("sensor", CondSensor, evaluate=eval_sensor, label_de="Sensor ist …")
 rules.register_condition("inventory", CondInventory, evaluate=eval_inventory, label_de="Gegenstand da/weg")
 rules.register_condition("inventory_untouched", CondInventoryUntouched, evaluate=eval_inventory_untouched,
                          label_de="Gegenstand unberührt")

@@ -34,6 +34,13 @@ from .mqtt_bus import register_handler
 from .routers import pets as pets_router
 from .routers import reports as reports_router
 from .routers import review as review_router
+# Welle 3 (K3): Fach-Module mit fertiger Verdrahtung (Inhalt: A2, A3+C4, B1)
+from . import history as time_machine
+from . import sensors as virtual_sensors
+from . import vlm
+from .routers import ask as ask_router
+from .routers import history as history_router
+from .routers import sensors as sensors_router
 from .sync import load_cameras
 from .util import ensure_media_dirs
 from .ws import hub
@@ -73,7 +80,9 @@ def seed_demo() -> None:
 def _w2_tick() -> None:
     """W2: Ticks der Fach-Module (jedes drosselt sich selbst); Fehler eines Moduls stoppen die anderen nicht."""
     for name, fn in (("review", review.tick), ("review_effects", review_effects.tick), ("pet_diary", pet_diary.tick),
-                     ("report", daily_report.tick)):
+                     ("report", daily_report.tick),
+                     # W3
+                     ("vlm", vlm.tick), ("sensors", virtual_sensors.tick), ("history", time_machine.tick)):
         try:
             fn()
         except Exception:
@@ -134,9 +143,13 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(inventory_memory.startup)
     await asyncio.to_thread(camera_health.startup)
     await asyncio.to_thread(pet_diary.startup)
+    await asyncio.to_thread(virtual_sensors.startup)
     # W2: Worker-Nachrichten an Fach-Module (vg/internal/<kind>/…)
     register_handler("embed_result", embed_client.handle_result, direct=True)
     register_handler("gesture", pose_events.handle_gesture)
+    # W3: Sensor-Messwerte (A3), Zeitmaschinen-Vektoren (B1)
+    register_handler("sensor", virtual_sensors.handle_worker_values)
+    register_handler("history", time_machine.handle_worker_frame)
     bus.start()
     bus.publish_config_changed()
     tasks = [asyncio.create_task(t) for t in (_ticker(), _retention_loop(), _go2rtc_startup_sync())]
@@ -164,6 +177,10 @@ for r in (tokens_router.router, media_router.router):
 app.include_router(inventory_router.router)
 app.include_router(notifications_router.router)
 for r in (review_router.router, review_router.public_router, pets_router.router, reports_router.router):   # W2
+    app.include_router(r)
+
+# W3: ask zuerst (POST /api/cameras/{id}/ask mit Scope read, eigener Router ohne router-weites require_user)
+for r in (ask_router.router, sensors_router.router, history_router.router):
     app.include_router(r)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,

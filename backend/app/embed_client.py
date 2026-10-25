@@ -70,9 +70,14 @@ def handle_result(camera_id: Optional[int], msg: dict[str, Any]) -> None:
 
 def request(kind: str, *, path: Optional[str] = None, image_bytes: Optional[bytes] = None,
             bbox: Optional[list[float]] = None, augment: bool = False, text: Optional[str] = None,
-            timeout: float = 15.0) -> EmbedResult:
+            model: Optional[str] = None, timeout: float = 15.0) -> EmbedResult:
+    """W3: `model` = "dinov2" (Default für item/image) | "siglip2" (Default für text, B1 Zeitmaschine)."""
     if kind not in ("item", "image", "text"):
         raise ValueError(f"unbekannte Embedding-Art: {kind}")
+    if model not in (None, "dinov2", "siglip2"):
+        raise ValueError(f"unbekanntes Embedding-Modell: {model}")
+    if kind == "text" and not (text or "").strip():
+        raise ValueError("text nötig")
     if kind != "text" and not path and not image_bytes:
         raise ValueError("path oder image_bytes nötig")
     if image_bytes is not None and len(image_bytes) > MAX_IMAGE_BYTES:
@@ -83,7 +88,8 @@ def request(kind: str, *, path: Optional[str] = None, image_bytes: Optional[byte
         raise EmbedUnavailable("Analyse-Dienst nicht erreichbar")
     rid = uuid.uuid4().hex
     body: dict[str, Any] = {"request_id": rid, "kind": kind, "path": path, "bbox": bbox, "augment": bool(augment),
-                            "text": text, "image_b64": base64.b64encode(image_bytes).decode() if image_bytes else None}
+                            "text": text, "model": model or ("siglip2" if kind == "text" else "dinov2"),
+                            "image_b64": base64.b64encode(image_bytes).decode() if image_bytes else None}
     p = _Pending()
     with _lock:
         _pending[rid] = p

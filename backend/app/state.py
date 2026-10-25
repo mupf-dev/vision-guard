@@ -87,6 +87,9 @@ def _worker_dict(sysmsg: dict[str, Any]) -> dict[str, Any]:
         "gpu": sysmsg.get("gpu") or {},
         "models": sysmsg.get("models") or {},
         "last_seen": _iso_from_unix(sysmsg.get("ts") or rx or None),
+        # W3 (K3): Leistungsdaten und GPU-Lease des Workers
+        "perf": sysmsg.get("perf") or {},
+        "gpu_lease": sysmsg.get("gpu_lease"),
     }
 
 

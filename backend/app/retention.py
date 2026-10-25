@@ -86,7 +86,14 @@ def run_once() -> dict:
     except Exception as e:  # noqa: BLE001
         log.warning("Aufräumen des Haustier-Tagebuchs fehlgeschlagen: %s", e)
         pets = 0
-    return {"events": removed_events, "files": removed_files, "inventory": inv, "pet_visits": pets, **w1}
+    w3: dict = {}
+    for name, mod in (("ask", "vlm"), ("sensors", "sensors"), ("history", "history")):   # W3 (A2, A3, B1)
+        try:
+            import importlib
+            w3[name] = importlib.import_module(f".{mod}", __package__).retention(now)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Aufräumen %s fehlgeschlagen: %s", name, e)
+    return {"events": removed_events, "files": removed_files, "inventory": inv, "pet_visits": pets, **w1, **w3}
 
 
 def _w1_retention(now: datetime, notif_days: int, health_days: int) -> dict:

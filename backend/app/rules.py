@@ -19,8 +19,9 @@ from sqlalchemy import select
 from .config import config
 from .db import SessionLocal
 from .models import Rule
-from .schemas import (CondInventory, CondInventoryUntouched, CondTrackCameFrom, CondWeather,
-                      GestureTriggerOptions, PostureTriggerOptions, TimeTriggerOptions, TriggerOptionsNone)
+from .schemas import (CondInventory, CondInventoryUntouched, CondSensor, CondTrackCameFrom, CondWeather,
+                      GestureTriggerOptions, PostureTriggerOptions, SensorTriggerOptions, TimeTriggerOptions,
+                      TriggerOptionsNone)
 
 log = logging.getLogger("vg.rules")
 
@@ -274,6 +275,17 @@ register_condition("inventory", CondInventory, label_de="Gegenstand da/weg")
 register_condition("inventory_untouched", CondInventoryUntouched, label_de="Gegenstand unberührt")
 register_condition("weather", CondWeather, label_de="Wetter")
 register_condition("track_came_from", CondTrackCameFrom, track_only=True, label_de="kam aus Zone")
+SENSOR_STATE_DE = {"on": "an", "off": "aus", "ok": "ok", "low": "knapp", "out": "leer", "unknown": "unklar"}
+
+
+def sensor_state_de(state: Optional[str]) -> str:
+    """W3: Platzhalter {sensor_state} (deutsch)."""
+    return SENSOR_STATE_DE.get(state or "unknown", state or "")
+
+
+# W3 (A3): virtueller Sensor – Regel ohne Event (events.processor.sensor_changed); Bedingung in rule_conditions.py
+register_trigger("sensor", track_based=False, options_model=SensorTriggerOptions, label_de="virtueller Sensor wechselt")
+register_condition("sensor", CondSensor, label_de="Sensor ist …")
 
 
 # ------------------------------------------------------------------ Track-Zustand

@@ -91,6 +91,11 @@ class CameraIn(BaseModel):
     gesture_enabled: bool = False
     inventory_label_min_scores: dict[str, float] = Field(default_factory=dict)
     inventory_suppress: list[InventorySuppress] = Field(default_factory=list, max_length=200)
+    # W3: Cloud-Fallback „Frag die Kamera“ (A2), Zeitmaschine (B1)
+    vlm_cloud_allowed: bool = False
+    history_enabled: bool = False
+    history_interval_s: float = Field(30, ge=5, le=600)
+    history_tiling: bool = False
 
     @field_validator("inventory_label_min_scores")
     @classmethod
@@ -241,6 +246,22 @@ class GestureTriggerOptions(BaseModel):
     @classmethod
     def _uniq(cls, v: list[str]) -> list[str]:
         return list(dict.fromkeys(v))
+
+
+SENSOR_STATES = ("on", "off", "ok", "low", "out", "unknown")
+
+
+class SensorTriggerOptions(BaseModel):
+    """W3 (A3): trigger=sensor – bestätigter Zustandswechsel eines virtuellen Sensors (Regel ohne Event)."""
+    sensor_id: int = Field(ge=1)
+    state: Literal["on", "off", "ok", "low", "out", "any"] = "on"
+
+
+class CondSensor(BaseModel):
+    """W3 (A3): Bedingung „Sensor ist …“ (für alle Trigger)."""
+    type: Literal["sensor"]
+    sensor_id: int = Field(ge=1)
+    state: Literal["on", "off", "ok", "low", "out", "unknown"] = "on"
 
 
 class CondInventory(BaseModel):
@@ -499,6 +520,23 @@ class SettingsModel(BaseModel):
     llm_base_url: Optional[str] = Field(None, max_length=300)
     llm_model: Optional[str] = Field(None, max_length=200)
     llm_timeout_s: int = Field(60, ge=5, le=600)
+    # W3 (K3): Frag die Kamera (A2), Sensoren/Vorräte (A3+C4), Zeitmaschine (B1)
+    vlm_enabled: bool = True
+    vlm_model: Literal["moondream2-int4", "smolvlm-500m", "qwen25vl-3b-nf4"] = "moondream2-int4"
+    vlm_idle_unload_s: int = Field(120, ge=30, le=3600)
+    vlm_need_mb: int = Field(3000, ge=500, le=6000)
+    vlm_cloud_model: Optional[str] = Field(None, max_length=200)
+    retention_days_ask: int = Field(7, ge=1, le=365)
+    retention_days_sensors: int = Field(30, ge=1, le=3650)
+    shopping_list_auto: bool = True
+    retention_days_history: int = Field(14, ge=1, le=365)
+    history_min_change: float = Field(0.05, ge=0, le=0.5)
+    history_model: Literal["siglip2-b16-256", "mobileclip2-s0"] = "siglip2-b16-256"
+
+    @field_validator("vlm_cloud_model")
+    @classmethod
+    def _vlm_cloud_model(cls, v: Optional[str]) -> Optional[str]:
+        return (v.strip() or None) if isinstance(v, str) else v
 
     @field_validator("pet_diary_min_visit_s", mode="before")
     @classmethod
@@ -650,6 +688,18 @@ class SettingsPatch(BaseModel):
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
     llm_timeout_s: Optional[int] = None
+    # W3 – vlm_cloud_model: "" setzt auf null zurück
+    vlm_enabled: Optional[bool] = None
+    vlm_model: Optional[str] = None
+    vlm_idle_unload_s: Optional[int] = None
+    vlm_need_mb: Optional[int] = None
+    vlm_cloud_model: Optional[str] = None
+    retention_days_ask: Optional[int] = None
+    retention_days_sensors: Optional[int] = None
+    shopping_list_auto: Optional[bool] = None
+    retention_days_history: Optional[int] = None
+    history_min_change: Optional[float] = None
+    history_model: Optional[str] = None
 
 
 class PushTestIn(BaseModel):

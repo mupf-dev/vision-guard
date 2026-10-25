@@ -13,6 +13,7 @@ Schlüssel stehen nie in Settings, API-Antworten, Fehlermeldungen oder Logs. Kei
 """
 from __future__ import annotations
 
+import base64
 import logging
 import time
 from dataclasses import dataclass, field
@@ -74,11 +75,48 @@ def _status_error(provider: str, resp: httpx.Response) -> LLMError:
     return LLMError(f"{provider}: HTTP {resp.status_code}{(' – ' + detail) if detail else ''}")
 
 
-def complete(messages: list[dict[str, str]], *, system: Optional[str] = None, max_tokens: int = 400,
-             temperature: float = 0.2, timeout: Optional[float] = None) -> LLMResult:
-    """Eine Chat-Antwort holen. `messages` = [{"role": "user"|"assistant", "content": str}]. Blockierend."""
+def _image_mime(data: bytes) -> str:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
+def _with_images(provider: str, messages: list[dict[str, Any]], images: list[bytes]) -> list[dict[str, Any]]:
+    """W3 (A2): Bilder an die letzte user-Nachricht hängen (openai_compat: image_url/data-URL, anthropic: image)."""
+    msgs = [dict(m) for m in messages]
+    idx = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=None)
+    if idx is None:
+        msgs.append({"role": "user", "content": ""})
+        idx = len(msgs) - 1
+    text = msgs[idx].get("content")
+    parts: list[dict[str, Any]] = []
+    for img in images:
+        mime, b64 = _image_mime(img), base64.b64encode(img).decode()
+        if provider == "anthropic":
+            parts.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}})
+        else:
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+    if isinstance(text, str) and text:
+        parts.append({"type": "text", "text": text})
+    elif isinstance(text, list):
+        parts.extend(text)
+    msgs[idx]["content"] = parts
+    return msgs
+
+
+def complete(messages: list[dict[str, Any]], *, system: Optional[str] = None, max_tokens: int = 400,
+             temperature: float = 0.2, timeout: Optional[float] = None, images: Optional[list[bytes]] = None,
+             model: Optional[str] = None) -> LLMResult:
+    """Eine Chat-Antwort holen. `messages` = [{"role": "user"|"assistant", "content": str}]. Blockierend.
+
+    W3: `images` (JPEG/PNG-Bytes) hängen an der letzten user-Nachricht (Bildmodelle, A2-Cloud-Fallback);
+    `model` überschreibt das Setting `llm_model` (z. B. `vlm_cloud_model`)."""
     c = _cfg()
-    provider, model = c["provider"], c["model"]
+    provider, model = c["provider"], (model or c["model"])
+    if images:
+        messages = _with_images(provider, messages, images)
     if provider == "none":
         raise LLMError("Kein Sprachmodell eingerichtet (Einstellungen → KI-Sprachmodell)")
     if not model:

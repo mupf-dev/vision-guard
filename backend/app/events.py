@@ -525,11 +525,13 @@ class Processor:
             "items": "", "item_place": "", "weather": "",
             # C1/D1: Haltung, Geste, Wiederholung (0 = erste Auslösung)
             "posture": _posture_de(posture), "gesture": "", "repeat": repeat,
+            # W3 (A3): Sensor-Bedingung
+            "sensor": "", "sensor_state": "",
         }
         if extra:
             ctx.update({k: v for k, v in extra.items() if k in ("posture", "gesture")})
         if cond is not None:
-            ctx.update({k: v for k, v in cond.ctx.items() if k in ("items", "item_place", "weather")})
+            ctx.update({k: v for k, v in cond.ctx.items() if k in COND_PLACEHOLDERS})
         event_data = media_sign.sign_urls(event_data, ttl)   # Webhook-/MQTT-Payloads gehen nach außen
         for action in rule.get("actions") or []:
             try:
@@ -807,34 +809,85 @@ class Processor:
             log.exception("Zeit-Regel %s fehlgeschlagen", rule_id)
 
     def run_time_rule(self, rule_id: int, *, force: bool = False) -> Optional[dict[str, Any]]:
-        """Zeit-Regel ausführen: Bedingungen prüfen, bei Erfolg Aktionen ohne Event (Notification statt Event).
-        Liefert {ok, reason, notifications} oder None (Regel unbekannt). `force` ignoriert den Cooldown."""
+        """Zeit-Regel ausführen (A1) – siehe run_eventless_rule."""
+        return self.run_eventless_rule(rule_id, trigger="time", force=force)
+
+    # ---------------------------------------------------------- Regeln ohne Event (time, W3: sensor)
+
+    def sensor_changed(self, sensor: dict[str, Any], old_state: Optional[str], new_state: str) -> int:
+        """W3 (A3): bestätigter Zustandswechsel eines virtuellen Sensors → passende Regeln mit `trigger:"sensor"`
+        asynchron starten (Bedingungs-Pool). `sensor` = VirtualSensor-JSON (mind. id, name, camera_id).
+        Liefert die Zahl der gestarteten Regeln."""
+        if old_state == new_state:
+            return 0
+        sid = int(sensor.get("id") or 0)
+        n = 0
+        for rule in rules.all_rules():
+            if not rule.get("enabled") or rule.get("trigger") != "sensor":
+                continue
+            opts = rule.get("trigger_options") or {}
+            if int(opts.get("sensor_id") or 0) != sid:
+                continue
+            want = opts.get("state") or "on"
+            if want != "any" and want != new_state:
+                continue
+            ctx = {"sensor": sensor.get("name") or f"Sensor {sid}", "sensor_state": rules.sensor_state_de(new_state)}
+            cam_id = sensor.get("camera_id")
+            image = sensor.get("snapshot_path")
+            _cond_pool.submit(self._run_eventless_safe, int(rule["id"]), "sensor", ctx, cam_id, image,
+                              {"trigger": "sensor", "sensor_id": sid, "state": new_state, "previous": old_state})
+            n += 1
+        return n
+
+    def _run_eventless_safe(self, rule_id: int, trigger: str, ctx: Optional[dict[str, Any]],
+                            camera_id: Optional[int], snapshot_path: Optional[str], data: Optional[dict]) -> None:
+        try:
+            self.run_eventless_rule(rule_id, trigger=trigger, ctx=ctx, camera_id=camera_id,
+                                    snapshot_path=snapshot_path, data=data)
+        except Exception:
+            log.exception("Regel %s (%s) fehlgeschlagen", rule_id, trigger)
+
+    def run_eventless_rule(self, rule_id: int, *, trigger: str, ctx: Optional[dict[str, Any]] = None,
+                           camera_id: Optional[int] = None, image_path: Optional[str] = None,
+                           snapshot_path: Optional[str] = None, data: Optional[dict[str, Any]] = None,
+                           force: bool = False) -> Optional[dict[str, Any]]:
+        """Regel ohne Track/Event ausführen (time, sensor): Bedingungen prüfen, Cooldown, bei Erfolg Notification
+        (+ Push), MQTT/Webhook. `ctx` ergänzt Platzhalter (z. B. sensor/sensor_state), `camera_id`/`image_path`/
+        `snapshot_path` gelten, wenn die Bedingungen nichts Passenderes liefern. Liefert {ok, reason,
+        notifications} oder None (Regel unbekannt). `force` ignoriert den Cooldown."""
         rule = next((r for r in rules.all_rules() if int(r["id"]) == rule_id), None)
         if rule is None:
             return None
+        label = {"time": "Zeit-Regel", "sensor": "Sensor-Regel"}.get(trigger, f"Regel ({trigger})")
         now_dt = datetime.now(timezone.utc)
-        res = rules.evaluate_conditions(rule, rules.CondContext(rule=rule, now=now_dt))
+        res = rules.evaluate_conditions(rule, rules.CondContext(rule=rule, now=now_dt, camera_id=camera_id))
         if not res.ok:
-            log.info("Zeit-Regel '%s': Bedingungen nicht erfüllt – %s", rule["name"], res.reason or "?")
+            log.info("%s '%s': Bedingungen nicht erfüllt – %s", label, rule["name"], res.reason or "?")
             return {"ok": False, "reason": res.reason, "notifications": []}
         ck = (rule_id, 0)
         with self.lock:
             if not force and self._cooldown_active(ck, rule, time.time()):
-                log.info("Zeit-Regel '%s': Cooldown aktiv", rule["name"])
+                log.info("%s '%s': Cooldown aktiv", label, rule["name"])
                 return {"ok": False, "reason": "Cooldown aktiv", "notifications": []}
             self.cooldowns[ck] = time.time()
-        log.info("Zeit-Regel '%s' ausgelöst – %s", rule["name"], res.reason or "ohne Bedingungen")
-        cam = registry.get(res.camera_id) if res.camera_id is not None else None
+        log.info("%s '%s' ausgelöst – %s", label, rule["name"], res.reason or "ohne Bedingungen")
+        cam_id = res.camera_id if res.camera_id is not None else camera_id
+        img = res.image_path or image_path
+        snap = res.snapshot_path or snapshot_path
+        cam = registry.get(cam_id) if cam_id is not None else None
         ttl = media_sign.default_ttl_s()
-        ctx: dict[str, Any] = {
-            "camera": (cam or {}).get("name") or "", "camera_id": res.camera_id if res.camera_id is not None else "",
+        pctx: dict[str, Any] = {
+            "camera": (cam or {}).get("name") or "", "camera_id": cam_id if cam_id is not None else "",
             "label": "", "score": "", "identity": "", "zone": "", "event_id": "", "rule": rule["name"],
             "time": now_dt.astimezone(rules.config.tz).isoformat(timespec="seconds"),
-            "thumb_url": media_sign.sign_media_path(res.image_path, ttl) if res.image_path else "",
-            "snapshot_url": media_sign.sign_media_path(res.snapshot_path, ttl) if res.snapshot_path else "",
+            "thumb_url": media_sign.sign_media_path(img, ttl) if img else "",
+            "snapshot_url": media_sign.sign_media_path(snap, ttl) if snap else "",
             "clip_url": "", "items": "", "item_place": "", "weather": "", "posture": "", "gesture": "", "repeat": "",
+            "sensor": "", "sensor_state": "",
         }
-        ctx.update({k: v for k, v in res.ctx.items() if k in ("items", "item_place", "weather")})
+        pctx.update({k: v for k, v in (ctx or {}).items() if k in pctx})
+        pctx.update({k: v for k, v in res.ctx.items() if k in COND_PLACEHOLDERS and v not in (None, "")})
+        ndata = dict(data or {"trigger": trigger})
         created: list[dict[str, Any]] = []
         actions = rule.get("actions") or []
         for a in actions:
@@ -842,45 +895,46 @@ class Processor:
                 continue
             mode = a.get("image") or "snapshot"
             if mode == "snapshot":
-                image = res.snapshot_path or res.image_path
+                image = snap or img
             elif mode == "crop":
-                image = res.image_path or res.snapshot_path
+                image = img or snap
             else:
                 image = None
             priority = a.get("priority") or "default"
             n = notifications.create(
                 source="rule", level="alarm" if priority == "high" else "info",
-                title=rules.render(a.get("title") or "{rule}", ctx), message=rules.render(a.get("message") or "", ctx),
-                rule_id=rule_id, rule_name=rule.get("name"), camera_id=res.camera_id, item_ids=list(res.item_ids),
+                title=rules.render(a.get("title") or "{rule}", pctx), message=rules.render(a.get("message") or "", pctx),
+                rule_id=rule_id, rule_name=rule.get("name"), camera_id=cam_id, item_ids=list(res.item_ids),
                 image_path=image, targets=[a["target"]] if a.get("target") else None, priority=priority,
-                data={"trigger": "time"})
+                data=ndata)
             if n:
                 created.append(n)
         if not any(a.get("type") == "push" for a in actions):
             n = notifications.create(
-                source="rule", title=rule["name"], message=_cond_message(ctx) or rule["name"], rule_id=rule_id,
-                rule_name=rule.get("name"), camera_id=res.camera_id, item_ids=list(res.item_ids),
-                image_path=res.snapshot_path or res.image_path, push_enabled=False, data={"trigger": "time"})
+                source="rule", title=rule["name"], message=_cond_message(pctx) or rule["name"], rule_id=rule_id,
+                rule_name=rule.get("name"), camera_id=cam_id, item_ids=list(res.item_ids),
+                image_path=snap or img, push_enabled=False, data=ndata)
             if n:
                 created.append(n)
         # MQTT/Webhook ohne eigenen Payload: Notification-JSON (signierte URLs), sonst die Platzhalter
-        payload = media_sign.sign_urls(dict(created[0])) if created else dict(ctx)
+        payload = media_sign.sign_urls(dict(created[0])) if created else dict(pctx)
         for a in actions:
             typ = a.get("type")
             try:
                 if typ == "mqtt":
-                    topic = rules.render(a.get("topic") or "", ctx)
+                    topic = rules.render(a.get("topic") or "", pctx)
                     if not topic or "#" in topic or "+" in topic:
-                        log.warning("Zeit-Regel '%s': ungültiges MQTT-Topic '%s'", rule["name"], topic)
+                        log.warning("%s '%s': ungültiges MQTT-Topic '%s'", label, rule["name"], topic)
                         continue
-                    body = rules.render(a["payload"], ctx) if a.get("payload") else json.dumps(payload, default=str)
+                    body = rules.render(a["payload"], pctx) if a.get("payload") else json.dumps(payload, default=str)
                     self._pub(topic, body, retain=bool(a.get("retain")), qos=1)
                 elif typ == "webhook":
-                    rules.submit_async(self.loop, rules.run_webhook(a, ctx, payload))
+                    rules.submit_async(self.loop, rules.run_webhook(a, pctx, payload))
                 elif typ in ("snapshot", "clip"):
-                    log.info("Zeit-Regel '%s': Aktion %s braucht ein Ereignis – übersprungen", rule["name"], typ)
+                    # W3: Sensor-Regeln dürfen einen Snapshot über cmd anfordern (A3 setzt das um)
+                    log.info("%s '%s': Aktion %s braucht ein Ereignis – übersprungen", label, rule["name"], typ)
             except Exception:
-                log.exception("Zeit-Regel '%s': Aktion %s fehlgeschlagen", rule["name"], typ)
+                log.exception("%s '%s': Aktion %s fehlgeschlagen", label, rule["name"], typ)
         return {"ok": True, "reason": res.reason, "notifications": created}
 
     def _check_status(self, now: float) -> None:
@@ -915,6 +969,10 @@ def _posture_de(p: Optional[str]) -> str:
     return posture_de(p)
 
 
+# Platzhalter, die Bedingungen liefern dürfen (A1, W3 sensor)
+COND_PLACEHOLDERS = ("items", "item_place", "weather", "sensor", "sensor_state")
+
+
 def _cond_message(ctx: dict[str, Any]) -> str:
     """Hinweistext für Regeln mit Bedingungen ohne eigene Push-Aktion."""
     parts = []
@@ -922,6 +980,8 @@ def _cond_message(ctx: dict[str, Any]) -> str:
         parts.append(f"{ctx['items']}: {ctx['item_place']}" if ctx.get("item_place") else str(ctx["items"]))
     if ctx.get("weather"):
         parts.append(str(ctx["weather"]))
+    if ctx.get("sensor"):
+        parts.append(f"{ctx['sensor']}: {ctx.get('sensor_state') or ''}".rstrip(": "))
     if not parts and ctx.get("label"):
         parts.append(f"{ctx['label']} an {ctx.get('camera') or 'Kamera'}")
     return " · ".join(parts)

@@ -289,6 +289,47 @@ def require_read(request: Request) -> str:
     return _authorize(request, "read").username
 
 
+# POST-Endpunkte, die nur Scope `read` verlangen (Wellenplan Abschnitt 2: zentrale Liste). Die Router binden dafür
+# `require_read` bzw. `require_read_limited(...)` ein; die Liste dient Doku/Prüfung (MCP, Tests).
+READ_POST_EXCEPTIONS: tuple[str, ...] = (
+    "/api/media/sign",
+    "/api/cameras/{id}/ask",        # W3 (A2): 10/min je Key
+)
+
+_rate_lock = threading.Lock()
+_rate_hits: dict[tuple[str, str], list[float]] = {}
+
+
+def _rate_check(bucket: str, who: str, per_min: int) -> None:
+    now = time.time()
+    with _rate_lock:
+        hits = [t for t in _rate_hits.get((bucket, who), []) if now - t < 60.0]
+        if len(hits) >= per_min:
+            retry = max(1, int(60.0 - (now - hits[0])) + 1)
+            _rate_hits[(bucket, who)] = hits
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Zu viele Anfragen (max. {per_min}/min)",
+                                headers={"Retry-After": str(retry)})
+        hits.append(now)
+        _rate_hits[(bucket, who)] = hits
+        if len(_rate_hits) > 5000:   # Speicher begrenzen (alte Zähler verwerfen)
+            for k in [k for k, v in _rate_hits.items() if not v or now - v[-1] > 60.0]:
+                _rate_hits.pop(k, None)
+
+
+def require_read_limited(bucket: str, per_min: int):
+    """W3: Dependency-Fabrik – Scope `read` genügt (auch für POST), dazu höchstens `per_min` Aufrufe je Minute
+    je API-Key (Sitzung: je Benutzer) im gleitenden 60-s-Fenster; sonst 429 mit `Retry-After`.
+
+        @router.post("/{cam_id}/ask", dependencies=[Depends(require_read_limited("ask", 10))])
+    """
+    def dep(request: Request) -> str:
+        p = _authorize(request, "read")
+        who = f"token:{p.token_id}" if p.kind == "token" else f"session:{p.username}"
+        _rate_check(bucket, who, int(per_min))
+        return p.username
+    return dep
+
+
 def require_session(request: Request) -> str:
     """Nur mit Session-Cookie (Tokens dürfen z. B. keine Tokens verwalten)."""
     user = current_user(request)

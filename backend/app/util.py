@@ -22,6 +22,7 @@ RESERVED_SLUGS: frozenset[str] = frozenset({
     "available", "events",                                      # heute belegt
     "health", "sensor", "gesture", "pets", "notifications",     # Wellen 1–3
     "report", "review",
+    "shopping_list",                                            # Welle 3 (C4)
 })
 
 
@@ -62,7 +63,7 @@ def safe_remove(rel: Optional[str]) -> None:
 
 
 def ensure_media_dirs() -> None:
-    for sub in ("snapshots", "crops", "clips", "identities", "inventory"):
+    for sub in ("snapshots", "crops", "clips", "identities", "inventory", "ask", "sensors", "history"):
         os.makedirs(os.path.join(config.media_dir, sub), exist_ok=True)
 
 

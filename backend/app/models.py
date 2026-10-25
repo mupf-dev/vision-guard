@@ -2,11 +2,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import REAL, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import REAL, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, SmallInteger, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+from .vector import HalfVec
 
 
 def utcnow() -> datetime:
@@ -49,6 +50,11 @@ class Camera(Base):
     gesture_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     inventory_label_min_scores: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
     inventory_suppress: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # Welle 3: Cloud-Fallback „Frag die Kamera“ (A2), Zeitmaschine (B1)
+    vlm_cloud_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    history_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    history_interval_s: Mapped[float] = mapped_column(Float, default=30, server_default=text("30"))
+    history_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 
 class Rule(Base):
@@ -313,3 +319,110 @@ class Report(Base):
     html: Mapped[str] = mapped_column(Text, default="")
     generator: Mapped[str] = mapped_column(String(80), default="template")
     delivery: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+# ------------------------------------------------------------------ Welle 3 (K3)
+
+
+class AskLog(Base):
+    """A2: beantwortete Frage an eine Kamera („Frag die Kamera“), Standbild unter ask/."""
+    __tablename__ = "ask_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    question: Mapped[str] = mapped_column(Text, default="")
+    region: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)         # normiert [x1,y1,x2,y2]
+    answer: Mapped[str] = mapped_column(Text, default="")
+    yes_no: Mapped[str] = mapped_column(String(8), default="unknown")            # yes|no|unknown
+    engine: Mapped[str] = mapped_column(String(8), default="local")              # local|cloud
+    model: Mapped[str] = mapped_column(String(100), default="")
+    ms: Mapped[float] = mapped_column(Float, default=0)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(8), default="ui")                 # ui|api|mcp|sensor
+    token_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class VirtualSensor(Base):
+    """A3+C4: Bereich + Art → Zustand (binary on|off, level ok|low|out) mit Hysterese."""
+    __tablename__ = "virtual_sensors"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    camera_id: Mapped[int] = mapped_column(Integer, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    kind: Mapped[str] = mapped_column(String(20))      # brightness|blink|reference|inventory_count|fill|vlm
+    region: Mapped[list] = mapped_column(JSONB, default=list)                    # Polygon [[x,y],…] normiert
+    params: Mapped[dict] = mapped_column(JSONB, default=dict)
+    state_set: Mapped[str] = mapped_column(String(8), default="binary")         # binary|level
+    supply: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_vlm: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_s: Mapped[float] = mapped_column(Float, default=10)
+    vlm_max_age_s: Mapped[float] = mapped_column(Float, default=900)
+    change_threshold: Mapped[float] = mapped_column(Float, default=0.08)
+    confirm_n: Mapped[int] = mapped_column(Integer, default=2)
+    state: Mapped[str] = mapped_column(String(8), default="unknown")            # on|off|ok|low|out|unknown
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_eval: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_engine: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)   # cheap|local|cloud
+    last_vlm_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SensorHistory(Base):
+    """A3: Zustandsverlauf eines Sensors (bei jedem bestätigten Wechsel, sonst gedrosselt)."""
+    __tablename__ = "sensor_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sensor_id: Mapped[int] = mapped_column(ForeignKey("virtual_sensors.id", ondelete="CASCADE"))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    state: Mapped[str] = mapped_column(String(8))
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    engine: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    snapshot_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_sensor_history_sensor_ts", "sensor_id", "ts"),)
+
+
+class SensorReference(Base):
+    """A3/C4: Referenzbild eines Sensors für einen Zustand (on|off bzw. full|half|empty)."""
+    __tablename__ = "sensor_references"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sensor_id: Mapped[int] = mapped_column(ForeignKey("virtual_sensors.id", ondelete="CASCADE"), index=True)
+    state: Mapped[str] = mapped_column(String(8))
+    image_path: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[Optional[list[float]]] = mapped_column(ARRAY(REAL), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ShoppingItem(Base):
+    """C4: Einkaufsliste (automatisch aus Vorrats-Sensoren oder manuell)."""
+    __tablename__ = "shopping_list"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    note: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(8), default="manual")            # auto|manual|mcp
+    sensor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    done_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+HISTORY_DIM = 768   # SigLIP 2 ViT-B/16-256
+
+
+class HistoryFrame(Base):
+    """B1: Bild-Embedding (Zeitmaschine). Nur mit pgvector angelegt (info.vector, siehe db.init_db)."""
+    __tablename__ = "history_frames"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    camera_id: Mapped[int] = mapped_column(Integer)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    tile: Mapped[int] = mapped_column(SmallInteger, default=0)                  # 0 = ganzes Bild, 1..4 Kacheln
+    bbox: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    embedding: Mapped[list[float]] = mapped_column(HalfVec(HISTORY_DIM))
+    thumb_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(String(60), default="")
+
+    # Indizes über db.VECTOR_INDEXES (HNSW braucht die Extension)
+    __table_args__ = {"info": {"vector": True}}

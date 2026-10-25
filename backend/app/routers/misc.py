@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from .. import settings_store, state
 from ..auth import require_user
 from ..config import VERSION, config
-from ..db import get_db
+from ..db import get_db, vector_available, vector_version
 from ..models import Camera, Event, Identity
 from ..notifications import mask_settings, unmask_push_targets
 from ..schemas import SettingsPatch, iso
@@ -90,5 +90,7 @@ def system(db: Session = Depends(get_db)):
         "cameras": [{"id": c.id, "name": c.name, "status": state.status_for(c.id, c.enabled)} for c in cams],
         "worker": state.worker_info(),
         "mqtt": {"connected": state.mqtt_connected},
+        # W3 (K3): pgvector (B1 Zeitmaschine)
+        "db": {"vector": vector_available(), "vector_version": vector_version()},
         "version": VERSION,
     }

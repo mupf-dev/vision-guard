@@ -36,6 +36,11 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "gesture_enabled": bool(c.gesture_enabled),
         "inventory_label_min_scores": dict(c.inventory_label_min_scores or {}),
         "inventory_suppress": list(c.inventory_suppress or []),
+        # W3: Cloud-Fallback (A2), Zeitmaschine (B1)
+        "vlm_cloud_allowed": bool(c.vlm_cloud_allowed),
+        "history_enabled": bool(c.history_enabled),
+        "history_interval_s": c.history_interval_s if c.history_interval_s is not None else 30,
+        "history_tiling": bool(c.history_tiling),
         "status": state.status_for(c.id, c.enabled),
     }
 

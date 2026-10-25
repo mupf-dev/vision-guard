@@ -24,6 +24,8 @@ class Config:
     # Welle 2: Schlüssel für den LLM-Client – nur aus der Env, nie in Settings/API/Logs
     llm_api_key = os.getenv("VG_LLM_API_KEY") or ""
     anthropic_api_key = os.getenv("VG_ANTHROPIC_API_KEY") or ""
+    # Welle 3 (A2): interner VLM-Dienst (Compose-Profil vlm)
+    vlm_url = _env("VG_VLM_URL", "http://vlm:8200").rstrip("/")
     tz_name = _env("TZ", "Europe/Berlin")
     cookie_name = "vg_session"
     session_days = 7
@@ -178,4 +180,18 @@ DEFAULT_SETTINGS = {
     "llm_base_url": None,
     "llm_model": None,
     "llm_timeout_s": 60,
+    # Welle 3 (K3): Frag die Kamera (A2, Werte aus messungen.md §6) – lokales VLM nur mit Compose-Profil vlm
+    "vlm_enabled": True,
+    "vlm_model": "moondream2-int4",
+    "vlm_idle_unload_s": 120,
+    "vlm_need_mb": 3000,
+    "vlm_cloud_model": None,
+    "retention_days_ask": 7,
+    # Virtuelle Sensoren und Vorräte (A3+C4)
+    "retention_days_sensors": 30,
+    "shopping_list_auto": True,
+    # Zeitmaschine (B1, messungen.md §5)
+    "retention_days_history": 14,
+    "history_min_change": 0.05,
+    "history_model": "siglip2-b16-256",
 }

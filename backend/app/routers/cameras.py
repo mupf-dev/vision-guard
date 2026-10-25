@@ -49,7 +49,9 @@ def _check_inventory_labels(labels: list[str], previous: list[str] | None = None
 OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "inventory_labels",
                           "inventory_min_score", "inventory_tiling", "health_enabled",
                           # W2
-                          "pose_enabled", "gesture_enabled", "inventory_label_min_scores", "inventory_suppress")
+                          "pose_enabled", "gesture_enabled", "inventory_label_min_scores", "inventory_suppress",
+                          # W3
+                          "vlm_cloud_allowed", "history_enabled", "history_interval_s", "history_tiling")
 
 
 def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:

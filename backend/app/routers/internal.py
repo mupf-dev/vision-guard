@@ -50,6 +50,8 @@ def internal_cameras(db: Session = Depends(get_db)):
     review_on = bool(settings_store.get().get("review_enabled", True))
     instances = dict(db.execute(select(Identity.item_label, func.count()).where(
         Identity.kind == "item", Identity.item_label.is_not(None)).group_by(Identity.item_label)).all())
+    from ..sensors import internal_sensors   # W3 (A3): aktive Worker-Sensoren je Kamera
+    sensors_by_cam = internal_sensors(db)
     for c in db.scalars(select(Camera).where(Camera.enabled.is_(True)).order_by(Camera.id)).all():
         main = go2rtc.rtsp_url(go2rtc.stream_name(c.id))
         detect = go2rtc.rtsp_url(go2rtc.detect_stream_name(c.id)) if c.detect_url else main
@@ -72,6 +74,11 @@ def internal_cameras(db: Session = Depends(get_db)):
             "gesture_enabled": bool(c.gesture_enabled),
             "inventory_suppress": list(c.inventory_suppress or []),
             "inventory_review": review_on,
+            # W3: Zeitmaschine (B1), Sensoren (A3)
+            "history_enabled": bool(c.history_enabled),
+            "history_interval_s": c.history_interval_s if c.history_interval_s is not None else 30,
+            "history_tiling": bool(c.history_tiling),
+            "sensors": sensors_by_cam.get(c.id, []),
         })
     return out
 
