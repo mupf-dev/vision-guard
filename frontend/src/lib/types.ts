@@ -7,6 +7,8 @@ export interface CameraStatus {
   height?: number | null;
   inference_ms?: number | null;
   last_seen?: string | null;
+  /** W1 C5: Kamera-Gesundheit (vom Backend, null = unbekannt/noch keine Prüfung) */
+  health?: CameraHealthStatus | null;
 }
 
 export interface Zone {
@@ -35,13 +37,31 @@ export interface Camera {
   inventory_labels: string[];
   inventory_min_score: number;
   inventory_tiling: boolean;
+  /** W1 C5: Bildprüfung (dunkel/unscharf/verdeckt/eingefroren/verschoben); PTZ-Kameras: aus */
+  health_enabled: boolean;
   status?: CameraStatus | null;
 }
 
 export type CameraInput = Omit<Camera, "id" | "status">;
 
 export type IdentityMode = "any" | "known" | "unknown" | "specific";
-export type Trigger = "enter" | "leave" | "dwell";
+/** Registry im Backend (rules.TRIGGERS); W1: time = Regel ohne Track/Event → Notification */
+export type Trigger = "enter" | "leave" | "dwell" | "time";
+
+/** trigger_options je Trigger: time → { at: "HH:MM" }; enter/leave/dwell → {} */
+export interface TriggerOptions {
+  at?: string;
+  [k: string]: unknown;
+}
+
+/** Zusätzliche Prüfungen einer Regel (alle müssen erfüllt sein), Registry rules.CONDITIONS */
+export type RuleCondition =
+  | { type: "inventory"; labels: string[]; state: "present" | "absent"; camera_ids: number[]; room: string | null; zone_ids: string[] }
+  | { type: "inventory_untouched"; labels: string[]; since: string; camera_ids: number[]; zone_ids: string[] }
+  | { type: "weather"; metric: "rain_probability"; min: number; hours: number }
+  | { type: "track_came_from"; zone_ids: string[] };
+
+export type PushPriority = "low" | "default" | "high";
 
 export interface Schedule {
   days: number[];
@@ -53,7 +73,9 @@ export type RuleAction =
   | { type: "snapshot" }
   | { type: "clip"; pre_s: number; post_s: number }
   | { type: "mqtt"; topic: string; payload: string | null; retain: boolean }
-  | { type: "webhook"; url: string; method: string; headers: Record<string, string>; body: string | null };
+  | { type: "webhook"; url: string; method: string; headers: Record<string, string>; body: string | null }
+  /** W1: Push an ein Ziel aus Settings.push_targets (target null = alle aktiven Ziele) */
+  | { type: "push"; target: string | null; title: string; message: string; priority: PushPriority; image: "snapshot" | "crop" | "none" };
 
 export interface Rule {
   id: number;
@@ -65,9 +87,13 @@ export interface Rule {
   min_score: number;
   identity: { mode: IdentityMode; identity_ids: number[] };
   trigger: Trigger;
+  trigger_options: TriggerOptions;
   min_dwell_s: number;
   schedule: Schedule | null;
   cooldown_s: number;
+  conditions: RuleCondition[];
+  /** Sekunden bis zur Prüfung der Bedingungen (0..600) */
+  condition_delay_s: number;
   actions: RuleAction[];
 }
 
@@ -183,6 +209,16 @@ export interface Settings {
   retention_days_inventory: number;
   media_link_ttl_h: number;
   public_base_url: string | null;
+  // W1: Hinweise und Push
+  push_targets: PushTarget[];
+  notify_routes: NotifyRoutes;
+  push_max_per_rule_per_day: number;
+  /** null = keine Wetterabfrage; PUT mit {} setzt zurück */
+  weather_location: WeatherLocation | null;
+  retention_days_notifications: number;
+  // W1: B2 Veränderungen, C5 Kamera-Gesundheit
+  inventory_change_min_s: number;
+  health_alert_after_s: number;
 }
 
 export interface InventoryVocabEntry {
@@ -219,7 +255,8 @@ export type WsMessage =
   | { type: "event"; action: "delete"; event: VGEvent }
   | { type: "identity"; identity: Identity }
   | { type: "identity"; identity: IdentityDeleted }
-  | InventoryMsg;
+  | InventoryMsg
+  | NotificationMsg;
 
 export interface IdentityDeleted {
   id: number;
@@ -346,4 +383,131 @@ export interface InventoryMsg {
   camera_id: number;
   action: "appear" | "update" | "gone" | "delete";
   items: InventoryItem[];
+}
+
+// ---------------------------------------------------------------- W1: Hinweise (Notifications) und Push
+
+export type NotificationSource = "rule" | "health" | "pet" | "review" | "report" | "sensor";
+export type NotificationLevel = "info" | "warning" | "alarm";
+export type NotifyRouteSource = Exclude<NotificationSource, "rule">;
+export type NotifyRoutes = Record<NotifyRouteSource, string[]>;
+
+export interface PushDelivery {
+  target: string;
+  ok: boolean;
+  status: "pending" | "sent" | "failed" | "skipped";
+  error: string | null;
+  ts: string | null;
+}
+
+/** „Notification“ ist im Browser schon belegt – daher VGNotification */
+export interface VGNotification {
+  id: number;
+  ts: string;
+  source: NotificationSource;
+  level: NotificationLevel;
+  rule_id: number | null;
+  rule: string | null;
+  title: string;
+  message: string;
+  camera_id: number | null;
+  event_id: string | null;
+  item_ids: number[];
+  image_url: string | null;
+  /** quellenspezifische Zusatzdaten (z. B. health: {type}); `pushed` = Push wurde versucht */
+  data: Record<string, unknown>;
+  delivery: PushDelivery[];
+}
+
+export interface NotificationMsg {
+  type: "notification";
+  action: "new" | "update" | "delete";
+  /** bei delete nur { id } */
+  notification: VGNotification | { id: number };
+}
+
+export interface PushTarget {
+  id: string;
+  type: "ntfy" | "pushover";
+  name: string;
+  enabled: boolean;
+  server: string | null;
+  topic: string | null;
+  /** Geheimnisse kommen als "***" zurück; "***" unverändert zurückschicken = Wert behalten */
+  token: string | null;
+  user_key: string | null;
+  app_token: string | null;
+}
+
+export interface WeatherLocation {
+  lat: number;
+  lon: number;
+}
+
+export interface PushTestInput {
+  target?: string;
+  config?: PushTarget;
+  title?: string;
+  message?: string;
+}
+
+export interface PushTestResult {
+  ok: boolean;
+  error: string | null;
+  target: string;
+}
+
+// ---------------------------------------------------------------- W1 B2: Veränderungen im Inventar
+
+export type InventoryChangeType = "appeared" | "disappeared" | "moved" | "uncertain" | "transient";
+
+export interface InventoryChangeSnap {
+  ts: string;
+  state: InventoryState;
+  camera_id: number;
+  bbox: [number, number, number, number];
+  zones: string[];
+  zone_names: string[];
+  crop_url: string | null;
+}
+
+export interface InventoryChange {
+  type: InventoryChangeType;
+  at: string;
+  item: InventoryItem;
+  before: InventoryChangeSnap | null;
+  after: InventoryChangeSnap | null;
+  text: string;
+}
+
+export interface InventoryChanges {
+  since: string;
+  until: string;
+  summary: string;
+  counts: Record<InventoryChangeType, number>;
+  changes: InventoryChange[];
+}
+
+// ---------------------------------------------------------------- W1 C5: Kamera-Gesundheit
+
+export type HealthProblemType = "dark" | "blur" | "covered" | "frozen" | "moved";
+
+export interface CameraHealthStatus {
+  state: "ok" | "warn" | "unknown";
+  problems: { type: HealthProblemType; since: string; text: string }[];
+}
+
+export interface CameraHealthLogEntry {
+  type: HealthProblemType;
+  start_ts: string;
+  end_ts: string | null;
+  value: number | null;
+}
+
+export interface CameraHealth {
+  camera_id: number;
+  enabled: boolean;
+  current: (CameraHealthStatus & { metrics: Record<string, number | null>; ts: string | null }) | null;
+  reference_urls: { day: string | null; night: string | null };
+  log: CameraHealthLogEntry[];
 }

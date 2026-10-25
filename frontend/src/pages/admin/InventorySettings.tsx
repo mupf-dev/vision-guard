@@ -113,6 +113,11 @@ export function InventorySettingsCard({ f, saved, patch }: { f: Settings; saved?
               onChange={(e) => patch({ retention_days_inventory: Number(e.target.value) })} /><span className="muted">Tage</span></div>
             <span className="hint">Ältere Verlaufseinträge und nicht mehr gesehene Gegenstände werden gelöscht.</span>
           </div>
+          <div className="field"><label>Veränderungen: Mindestdauer</label>
+            <div className="row"><input type="number" min={0} max={3600} className="input" value={f.inventory_change_min_s}
+              onChange={(e) => patch({ inventory_change_min_s: Number(e.target.value) })} /><span className="muted">Sekunden</span></div>
+            <span className="hint">Kürzer sichtbare Gegenstände zählen unter „Veränderungen“ nicht als neu.</span>
+          </div>
         </div>
 
         <div>

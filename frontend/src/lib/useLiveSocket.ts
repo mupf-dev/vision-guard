@@ -55,7 +55,14 @@ function handle(msg: WsMessage, qc: QueryClient) {
     case "identity":
       qc.invalidateQueries({ queryKey: ["identities"] });
       qc.setQueryData(["identity", msg.identity.id], msg.identity);
+      break;    case "notification": {
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      if (msg.action === "new" && "title" in msg.notification && useUi.getState().eventToasts) {
+        const n = msg.notification;
+        toast.event(n.title || "Hinweis", n.message, n.image_url);
+      }
       break;
+    }
   }
 }
 

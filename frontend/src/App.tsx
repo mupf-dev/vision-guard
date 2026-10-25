@@ -9,6 +9,7 @@ import { EventsPage } from "./pages/Events";
 import { IdentitiesPage } from "./pages/Identities";
 import { StatsPage } from "./pages/Stats";
 import { ObjectsPage } from "./pages/Objects";
+import { NotificationsPage } from "./pages/Notifications";
 import { AdminLayout } from "./pages/admin/AdminLayout";
 import { CamerasPage } from "./pages/admin/Cameras";
 import { RulesPage } from "./pages/admin/Rules";
@@ -48,6 +49,7 @@ export function App() {
           <Route path="identitaeten" element={<IdentitiesPage />} />
           <Route path="identitaeten/:identityId" element={<IdentitiesPage />} />
           <Route path="gegenstaende" element={<ObjectsPage />} />
+          <Route path="hinweise" element={<NotificationsPage />} />
           <Route path="statistik" element={<StatsPage />} />
           <Route path="admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="kameras" replace />} />

@@ -6,6 +6,9 @@ import type { ApiToken, ApiTokenCreated, ApiTokenInput, AuthMe, MediaSignResult 
 import type {
   InventoryHistoryEntry, InventoryItem, InventoryLabel, InventorySearchResult,
 } from "./types";
+import type {
+  CameraHealth, InventoryChanges, NotificationLevel, NotificationSource, PushTestInput, PushTestResult, VGNotification,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -88,6 +91,29 @@ export interface InventoryQuery extends Query {
   offset?: number;
 }
 
+export interface NotificationQuery extends Query {
+  /** kommagetrennt möglich */
+  source?: NotificationSource | string;
+  level?: NotificationLevel | string;
+  rule_id?: number;
+  camera_id?: number;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface InventoryChangesQuery extends Query {
+  /** ISO-8601, „3h“, „90m“, „2d“, „today“, „morning“, „yesterday“ */
+  since: string;
+  until?: string;
+  camera_id?: number;
+  room?: string;
+  label?: string;
+  include_transient?: boolean;
+  limit?: number;
+}
+
 export const api = {
   login: (username: string, password: string) => post<{ username: string }>("/auth/login", { username, password }),
   logout: () => post<void>("/auth/logout"),
@@ -140,6 +166,18 @@ export const api = {
   inventorySearch: (q: string, limit = 20) => get<InventorySearchResult>("/inventory/search", { q, limit }),
   inventoryLabels: () => get<InventoryLabel[]>("/inventory/labels"),
   inventoryHistory: (id: number, limit = 50) => get<InventoryHistoryEntry[]>(`/inventory/${id}/history`, { limit }),
+
+  // W1: Hinweise und Push
+  notifications: (q: NotificationQuery = {}) => get<Paged<VGNotification>>("/notifications", q),
+  notification: (id: number) => get<VGNotification>(`/notifications/${id}`),
+  deleteNotification: (id: number) => del(`/notifications/${id}`),
+  pushTest: (b: PushTestInput) => post<PushTestResult>("/settings/push_test", b),
+  // W1 B2: Veränderungen
+  inventoryChanges: (q: InventoryChangesQuery) => get<InventoryChanges>("/inventory/changes", q),
+  // W1 C5: Kamera-Gesundheit
+  cameraHealth: (id: number, hours = 168) => get<CameraHealth>(`/cameras/${id}/health`, { hours }),
+  setHealthReference: (id: number, mode: "day" | "night" | "auto" = "auto") =>
+    post<{ request_id: string }>(`/cameras/${id}/health/reference`, { mode }),
 };
 
 /** Antwort von /identities/{id}/events darf laut Vertrag "wie /events" sein – tolerant auch für Arrays. */

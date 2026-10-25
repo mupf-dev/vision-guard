@@ -8,6 +8,7 @@ import type {
 import type { InventoryHistoryEntry, InventoryItem, InventoryRelation, InventorySearchHit } from "./types";
 import type { ApiToken, TokenScope } from "./types";
 import type { IdentitySuggestion } from "./types";
+import type { CameraHealth, InventoryChange, InventoryChanges, PushTarget, VGNotification } from "./types";
 
 const now = () => new Date().toISOString();
 const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
@@ -39,7 +40,7 @@ function faceSvg(seed: number, kind: IdentityKind = "face"): string {
 // Standardwerte der Inventar-Felder (Gegenstandserkennung) für Mock-Kameras
 const INV_OFF = {
   room: null, inventory_enabled: false, inventory_interval_s: 3, inventory_labels: [] as string[],
-  inventory_min_score: 0.35, inventory_tiling: false,
+  inventory_min_score: 0.35, inventory_tiling: false, health_enabled: true,
 };
 
 const cameras: Camera[] = [
@@ -95,13 +96,13 @@ for (const i of identities) {
 let rules: Rule[] = [
   { id: 1, name: "Person an Einfahrt nachts", enabled: true, camera_ids: [1], zone_ids: ["z1"], labels: ["person"], min_score: 0.6,
     identity: { mode: "unknown", identity_ids: [] }, trigger: "enter", min_dwell_s: 0,
-    schedule: { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" }, cooldown_s: 30,
+    schedule: { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" }, cooldown_s: 30, trigger_options: {}, conditions: [], condition_delay_s: 0,
     actions: [{ type: "snapshot" }, { type: "clip", pre_s: 5, post_s: 10 }, { type: "mqtt", topic: "visionguard/alarm/{camera}", payload: null, retain: false }] },
   { id: 2, name: "Familienauto kommt an", enabled: true, camera_ids: [1], zone_ids: [], labels: ["car"], min_score: 0.5,
-    identity: { mode: "specific", identity_ids: [20] }, trigger: "enter", min_dwell_s: 0, schedule: null, cooldown_s: 120,
+    identity: { mode: "specific", identity_ids: [20] }, trigger: "enter", min_dwell_s: 0, schedule: null, cooldown_s: 120, trigger_options: {}, conditions: [], condition_delay_s: 0,
     actions: [{ type: "webhook", url: "http://homeassistant:8123/api/webhook/auto", method: "POST", headers: {}, body: null }] },
   { id: 3, name: "Hund lungert auf Terrasse", enabled: false, camera_ids: [2], zone_ids: ["z2"], labels: ["dog"], min_score: 0.5,
-    identity: { mode: "any", identity_ids: [] }, trigger: "dwell", min_dwell_s: 30, schedule: null, cooldown_s: 300,
+    identity: { mode: "any", identity_ids: [] }, trigger: "dwell", min_dwell_s: 30, schedule: null, cooldown_s: 300, trigger_options: {}, conditions: [], condition_delay_s: 0,
     actions: [{ type: "snapshot" }] },
 ];
 
@@ -117,7 +118,48 @@ let settings: Settings = {
   ],
   inventory_synonyms: {}, inventory_confirm_n: 2, inventory_miss_m: 3, retention_days_inventory: 30,
   media_link_ttl_h: 24, public_base_url: null,
+  push_targets: [
+    { id: "handy", type: "ntfy", name: "Handy (ntfy)", enabled: true, server: "https://ntfy.sh", topic: "vg-mock-topic", token: "***", user_key: null, app_token: null },
+  ],
+  notify_routes: { health: ["handy"], pet: [], review: [], report: [], sensor: [] },
+  push_max_per_rule_per_day: 3, weather_location: { lat: 50.11, lon: 8.68 }, retention_days_notifications: 30,
+  inventory_change_min_s: 120, health_alert_after_s: 60,
 };
+
+/* ---------- W1: Hinweise, Veränderungen, Kamera-Gesundheit ---------- */
+let notifications: VGNotification[] = [
+  { id: 3, ts: ago(240), source: "rule", level: "info", rule_id: 1, rule: "Schlüssel vergessen", title: "Schlüssel vergessen",
+    message: "Schlüssel liegt noch am Brett (Flur, Schlüsselbrett)", camera_id: 1, event_id: null, item_ids: [], image_url: null,
+    data: { pushed: true }, delivery: [{ target: "handy", ok: true, status: "sent", error: null, ts: ago(238) }] },
+  { id: 2, ts: ago(3600), source: "health", level: "warning", rule_id: null, rule: null, title: "Kamera Garten: unscharf",
+    message: "Kamera Garten ist seit 13:02 unscharf (Schärfe 28 % der Referenz).", camera_id: 2, event_id: null, item_ids: [],
+    image_url: null, data: { type: "blur", pushed: true }, delivery: [{ target: "handy", ok: false, status: "failed", error: "HTTP 403: forbidden", ts: ago(3598) }] },
+  { id: 1, ts: ago(7200), source: "rule", level: "alarm", rule_id: 1, rule: "Medikamente", title: "Medikamente",
+    message: "Medikamente heute noch nicht genommen", camera_id: 3, event_id: null, item_ids: [], image_url: null,
+    data: { pushed: false }, delivery: [] },
+];
+
+function mockChanges(p: URLSearchParams): InventoryChanges {
+  const snap = (it: InventoryItem, bbox: [number, number, number, number]) => ({
+    ts: it.last_seen, state: it.state, camera_id: it.camera_id, bbox, zones: it.zones, zone_names: it.zone_names, crop_url: it.crop_url });
+  const changes: InventoryChange[] = inventory.slice(0, 3).map((it, i) => {
+    const type = (["appeared", "disappeared", "moved"] as const)[i];
+    return { type, at: ago(600 * (i + 1)), item: it, before: type === "appeared" ? null : snap(it, it.bbox),
+      after: type === "disappeared" ? null : snap(it, it.bbox),
+      text: `${it.name_de}: ${{ appeared: "neu aufgetaucht", disappeared: "verschwunden", moved: "vermutlich verschoben" }[type]} (${it.room ?? it.camera_name})` };
+  });
+  return { since: p.get("since") ?? "today", until: now(), summary: `Seit ${p.get("since") ?? "heute"}: 1 neu, 1 weg, 1 verschoben.`,
+    counts: { appeared: 1, disappeared: 1, moved: 1, uncertain: 0, transient: 0 }, changes };
+}
+
+function mockHealth(id: number): CameraHealth {
+  const warn = id === 2;
+  return { camera_id: id, enabled: true,
+    current: { state: warn ? "warn" : "ok", problems: warn ? [{ type: "blur", since: ago(3700), text: "Unscharf seit 13:02" }] : [],
+      metrics: { brightness: 92, sharpness: warn ? 41 : 160, sharpness_ref: 150, diff: 3.2, inliers: 0.71, shift: 0.01, rotation: 0.2 }, ts: now() },
+    reference_urls: { day: null, night: null },
+    log: warn ? [{ type: "blur", start_ts: ago(3700), end_ts: null, value: 0.27 }, { type: "dark", start_ts: ago(86400), end_ts: ago(85000), value: 18 }] : [] };
+}
 
 /* ---------- Gegenstände (Inventar) ---------- */
 type Box4 = [number, number, number, number];
@@ -467,6 +509,30 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     return json(it);
   }
   if (path === "/settings") { if (method === "PUT") settings = { ...settings, ...body }; return json(settings); }
+  if (path === "/settings/push_test") {
+    const t: PushTarget | undefined = body?.config ?? settings.push_targets.find((x) => x.id === body?.target);
+    return t ? json({ ok: t.type === "ntfy", error: t.type === "ntfy" ? null : "Mock: Pushover nicht erreichbar", target: t.id })
+      : json({ detail: `Push-Ziel „${body?.target}“ nicht gefunden` }, 404);
+  }
+  if (path === "/notifications") {
+    const src = (p.get("source") ?? "").split(",").filter(Boolean);
+    const lvl = (p.get("level") ?? "").split(",").filter(Boolean);
+    const list = notifications.filter((n) => (!src.length || src.includes(n.source)) && (!lvl.length || lvl.includes(n.level)));
+    const off = Number(p.get("offset") ?? 0), lim = Number(p.get("limit") ?? 50);
+    return json({ items: list.slice(off, off + lim), total: list.length });
+  }
+  if ((m = path.match(/^\/notifications\/(\d+)$/))) {
+    const id = Number(m[1]);
+    const n = notifications.find((x) => x.id === id);
+    if (!n) return json({ detail: "Hinweis nicht gefunden" }, 404);
+    if (method === "DELETE") { notifications = notifications.filter((x) => x.id !== id); return json(undefined, 204); }
+    return json(n);
+  }
+  if (path === "/inventory/changes") return json(mockChanges(p));
+  if ((m = path.match(/^\/cameras\/(\d+)\/health(\/reference)?$/))) {
+    if (m[2]) return json({ request_id: "mock" }, 202);
+    return json(mockHealth(Number(m[1])));
+  }
   return json({ detail: `Mock: ${method} ${path} nicht implementiert` }, 404);
 }
 

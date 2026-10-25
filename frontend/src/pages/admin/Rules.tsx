@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera as CamIcon, Clapperboard, Copy, Globe, Image as ImageIcon, Pencil, Plus, Radio, Trash2, Workflow, X } from "lucide-react";
+import { BellRing, Camera as CamIcon, Clapperboard, Copy, Globe, Image as ImageIcon, Pencil, Plus, Radio, Trash2, Workflow, X } from "lucide-react";
 import { api } from "../../lib/api";
 import type { Camera, Identity, Rule, RuleAction, RuleInput } from "../../lib/types";
 import { ALL_LABELS, DAYS, KIND_NAME, labelColor, labelName } from "../../lib/labels";
@@ -11,7 +11,8 @@ const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identit
 
 const EMPTY: RuleInput = {
   name: "", enabled: true, camera_ids: [], zone_ids: [], labels: ["person"], min_score: 0.6,
-  identity: { mode: "any", identity_ids: [] }, trigger: "enter", min_dwell_s: 0, schedule: null, cooldown_s: 30,
+  identity: { mode: "any", identity_ids: [] }, trigger: "enter", trigger_options: {}, min_dwell_s: 0, schedule: null, cooldown_s: 30,
+  conditions: [], condition_delay_s: 0,
   actions: [{ type: "snapshot" }],
 };
 
@@ -20,6 +21,7 @@ const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactN
   clip: { name: "Clip", icon: <Clapperboard size={15} /> },
   mqtt: { name: "MQTT", icon: <Radio size={15} /> },
   webhook: { name: "Webhook", icon: <Globe size={15} /> },
+  push: { name: "Push", icon: <BellRing size={15} /> },
 };
 
 function newAction(t: RuleAction["type"]): RuleAction {
@@ -28,6 +30,7 @@ function newAction(t: RuleAction["type"]): RuleAction {
     case "clip": return { type: "clip", pre_s: 5, post_s: 10 };
     case "mqtt": return { type: "mqtt", topic: "visionguard/alarm/{camera}", payload: null, retain: false };
     case "webhook": return { type: "webhook", url: "", method: "POST", headers: {}, body: null };
+    case "push": return { type: "push", target: null, title: "{rule}", message: "{label} an {camera} ({zone})", priority: "default", image: "snapshot" };
   }
 }
 
@@ -43,7 +46,8 @@ export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[]): R
   const zones = cams.flatMap((c) => c.zones).filter((z) => r.zone_ids.includes(z.id)).map((z) => z.name);
   const camNames = r.camera_ids.map((id) => cams.find((c) => c.id === id)?.name ?? `#${id}`);
   const where = zones.length ? <>in Zone <b>{joinOr(zones)}</b></> : camNames.length ? <>an <b>{joinOr(camNames)}</b></> : <>an <b>allen Kameras</b></>;
-  const verb = r.trigger === "enter" ? "erscheint" : r.trigger === "leave" ? "verschwindet" : `länger als ${r.min_dwell_s} s verweilt`;
+  const verb = r.trigger === "enter" ? "erscheint" : r.trigger === "leave" ? "verschwindet"
+    : r.trigger === "time" ? `– täglich um ${r.trigger_options?.at ?? "?"}` : `länger als ${r.min_dwell_s} s verweilt`;
   const sched = r.schedule ? ` · ${r.schedule.days.length === 7 ? "täglich" : r.schedule.days.map((d) => DAYS[d]).join(", ")} ${r.schedule.start}–${r.schedule.end}` : "";
   const acts = r.actions.map((a) => ACTION_META[a.type].name);
   return (
@@ -92,6 +96,35 @@ function HeadersInput({ value, onChange }: { value: Record<string, string>; onCh
   );
 }
 
+/** W1 (K1): Aktion „Push“ – Ziele aus Einstellungen → Benachrichtigungen */
+function PushActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "push" }>; onChange: (a: RuleAction) => void }) {
+  const st = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const targets = st.data?.push_targets ?? [];
+  return (
+    <div className="form-grid">
+      <div className="field"><label>Ziel</label>
+        <select className="select" value={a.target ?? ""} onChange={(e) => onChange({ ...a, target: e.target.value || null })}>
+          <option value="">Alle aktiven Ziele</option>
+          {targets.map((t) => <option key={t.id} value={t.id}>{t.name}{t.enabled ? "" : " (deaktiviert)"}</option>)}
+        </select>
+        {!targets.length && <span className="hint">Noch keine Push-Ziele – unter Einstellungen → Benachrichtigungen anlegen.</span>}
+      </div>
+      <div className="field"><label>Priorität / Bild</label>
+        <div className="row">
+          <select className="select" value={a.priority} onChange={(e) => onChange({ ...a, priority: e.target.value as typeof a.priority })}>
+            <option value="low">niedrig</option><option value="default">normal</option><option value="high">hoch</option>
+          </select>
+          <select className="select" value={a.image} onChange={(e) => onChange({ ...a, image: e.target.value as typeof a.image })}>
+            <option value="snapshot">Snapshot</option><option value="crop">Ausschnitt</option><option value="none">kein Bild</option>
+          </select>
+        </div>
+      </div>
+      <div className="field span-2"><label>Titel</label><TemplateInput value={a.title} onChange={(v) => onChange({ ...a, title: v })} /></div>
+      <div className="field span-2"><label>Text</label><TemplateInput multiline value={a.message} onChange={(v) => onChange({ ...a, message: v })} /></div>
+    </div>
+  );
+}
+
 function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: RuleAction) => void; onRemove: () => void }) {
   const meta = ACTION_META[a.type];
   return (
@@ -100,6 +133,7 @@ function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: 
         <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onRemove} title="Aktion entfernen"><X size={15} /></button>
       </div>
       {a.type === "snapshot" && <div className="muted" style={{ fontSize: 13 }}>Speichert ein Vollbild zum Ereignis.</div>}
+      {a.type === "push" && <PushActionFields a={a} onChange={onChange} />}
       {a.type === "clip" && (
         <div className="form-grid">
           <div className="field"><label>Vorlauf</label><Range value={a.pre_s} min={0} max={30} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, pre_s: v })} /></div>

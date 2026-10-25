@@ -6,6 +6,7 @@ import type { Settings } from "../../lib/types";
 import { Loading, Range, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
 import { InventorySettingsCard } from "./InventorySettings";
+import { NotificationSettingsCard, targetProblem } from "./NotificationSettings";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -13,21 +14,23 @@ export function SettingsPage() {
   const [f, setF] = useState<Settings | null>(null);
   useEffect(() => { if (q.data) setF(q.data); }, [q.data]);
   const save = useMutation({
-    mutationFn: (s: Settings) => api.saveSettings(s),
+    // weather_location null → {} (PUT ignoriert null-Werte, {} setzt zurück)
+    mutationFn: (s: Settings) => api.saveSettings({ ...s, weather_location: s.weather_location ?? ({} as Settings["weather_location"]) }),
     onSuccess: (r) => { toast.success("Einstellungen gespeichert"); qc.setQueryData(["settings"], r ?? f); },
     onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
   });
   if (q.isLoading || !f) return <Loading />;
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setF({ ...f, [k]: v });
   const dirty = JSON.stringify(f) !== JSON.stringify(q.data);
+  const invalid = (f.push_targets ?? []).some((t) => targetProblem(t) !== null);
 
   return (
     <>
       <div className="page-header">
-        <div><h1>Einstellungen</h1><div className="sub">Aufbewahrung, Wiedererkennung, MQTT und externer Zugriff</div></div>
+        <div><h1>Einstellungen</h1><div className="sub">Aufbewahrung, Wiedererkennung, Benachrichtigungen, MQTT und externer Zugriff</div></div>
         <div className="row">
           {dirty && <button className="btn btn-ghost" onClick={() => setF(q.data!)}><RotateCcw size={16} />Verwerfen</button>}
-          <button className="btn btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
+          <button className="btn btn-primary" disabled={!dirty || invalid || save.isPending} title={invalid ? "Push-Ziel unvollständig" : undefined} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -59,6 +62,7 @@ export function SettingsPage() {
           </div>
         </div>
         <InventorySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <NotificationSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <div className="card">
           <div className="card-head"><Radio size={18} color="var(--accent)" /><h3>MQTT</h3></div>
           <div className="card-body form-grid">
