@@ -340,6 +340,20 @@ def _covers(s: Session, ids: list[int]) -> dict[int, str]:
     return out
 
 
+def _blocked_pairs(s: Session) -> set[tuple[int, int]]:
+    """W2 (D2): Paare (Quelle, Ziel), die in einer Rückfrage `identity_match` mit „Nein“ beantwortet wurden."""
+    from .models import ReviewRequest
+    out: set[tuple[int, int]] = set()
+    for key in s.scalars(select(ReviewRequest.dedup_key).where(
+            ReviewRequest.kind == "identity_match", ReviewRequest.status == "no")).all():
+        try:
+            _, a, b = str(key).split(":")
+            out.add((int(a), int(b)))
+        except ValueError:
+            continue
+    return out
+
+
 def _suggest_for(s: Session, kind: str, src_ids: list[int], limit: int) -> dict[int, list[dict[str, Any]]]:
     """Vorschläge je Quell-ID: benannte Identitäten gleicher Art, Score = max. Kosinus-Ähnlichkeit."""
     result: dict[int, list[dict[str, Any]]] = {sid: [] for sid in src_ids}
@@ -360,6 +374,7 @@ def _suggest_for(s: Session, kind: str, src_ids: list[int], limit: int) -> dict[
         return result
     tmat, tids = mat[tmask], ids[tmask]
     uniq = np.unique(tids)
+    blocked = _blocked_pairs(s)
     covers: Optional[dict[int, str]] = None
     for sid in src_ids:
         smat = mat[ids == sid]
@@ -368,7 +383,7 @@ def _suggest_for(s: Session, kind: str, src_ids: list[int], limit: int) -> dict[
         row_max = (tmat @ smat.T).max(axis=1)          # je Ziel-Sample beste Ähnlichkeit
         cand = []
         for tid in uniq:
-            if int(tid) == sid:
+            if int(tid) == sid or (sid, int(tid)) in blocked:
                 continue
             cand.append((float(row_max[tids == tid].max()), int(tid)))
         cand.sort(reverse=True)

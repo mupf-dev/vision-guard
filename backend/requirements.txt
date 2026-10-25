@@ -8,6 +8,7 @@ PyJWT==2.10.1
 rapidfuzz==3.11.0
 numpy==2.2.1
 pydantic==2.10.4
+python-multipart==0.0.20
 tzdata
 yt-dlp[default]==2026.10.21
 deno==2.9.8

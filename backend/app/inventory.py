@@ -18,7 +18,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import inventory_names as names
-from . import registry, settings_store
+from . import item_identity, registry, settings_store
 from .db import SessionLocal
 from .models import Camera, InventoryHistory, InventoryItem
 from .schemas import iso, media_url
@@ -230,8 +230,8 @@ def item_json(it: InventoryItem, *, signed: bool = False, vocab: Optional[dict[s
         "snapshot_url": _media(it.snapshot_path, signed),
         # Zusatz für Menschen/KI-Agenten: „aktuell sichtbar“ / „zuletzt gesehen vor 2 h“
         "status_text": status_text(it.state, it.last_seen),
-        # W2 (B4): zugeordnetes Exemplar {id, kind:"item", display_name, name} – Auflösung über identity_id: B4
-        "identity": None,
+        # W2 (B4): zugeordnetes Exemplar {id, kind:"item", display_name, name}
+        "identity": item_identity.summary(it.identity_id),
         "identity_score": round(float(it.identity_score), 4) if it.identity_score is not None else None,
     }
 
@@ -253,12 +253,18 @@ def present_since(s: Session, it: InventoryItem) -> Optional[datetime]:
     return s.scalar(q) or it.first_seen
 
 
+def _item_title(it: InventoryItem, vocab: dict[str, dict[str, Any]]) -> str:
+    """„Annas Rucksack“ bei zugeordnetem Exemplar, sonst der Vokabular-Name."""
+    ident = item_identity.summary(it.identity_id)
+    return ident["display_name"] if ident else names.display_name(it.label, vocab)
+
+
 def answer_sentence(s: Session, items: list[InventoryItem], query: str, matched_label: Optional[str],
-                    vocab: dict[str, dict[str, Any]]) -> str:
-    """Deutscher Antwortsatz für die Suche bzw. das MCP-Tool find_object."""
+                    vocab: dict[str, dict[str, Any]], title: Optional[str] = None) -> str:
+    """Deutscher Antwortsatz für die Suche bzw. das MCP-Tool find_object. `title`: Exemplar-Name (B4)."""
     if not matched_label:
         return f"Kein Gegenstand „{query.strip()}“ bekannt."
-    name = names.display_name(matched_label, vocab)
+    name = title or names.display_name(matched_label, vocab)
     if not items:
         return f"{name}: bisher von keiner Kamera gesehen."
     top = items[0]
@@ -266,7 +272,7 @@ def answer_sentence(s: Session, items: list[InventoryItem], query: str, matched_
     zmap = cam.get("zones") or {}
     place = place_text(cam, [zmap.get(z) or z for z in (top.zones or [])])
     rel = (top.relation or {}).get("text")
-    tname = names.display_name(top.label, vocab)
+    tname = title or _item_title(top, vocab)
     if top.state == "present":
         since = present_since(s, top)
         parts = [f"{tname}: aktuell sichtbar {place}"]
@@ -333,9 +339,16 @@ class InventoryMemory:
 
     def handle(self, camera_id: int, msg: dict[str, Any]) -> None:
         with self.lock:
-            self._handle(camera_id, msg)
+            new_ids = self._handle(camera_id, msg)
+        if new_ids is None:
+            return
+        try:   # W2 (D2): Rückfragen zu unsicheren/neuen Gegenständen – außerhalb des Inventar-Locks
+            from . import review_effects
+            review_effects.on_inventory(camera_id, msg, new_ids)
+        except Exception:  # noqa: BLE001
+            log.exception("Inventar Kamera %s: Rückfragen fehlgeschlagen", camera_id)
 
-    def _handle(self, camera_id: int, msg: dict[str, Any]) -> None:
+    def _handle(self, camera_id: int, msg: dict[str, Any]) -> Optional[list[int]]:
         st = settings_store.get()
         vocab = names.vocab_map(st.get("inventory_vocabulary") or [])
         miss_m = int(st.get("inventory_miss_m") or 3)
@@ -357,7 +370,7 @@ class InventoryMemory:
             # sichtbare Gegenstände gelten als veraltet
             rt.last_rx, rt.interval_s, rt.stopped, rt.stale = msg_ts, interval, False, True
             self._mark_stale(camera_id)
-            return
+            return None
         with SessionLocal() as s:
             rows = list(s.scalars(select(InventoryItem).where(InventoryItem.camera_id == camera_id)).all())
             if session and session != rt.session:
@@ -379,6 +392,7 @@ class InventoryMemory:
             snapshot_path = msg.get("snapshot_path") or None
             touched: set[int] = set()
             moved: set[int] = set()
+            new_ids: list[int] = []
 
             if stopped:
                 for r in rows:
@@ -417,6 +431,7 @@ class InventoryMemory:
                         s.add(row)
                         s.flush()
                         rows.append(row)
+                        new_ids.append(row.id)
                         prev[row.id] = (None, [], None, None)
                     claimed.add(row.id)
                     touched.add(row.id)
@@ -437,6 +452,11 @@ class InventoryMemory:
                         row.first_seen = fs
                     if it.get("crop_path"):
                         row.crop_path = str(it["crop_path"])
+                    if "identity" in it:   # W2 (B4): nur nach einem Exemplar-Abgleich im Worker enthalten
+                        ident = it.get("identity") if isinstance(it.get("identity"), dict) else None
+                        row.identity_id = int(ident["id"]) if ident and ident.get("id") is not None else None
+                        sc = it.get("identity_score")
+                        row.identity_score = float(sc) if ident and sc is not None else None
                     if snapshot_path and wst == "present":
                         row.snapshot_path = str(snapshot_path)
                     row.updated_at = now
@@ -457,6 +477,7 @@ class InventoryMemory:
             self._write_history(s, rows, prev, moved, now)
             s.commit()
             self._broadcast(camera_id, rows, prev, vocab)
+        return new_ids
 
     def _match_geom(self, rows: list[InventoryItem], label: str, bbox: list[float], claimed: set[int],
                     msg_ids: set[str], session: str) -> Optional[InventoryItem]:

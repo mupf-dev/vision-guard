@@ -719,6 +719,8 @@ class IdentifyIn(BaseModel):
     # W2 (B4) bei kind="item": Vokabular-Schlüssel und Worker-Item-ID (statt track_id)
     label: Optional[str] = None
     item_id: Optional[str] = None
+    # B4: kürzere Seite des Gegenstands im Kamerabild (px) – unter item_min_px keine automatische Zuordnung
+    crop_px: Optional[int] = None
 
 
 class IdentifyOut(BaseModel):
