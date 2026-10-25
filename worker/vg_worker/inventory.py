@@ -15,6 +15,13 @@ Aufbau (siehe CONTRACT.md, Nachtrag G):
   höchstens ein offener Durchlauf je Kamera (fällige Takte werden übersprungen, nichts wird angestaut),
   GPU abwechselnd mit der Sicherheitspipeline (``GpuTurn``), Rechenbudget ``VG_INVENTORY_MAX_BUSY``.
   Fehler bleiben in diesem Thread; die Detektion läuft immer weiter.
+* W2 (D2) – Unterdrückungsflächen (``inventory_suppress``: gleiches Label, IoU ≥ 0,5 → verworfen) und ``uncertain``
+  (≤ 3 Detektionen je Durchlauf mit Score in [Schwelle − ``review_band``, Schwelle), je Kamera+Label höchstens ein
+  Crop je 10 min) für Rückfragen.
+* W2 (B4) – ``ItemMatcher``: Exemplar-Abgleich für Labels mit ``instances > 0`` (neuer Gegenstand, ``moved``, sonst
+  höchstens alle 10 min, nach jeder Konfigurationsänderung erneut). Embedding mit dem geteilten DINOv2
+  (``identify.PetModel``), Zuordnung per ``POST /api/internal/identify`` (``kind:"item"``) im Hintergrund; je
+  Kamera höchstens ein Gegenstand pro Exemplar (der mit dem besten Score).
 """
 from __future__ import annotations
 
@@ -27,6 +34,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -54,6 +62,12 @@ CONTAIN = 0.8                  # kleinere Box gleichen Labels zu ≥ 80 % in ein
 CROSS_LABEL_IOU = 0.7          # fast dieselbe Box mit anderem Label → nur das beste Label
 MODEL_DIR = os.path.join(settings.MODELS_DIR, "yoloe")   # YOLOE-Gewichte, mobileclip_blt.ts, Text-Embeddings
 EDGE_PX = 3                    # Kachel-Detektion berührt eine innere Kachelkante → abgeschnitten, verwerfen
+SUPPRESS_IOU = 0.5             # W2 (D2): Unterdrückungsfläche gleichen Labels
+UNCERTAIN_MAX = 3              # W2 (D2): unsichere Detektionen je Durchlauf
+UNCERTAIN_EVERY_S = 600.0      # W2 (D2): je Kamera+Label höchstens ein unsicherer Crop alle 10 min
+MATCH_EVERY_S = 600.0          # W2 (B4): Exemplar-Abgleich sonst höchstens alle 10 min
+MATCH_BATCH = 8
+MATCH_MARGIN = 0.10            # Rand des Ausschnitts für das Exemplar-Embedding
 
 
 # ============================================================================ GPU-Wechsel
@@ -160,6 +174,17 @@ def merge_detections(dets: list[tuple[str, str, float, list[float]]]) -> list[tu
             continue
         final.append(d)
     return final
+
+
+def suppressed(label: str, bbox, areas: list[dict]) -> bool:
+    """W2 (D2): Detektion liegt in einer Unterdrückungsfläche gleichen Labels (IoU ≥ 0,5)."""
+    for a in areas or []:
+        try:
+            if a.get("label") == label and _iou(bbox, [float(v) for v in a.get("bbox") or []]) >= SUPPRESS_IOU:
+                return True
+        except (TypeError, ValueError, IndexError):
+            continue
+    return False
 
 
 # ============================================================================ Keyframes
@@ -440,13 +465,23 @@ class Item:
     crop_path: str | None = None
     crop_score: float = 0.0
     crop_ts: float = 0.0
+    # W2 (B4): Exemplar-Zuordnung
+    identity: dict | None = None
+    identity_score: float | None = None
+    id_checked: bool = False
+    match_ts: float = 0.0
+    match_pending: bool = False
 
     def to_msg(self) -> dict:
-        return {"item_id": self.item_id, "label": self.label, "prompt": self.prompt, "score": round(self.score, 3),
-                "bbox": [round(v, 4) for v in self.bbox], "zones": list(self.zones), "state": self.state,
-                "occluded": self.occluded, "first_seen": round(self.first_seen, 3),
-                "last_seen": round(self.last_seen, 3), "hits": self.hits, "misses": self.misses,
-                "crop_path": self.crop_path}
+        m = {"item_id": self.item_id, "label": self.label, "prompt": self.prompt, "score": round(self.score, 3),
+             "bbox": [round(v, 4) for v in self.bbox], "zones": list(self.zones), "state": self.state,
+             "occluded": self.occluded, "first_seen": round(self.first_seen, 3),
+             "last_seen": round(self.last_seen, 3), "hits": self.hits, "misses": self.misses,
+             "crop_path": self.crop_path}
+        if self.id_checked:   # erst nach einem Abgleich – sonst bleibt die Zuordnung im Backend unverändert
+            m["identity"] = self.identity
+            m["identity_score"] = round(self.identity_score, 4) if self.identity_score is not None else None
+        return m
 
 
 class InventoryState:
@@ -626,6 +661,8 @@ class CamInv:
         self.height = 0
         self.fail_count = 0
         self.runs_done = 0
+        self.uncertain_ts: dict[str, float] = {}     # label → letzter unsicherer Crop (D2)
+        self.rematch = True                          # Exemplare neu abgleichen (B4)
 
     @property
     def interval(self) -> float:
@@ -648,10 +685,16 @@ class CamInv:
 
 
 class InventoryEngine:
-    def __init__(self, publish: Publish, gpu: GpuTurn, runtime_of: Callable[[int], object]):
+    def __init__(self, publish: Publish, gpu: GpuTurn, runtime_of: Callable[[int], object],
+                 pet_model=None, identify_fn: Callable[[dict], dict | None] | None = None):
         self.publish = publish
         self.gpu = gpu
         self.runtime_of = runtime_of
+        self.pet = pet_model                      # W2 (B4): geteiltes DINOv2 (identify.PetModel)
+        self.identify_fn = identify_fn            # W2 (B4): POST /api/internal/identify
+        self.review_band = 0.10                   # W2 (D2)
+        self._match_pool: ThreadPoolExecutor | None = None
+        self.match_stats = {"embeds": 0, "identify": 0, "matched": 0, "errors": 0}
         self.session = str(uuid.uuid4())
         self.lock = threading.RLock()
         self.cams: dict[int, CamInv] = {}
@@ -675,6 +718,7 @@ class InventoryEngine:
         try:
             self.confirm_n = max(1, min(10, int(s.get("inventory_confirm_n", self.confirm_n))))
             self.miss_m = max(1, min(20, int(s.get("inventory_miss_m", self.miss_m))))
+            self.review_band = max(0.0, min(0.5, float(s.get("review_band", self.review_band))))
         except (TypeError, ValueError):
             pass
 
@@ -697,6 +741,7 @@ class InventoryEngine:
                 else:
                     changed = cur.cfg.get("inventory_interval_s") != cfg.get("inventory_interval_s")
                     cur.cfg = cfg
+                    cur.rematch = True     # Exemplare/Samples können sich geändert haben (B4)
                     if changed:
                         cur.interval_eff = cur.interval
                         cur.next_due = min(cur.next_due, time.time() + 1.0)
@@ -734,7 +779,8 @@ class InventoryEngine:
         now = time.time()
         r = [m for t, m in list(self.runs) if now - t <= 60]
         return {"runs_per_min": len(r), "ms": round(sum(r) / len(r), 1) if r else 0.0,
-                "skipped": sum(1 for t in list(self.skips) if now - t <= 60), "cameras": len(self.cams)}
+                "skipped": sum(1 for t in list(self.skips) if now - t <= 60), "cameras": len(self.cams),
+                "items": dict(self.match_stats)}
 
     # ------------------------------------------------------------------ messages
     def _base_msg(self, c: CamInv, frame_ts: float) -> dict:
@@ -846,7 +892,9 @@ class InventoryEngine:
         except (TypeError, ValueError):
             cam_min = 0.35
         thr = {e["label"]: (float(e["min_score"]) if e.get("min_score") is not None else cam_min) for e in vocab}
-        conf = max(settings.INVENTORY_MIN_CONF, min(thr.values()) if thr else cam_min)
+        band = self.review_band if cfg.get("inventory_review") else 0.0      # W2 (D2): unsichere Detektionen
+        conf = max(settings.INVENTORY_MIN_CONF, (min(thr.values()) if thr else cam_min) - band)
+        suppress = cfg.get("inventory_suppress") or []
 
         # --- Inferenz: Gesamtbild + Kacheln, jeder Aufruf in einer eigenen GPU-Lücke
         jobs: list[tuple[np.ndarray, int, int, int, tuple | None]] = [(image, settings.INVENTORY_IMGSZ, 0, 0, None)]
@@ -855,6 +903,7 @@ class InventoryEngine:
                 jobs.append((np.ascontiguousarray(image[y1:y2, x1:x2]), settings.INVENTORY_TILE_IMGSZ, x1, y1, (x1, y1, x2, y2)))
         gpu_s = 0.0
         raw: list[tuple[str, str, float, list[float]]] = []
+        unsure: list[tuple[str, str, float, list[float]]] = []
         self.model.warmup(settings.INVENTORY_IMGSZ)          # nur nach Laden/Vokabularwechsel, ohne Lock
         for img, imgsz, ox, oy, tile in jobs:
             if self._stop.is_set() or c.removed:
@@ -867,7 +916,10 @@ class InventoryEngine:
                 gpu_s += time.perf_counter() - t0
             th_, tw_ = img.shape[:2]
             for label, prompt, score, (bx1, by1, bx2, by2) in dets:
-                if label not in labels or score < thr.get(label, cam_min):
+                if label not in labels:
+                    continue
+                t_lab = thr.get(label, cam_min)
+                if score < t_lab - band:
                     continue
                 if tile is not None:
                     # an einer *inneren* Kachelkante abgeschnitten → das Gesamtbild/die Nachbarkachel hat es ganz
@@ -875,13 +927,22 @@ class InventoryEngine:
                             (bx2 >= tw_ - EDGE_PX and tile[2] < w) or (by2 >= th_ - EDGE_PX and tile[3] < h):
                         continue
                 X1, Y1, X2, Y2 = bx1 + ox, by1 + oy, bx2 + ox, by2 + oy
-                raw.append((label, prompt, score, [max(0.0, X1 / w), max(0.0, Y1 / h), min(1.0, X2 / w), min(1.0, Y2 / h)]))
+                nb = [max(0.0, X1 / w), max(0.0, Y1 / h), min(1.0, X2 / w), min(1.0, Y2 / h)]
+                if suppressed(label, nb, suppress):
+                    continue                    # D2: an dieser Stelle als Fehlerkennung bestätigt
+                (raw if score >= t_lab else unsure).append((label, prompt, score, nb))
         dets = merge_detections(raw)
 
         # --- Stabilisierung + Nachricht
         persons = c.persons_at(frame_ts)
         changes = c.state.update(dets, frame_ts, image, persons, self.confirm_n, self.miss_m,
                                  cfg.get("zones") or [], labels)
+        uncertain = self._uncertain(c, unsure, dets, persons, image, frame_ts) if band > 0 else []
+        try:
+            self._match_items(c, image, changes, vocab)
+        except Exception as e:  # noqa: BLE001
+            self.match_stats["errors"] += 1
+            log.warning("inventory item matching camera %s failed: %s", c.id, e)
         snapshot = c.state.write_snapshot(image, frame_ts) if changes else None
         c.last_gpu_s = gpu_s
         # Rechenbudget: Summe(GPU-Zeit / Intervall) über alle Inventar-Kameras ≤ MAX_BUSY
@@ -894,8 +955,126 @@ class InventoryEngine:
             if c.removed:
                 return                              # inzwischen abgeschaltet → "stopped" ist schon raus
             m = self._base_msg(c, frame_ts)
-            m.update({"snapshot_path": snapshot, "stopped": False, "items": c.state.items_msg(), "changes": changes})
+            m.update({"snapshot_path": snapshot, "stopped": False, "items": c.state.items_msg(), "changes": changes,
+                      "uncertain": uncertain})
             self.publish(f"vg/internal/inventory/{c.id}", m, 1, True)
         if changes:
             log.info("inventory camera %s: %s (%d items, %.0f ms GPU, source %s)", c.id,
                      ", ".join(f"{x['type']}" for x in changes), len(c.state.items), gpu_s * 1000, c.grabber.source)
+
+    # ------------------------------------------------------------------ W2 (D2): unsichere Detektionen
+    def _uncertain(self, c: CamInv, unsure: list, dets: list, persons: list, image: np.ndarray,
+                   frame_ts: float) -> list[dict]:
+        """≤ 3 Detektionen knapp unter der Schwelle, die zu keinem bekannten Gegenstand gehören; je Kamera+Label
+        höchstens ein Crop alle 10 min."""
+        if not unsure:
+            return []
+        known = [(it.label, it.bbox) for it in c.state.items.values()] + [(d[0], d[3]) for d in dets]
+        cands = []
+        for d in merge_detections(unsure):
+            label, _prompt, score, bbox = d
+            if any(lb == label and (_iou(bbox, b) >= MATCH_IOU or _cdist(bbox, b) < MATCH_CENTER) for lb, b in known):
+                continue
+            if any(_overlap_of(bbox, p) >= CARRIED_OVERLAP for p in persons):
+                continue
+            if frame_ts - c.uncertain_ts.get(label, 0.0) < UNCERTAIN_EVERY_S:
+                continue
+            cands.append(d)
+        cands.sort(key=lambda d: -d[2])
+        out = []
+        for label, _prompt, score, bbox in cands:
+            if len(out) >= UNCERTAIN_MAX or label in c.uncertain_ts and frame_ts - c.uncertain_ts[label] < UNCERTAIN_EVERY_S:
+                continue
+            try:
+                crop = crop_norm(image, bbox, margin=0.25)
+                if crop is None:
+                    continue
+                path = f"{day_dir('inventory', frame_ts)}/unsure_cam{c.id}_{label}_{int(frame_ts)}.jpg"
+                write_jpeg(path, crop)
+            except Exception as e:  # noqa: BLE001
+                log.warning("uncertain crop write failed: %s", e)
+                continue
+            c.uncertain_ts[label] = frame_ts
+            out.append({"label": label, "score": round(score, 3), "bbox": [round(v, 4) for v in bbox],
+                        "crop_path": path})
+        return out
+
+    # ------------------------------------------------------------------ W2 (B4): Exemplar-Abgleich
+    def _match_items(self, c: CamInv, image: np.ndarray, changes: list[dict], vocab: list[dict]):
+        if self.pet is None or self.identify_fn is None:
+            return
+        inst = {e["label"]: int(e.get("instances") or 0) for e in vocab}
+        now = time.time()
+        hot = {ch["item_id"] for ch in changes if ch.get("type") in ("appeared", "moved")}
+        rematch, c.rematch = c.rematch, False
+        due: list[Item] = []
+        for it in c.state.items.values():
+            if inst.get(it.label, 0) <= 0:
+                if it.identity is not None:          # Exemplar gelöscht → Zuordnung lösen
+                    it.identity, it.identity_score, it.id_checked = None, None, True
+                continue
+            if it.state != "present" or it.match_pending:
+                continue
+            if not it.id_checked or rematch or it.item_id in hot or now - it.match_ts >= MATCH_EVERY_S:
+                due.append(it)
+        if not due:
+            return
+        if not self.pet.ready():
+            self.pet.ensure_started()                # lädt DINOv2 einmalig (nur wenn es Exemplare gibt)
+            c.rematch = c.rematch or rematch
+            return
+        due.sort(key=lambda it: (it.id_checked, it.match_ts))
+        due = due[:MATCH_BATCH]
+        h, w = image.shape[:2]
+        crops, items, pxs = [], [], []
+        for it in due:
+            crop = crop_norm(image, it.bbox, margin=MATCH_MARGIN)
+            if crop is None:
+                continue
+            crops.append(crop)
+            items.append(it)
+            pxs.append(int(min((it.bbox[2] - it.bbox[0]) * w, (it.bbox[3] - it.bbox[1]) * h)))
+        if not crops:
+            return
+        embs = self.pet.embed_batch(crops)
+        self.match_stats["embeds"] += len(crops)
+        if self._match_pool is None:
+            self._match_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="inventory-identify")
+        for it, emb, px in zip(items, embs, pxs):
+            it.match_pending = True
+            it.match_ts = now
+            body = {"kind": "item", "camera_id": c.id, "track_id": None, "item_id": it.item_id, "label": it.label,
+                    "embedding": [round(float(v), 6) for v in emb], "plate_text": None,
+                    "crop_path": it.crop_path, "quality": round(float(it.score), 4), "crop_px": px}
+            self._match_pool.submit(self._identify_item, c, it, body)
+
+    def _identify_item(self, c: CamInv, it: Item, body: dict):
+        try:
+            self.match_stats["identify"] += 1
+            r = self.identify_fn(body) or {}
+            iid = r.get("identity_id")
+            if iid is None:
+                it.identity, it.identity_score = None, None
+            else:
+                score = float(r.get("score") or 0)
+                # je Kamera höchstens ein Gegenstand pro Exemplar – der mit dem besseren Score gewinnt
+                for other in list(c.state.items.values()):
+                    if other is not it and other.identity and other.identity.get("id") == iid:
+                        if (other.identity_score or 0) >= score:
+                            iid = None
+                            break
+                        other.identity, other.identity_score = None, None
+                if iid is None:
+                    it.identity, it.identity_score = None, None
+                else:
+                    it.identity = {"id": iid, "kind": "item", "display_name": r.get("display_name"),
+                                   "name": r.get("name")}
+                    it.identity_score = score
+                    self.match_stats["matched"] += 1
+            it.id_checked = True
+        except Exception as e:  # noqa: BLE001
+            self.match_stats["errors"] += 1
+            it.match_ts = time.time() - MATCH_EVERY_S + 60      # in einer Minute erneut versuchen
+            log.warning("identify (item) failed: %s", e)
+        finally:
+            it.match_pending = False
