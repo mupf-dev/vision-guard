@@ -49,7 +49,7 @@ const cameras: Camera[] = [
     face_recognition: true, plate_recognition: true, pet_recognition: true,
     zones: [{ id: "z1", name: "Tor", color: "#ff9800", polygon: [[0.28, 0.6], [0.58, 0.58], [0.82, 0.98], [0.22, 0.98]] }],
     ...INV_OFF, room: "Außen",
-    status: { state: "online", fps: 4.9, width: 1280, height: 720, inference_ms: 11.8, last_seen: now() } },
+    status: { state: "online", fps: 4.9, width: 1280, height: 720, inference_ms: 11.8, last_seen: now(), health: { state: "ok", problems: [] } } },
   { id: 2, name: "Garten", url: "rtsp://testcam:8554/cam2", detect_url: null, enabled: true, detect_fps: 5,
     labels: ["person", "dog", "cat", "bird"], min_score: 0.55,
     face_recognition: true, plate_recognition: false, pet_recognition: true,
@@ -60,7 +60,7 @@ const cameras: Camera[] = [
   { id: 3, name: "Wohnzimmer", url: "rtsp://192.168.1.40/stream1", detect_url: "rtsp://192.168.1.40/stream2", enabled: true, detect_fps: 4,
     labels: ["person", "dog", "cat"], min_score: 0.5, face_recognition: true, plate_recognition: false, pet_recognition: true,
     zones: [], ...INV_OFF, room: "Wohnzimmer", inventory_enabled: true,
-    status: { state: "online", fps: 4, width: 2880, height: 1616, inference_ms: 14.1, last_seen: now() } },
+    status: { state: "online", fps: 4, width: 2880, height: 1616, inference_ms: 14.1, last_seen: now(), health: { state: "ok", problems: [] } } },
 ];
 
 const identities: Identity[] = [
