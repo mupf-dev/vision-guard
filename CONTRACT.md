@@ -1418,6 +1418,21 @@ Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
   `DELETE /history?camera_id=&before=` (write) → `{deleted}`. Ohne pgvector: Suche/Frames 503
   „Zeitmaschine nicht verfügbar (Datenbank ohne pgvector)“, Stats `enabled:false`.
 - Medien `history/YYYY-MM-DD/cam{N}_{unix}.jpg` (256×144), Aufbewahrung `retention_days_history`.
+- Ergänzungen der Umsetzung (B1, additiv):
+  - Worker: Bildquelle ist der Frame-Tap (Detect-Frame, ≤ `VG_MAX_FRAME_WIDTH`), Kacheln 1..4 = 2×2 mit 10 %
+    Überlappung. Dedupe über die größte Änderung aller Kacheln; spätestens alle 30 min wird trotzdem ein neues Bild
+    gespeichert. `model` in `vg/internal/history` und `history_frames.model` = Setting-Schlüssel
+    (`siglip2-b16-256` | `mobileclip2-s0`); gesucht wird nur in Zeilen des aktuellen `history_model`.
+    `mobileclip2-s0` (512-d) wird mit Nullen auf 768 aufgefüllt. Nachricht zusätzlich `change` (größte Änderung).
+    `perf.history` zusätzlich `stored_per_min`, `cameras`. `embed` mit `model:"siglip2"` lädt das Modell bei Bedarf
+    (≈ 5 s); bis dahin `ok:false, error:"Modell lädt noch …"` – das Backend wiederholt bis 12 s.
+  - Suche: Anfrage + englische Fassung (`backend/app/history_query.py`, Wörterbuch + Inventar-Vokabular/Synonyme),
+    je Bild die bessere Ähnlichkeit. Zeiträume nur aus Bildern einer Kamera mit Kosinus ≥ bester Kosinus der Kamera
+    − 0,03; Abstand ≤ 2,5 × Intervall (2 × Intervall + Taktschwankung). `score` = Kosinus linear [0; 0,20] → 0..100.
+  - Antwort `/history/search` zusätzlich `queries: [str]` (kodierte Texte), `HistoryEpisode.similarity` (roher
+    Kosinus); `/history/stats` zusätzlich `model`. `/history/frames` nur Kachel 0, `span_min` 1..240, max. 500.
+  - `DELETE /history`: `before` bezieht sich auf `last_ts`; `deleted` = Anzahl Bilder (Kachel 0). Kamera löschen
+    entfernt ihre Zeitmaschinen-Bilder.
 
 ### W3.H MCP
 
