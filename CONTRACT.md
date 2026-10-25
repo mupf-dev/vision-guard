@@ -2087,6 +2087,44 @@ Bedeutung (nur `kind:"face"`; `pet`/`plate`/`item` unverändert):
   (Paket A, von D genutzt): `bulk_delete`, `bulk_merge(..., actor=, score=, report_id=)`, `undo_merge`;
   `backend/app/nightly.py` + `backend/app/routers/nightly.py` (Paket D).
 
+Ergänzungen der Umsetzung (Paket D, additiv):
+- **Score Fragment → Kandidat** wie ID.F, mit dem L2-normierten **Mittel** der Fragment-Bilder als Anfrage (entspricht
+  der endgültigen Track-Zuordnung). **Zweitbester** = bester *konkurrierender* Kandidat: Kandidaten, die dem Besten
+  selbst sicher ähneln (≥ `nightly_auto_merge_min` in einer Richtung), zählen nicht – mehrere Fragmente derselben
+  Person verhindern sich sonst gegenseitig.
+- **Bündel:** Union-Find über die sicheren Kanten (je Fragment höchstens eine, zum Besten). Quellen sind nur
+  unbenannte Identitäten **ohne Lernsperre**; ein Bündel mit mehr als einer festen Identität (benannt oder gesperrt)
+  wird nicht zusammengeführt (→ Rückfragen). Gegen Ketten-Drift muss jede Quelle auch **direkt** zum Ziel
+  ≥ `nightly_review_min` erreichen, sonst Rückfrage. „Nein“-Paare gelten in beiden Richtungen; eine Quelle, die mit
+  dem Bündel-Ziel „Nein“ hat, wird übersprungen. Rückfragen nur, wenn `review.is_blocked` sie nicht sperrt; Paare
+  innerhalb eines geplanten Bündels werden nicht gefragt.
+- **Anwenden:** Ziele werden je Bündel mit **einem** `bulk_merge` zusammengeführt; Neuberechnung des Scores gegen
+  Ziel + übrige Quellen des Bündels (≥ `nightly_auto_merge_min`) und direkt zum Ziel (≥ `nightly_review_min`).
+  Der neue Bericht (`trigger:"apply"`) enthält **nur die ausgewählten** Aktionen mit `applied`/`skipped_reason`;
+  `summary.skipped` zählt übersprungene. Die Vorschau wird beim Start gesperrt (`applied_at`) und bleibt es auch,
+  wenn der Lauf mit Fehler endet (ein neuer Probelauf zeigt den aktuellen Stand).
+- **Modus `apply`** (Zeitplan oder `POST /run`): erst Schritt 1 anwenden, dann Schritte 2–4 auf dem neuen Stand
+  berechnen und anwenden.
+- **Kuratieren:** nur ohne Lernsperre; Ausreißer = Ähnlichkeit zum Zentroid < Median − 0,25, nie manuelle Bilder,
+  höchstens 20 % der Bilder je Lauf; negative bekommen `source:"nightly"`. Entfernt werden nur automatische Bilder,
+  die `select_gallery` nicht behält. Zusatzfeld der Aktion: `cover_url` (auch bei `threshold`/`cleanup`).
+- **Schwelle je Person:** 10.-Perzentil der Leave-one-out-Scores (Top-3) der eigenen Bilder − 0,05, auf 0,01 gerundet,
+  begrenzt 0,25..0,45; Aktion nur bei Abweichung ≥ 0,01 von der bisher wirksamen Schwelle (`match_threshold` bzw.
+  `face_match_threshold`).
+- **Merge-Aktion** zusätzlich `direct_score` (Ähnlichkeit direkt zum Ziel). `GET /nightly/reports/{id}` ermittelt
+  die Vorschaubilder für noch existierende Identitäten frisch; `signed=1` signiert sie (Middleware).
+- **Hinweis** nur bei geplanten Läufen und beim Anwenden und nur, wenn der Bericht Aktionen enthält (ein von Hand
+  gestarteter Probelauf und „nichts zu tun“ erzeugen keinen Hinweis). `click_path` `/einstellungen#s-nachtlauf`.
+- Beim Backend-Start werden Berichte, die noch auf `running` stehen, auf `error` („Abgebrochen (Neustart des
+  Backends)“) gesetzt. Berichte älter als `retention_days_events` werden stündlich gelöscht. Erster geplanter Lauf
+  frühestens 60 s nach dem Start.
+
+### ID.J MCP (Paket D, lesend)
+
+`get_nightly_report(report_id: int | None = None)` → `{report: NightlyReportSummary-Felder, actions: [gekürzt, max.
+30; bei `curate` statt der ID-Listen `negatives`/`removed` als Anzahl], actions_total}` aus
+`GET /nightly/reports[/{id}]?signed=1`; ohne Bericht `{report: null}`. Anwenden geht nur in der Oberfläche.
+
 ### ID.I Oberfläche (Kurzfassung)
 
 `Identities.tsx`: Schalter „Auswählen“, Häkchen je Karte, Umschalt-Klick, „Alle (gefilterten) auswählen“,
@@ -2094,3 +2132,6 @@ Aktionsleiste „Zusammenführen …“ / „Löschen …“ (Vorschau „7 Iden
 „Ähnliche auswählen“. Einstellungen: Abschnitt „Gesichtserkennung“ (face_*) und „Nachtlauf“ (Modus, Uhrzeit,
 Grenzen, „Probelauf jetzt“, letzter Bericht mit Aktionsliste und „Vorschau anwenden“). Verlauf der
 Zusammenführungen mit „Zurücksetzen“. Kamera-Dialog: Schalter „Gesichter aus voller Auflösung“.
+Umsetzung (Paket D): `frontend/src/pages/admin/FaceSettings.tsx` – Karten „Gesichtserkennung“ und „Nachtlauf
+(Gesichter)“ (Sprungmarken `#s-gesichter`, `#s-nachtlauf`) mit „Probelauf jetzt“, Berichtsliste und Berichtsdialog
+(Vorschaubilder Quelle → Ziel, Auswahl je Aktion, „Jetzt anwenden (N)“ mit Bestätigung). WS `nightly` lädt neu.

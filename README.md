@@ -152,6 +152,7 @@ damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten könne
 | `list_open_questions()` / `answer_question(id, answer)` ✎ | Rückfragen „Bitte bestätigen“ |
 | `get_pet_diary(pet?, days?)` | Haustier-Tagebuch |
 | `get_daily_report(date?)` | gespeicherter Tagesbericht bzw. Vorschau (Vorschau immer ohne Sprachmodell) |
+| `get_nightly_report(report_id?)` | Bericht des Gesichter-Nachtlaufs (Zusammenführungen, Rückfragen, Kuratierung; nur lesen) |
 | `ask_camera(question, camera_id? \| camera_name?)` | Frage zum aktuellen Bild (lokales Bildmodell; global höchstens 12 Fragen/h über API-Keys) |
 | `list_sensors(…)` / `get_sensor(…)` | virtuelle Sensoren und Vorräte |
 | `get_shopping_list()` / `add_to_shopping_list(name)` ✎ | Einkaufsliste |

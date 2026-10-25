@@ -64,8 +64,8 @@ Beobachtungszeitraum ≈ 0,5 Tage, Schwelle `face_match_threshold` 0,30.
 | A Mehrfachauswahl (Backend + UI) | erledigt, gemergt |
 | B Worker-Gesichter (Qualität, Track-Sammlung, volle Auflösung) | erledigt, gemergt (siehe unten) |
 | C Zuordnungslogik (Backend) | erledigt, gemergt (siehe unten) |
-| D Nachtlauf | offen |
-| Integration, Messung „nachher“ | offen |
+| D Nachtlauf | erledigt (Probelauf-Modus in dieser Installation, siehe unten) |
+| Integration (Merge A–C, Build, Deploy) | erledigt; Messung „nachher“ nach einem Tag Betrieb offen |
 
 ## Paket A – Mehrfachauswahl (Stand 2026-10-25)
 
@@ -220,3 +220,34 @@ Simulation (synthetische 512-d-Embeddings, 10 Personen, 400 Tracks à 1–8 Gesi
 Mit ähnlicheren Personen (Seed 11, gemeinsamer Anteil 0,6): Fragmente je Person 3,2 → 2,1 → **1,0**,
 Einzelbild-Identitäten 77 % → 57 % → **0 %**, Fehlzuordnungen jeweils 0. Die Simulation prüft die Logik, nicht die
 echte Bildqualität; Messung „nachher“ an echten Daten erst nach Integration mit Paket B.
+
+## Integration A–C und Paket D – Nachtlauf (2026-10-25)
+
+**Merge:** `id/a-mehrfachauswahl`, `id/b-gesichtsbilder`, `id/c-zuordnung` per `--no-ff` in
+`feature/inventar-gesichter-mcp`. Konflikt `identity.prune_samples`: Signatur aus A (`limit`, `defer_remove`,
+Rückgabe gelöschte IDs) und Vielfalts-Galerie aus C vereint – Gesichter laufen über `_prune_face(…, limit,
+defer_remove)`, damit `bulk_merge` Dateien weiterhin erst nach dem Commit löscht. Worktrees und Zweige entfernt.
+
+**Paket D** (`backend/app/nightly.py`, `routers/nightly.py`, `frontend/src/pages/admin/FaceSettings.tsx`,
+`mcp/tools/nightly.py`; Details CONTRACT ID.H „Ergänzungen der Umsetzung (Paket D)“ und ID.J):
+- Entscheidungen: Zweitbester = bester *konkurrierender* Kandidat (Fragmente derselben Person blockieren sich sonst
+  gegenseitig – im ersten Test wurden deshalb 2 von 4 sicheren Fällen nur Rückfragen); Union-Find-Bündel, Quelle nur
+  unbenannt **und ohne Lernsperre**, direkte Ähnlichkeit zum Ziel ≥ `nightly_review_min` gegen Ketten-Drift;
+  Kuratieren/Aufräumen lassen gesperrte Identitäten und manuelle Bilder unangetastet, max. 20 % Negative je Lauf;
+  Hinweis nur bei geplanten Läufen/Anwenden mit Aktionen.
+- Oberfläche: Einstellungen → „Gesichtserkennung“ (face_*) und „Nachtlauf (Gesichter)“ mit „Probelauf jetzt“,
+  Berichtsliste, Dialog mit Vorschaubildern Quelle → Ziel, Auswahl je Aktion, „Jetzt anwenden (N)“ + Bestätigung.
+- **Tests** (Wegwerf-Postgres + Backend mit eingebundenem Code, synthetische 512-d-Gesichter, danach entfernt):
+  43 Prüfungen – Probelauf ändert nichts (Identitäten, Bilder, Negative, Ereignisse, Rückfragen, Verlauf,
+  Schwellen), geplante Merges/Rückfragen/Kuratierung/Schwelle/Aufräumen, „Nein“-Paar nie ins Ziel, Gesperrte/Benannte
+  nie Quelle, signierte Vorschaubilder, Bearer → 403 bei apply, Anwenden einer Teilauswahl mit Neuprüfung
+  („Quelle inzwischen benannt“), zweites Anwenden → 409, Verlauf `actor:"nightly"` + `nightly_report_id`,
+  Zurücksetzen eines Nachtlauf-Merges, Modus apply direkt, Zeitplan genau ein Lauf je Tag. UI (Mock, headless
+  Chromium, 1280 px und 390 px): Karte, Bericht, Bestätigung, Anwenden – keine JS-Fehler, kein seitliches Scrollen.
+- **Probelauf an echten Daten** (Haupt-Stack, nur Vorschau): 40 Gesichts-Identitäten, 38 unbenannt → 2 sichere
+  Zusammenführungen in benannte Personen (0,58 / 0,72, Abstand zum Zweitbesten ≥ 0,17), 5 Rückfragen (0,42–0,55),
+  1 Galerie (1 Ausreißer), 2 Schwellen je Person, kein Aufräumen. Zeilenzahlen vorher/nachher identisch
+  (Identitäten 75, Bilder 317, Negative 0, Verlauf 0, gesetzte Schwellen 0). `nightly_mode` bleibt `preview`.
+- Hinweis: In dieser Installation steht `face_fullres` in den gespeicherten Settings noch auf `false` (vor Paket B
+  gespeichert) – bei Bedarf unter Einstellungen → Gesichtserkennung einschalten.
+
