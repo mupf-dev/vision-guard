@@ -917,6 +917,32 @@ Zonen (JSON in `cameras.zones`) haben zusätzlich `"purpose": "food"|"water"|"li
 **Backend:** WS `{"type":"gesture", …wie MQTT…, "camera_name"}`; MQTT extern `{prefix}/gesture/{camera_slug}`
 (nicht retained) `{gesture, camera, camera_id, identity, ts}`.
 
+Ergänzungen der Umsetzung (C1/D1, additiv):
+- **Notfall-Kennzeichnung:** Löst eine Regel mit `trigger: "posture"` oder `repeat_s > 0` aus, bekommt das Event
+  `attributes.alert = {rule, rule_id, trigger, repeat, fired_at, first_fired_at, posture?, posture_since?}`
+  (ISO-Zeiten; `repeat` = Nummer der letzten Auslösung). `GET /events` hat dafür die Filter `alert` (bool, hat
+  `attributes.alert`) und `acknowledged` (bool). MCP `list_alerts` liest `GET /events?alert=true[&active=true&
+  acknowledged=false]&signed=1`; `active_only` = laufend **und** unquittiert.
+- **Wiederholung:** je (Regel, Event) im Backend-Speicher; endet bei Quittierung, Event-Ende, Regeländerung,
+  `repeat_max` oder – bei `posture` – wenn die Haltung nicht mehr besteht. Wiederholungen umgehen Cooldown und
+  Bedingungen (die waren bei der ersten Auslösung erfüllt); ein Backend-Neustart beendet sie.
+- **posture-Auswertung:** einmal je Track und Regel; nach ≥ 10 s anderer Haltung wieder scharf. Die Dauer zählt ab
+  `posture_since`, aber erst ab dem letzten Zeitpunkt, an dem die Person in einer `exclude_zone_ids`-Zone, außerhalb
+  von `zone_ids` oder über `max_motion` war. `motion` = Median der Keypoint-Verschiebung / Box-Diagonale je Sekunde,
+  geglättet (0 = regungslos, Gehen ≈ 0,1–0,5); Track-`update` bei Änderung > 0,02 höchstens alle 3 s.
+- **Nachlauf (`fall_track_grace_s`) im Worker:** Ein Personen-Track mit Haltung `lying` auf einer Kamera mit
+  `pose_enabled` endet erst nach `fall_track_grace_s` ohne Treffer (statt 2 s). Eine neue Detektion bzw. eine
+  Pose-Person an derselben Stelle (IoU ≥ 0,2 oder Mittelpunkt < 0,1) wird an diesen Track angehängt – Event, Liegedauer
+  und Wiederholungen laufen weiter.
+- **Gesten:** `arm_left`/`arm_right` = linker/rechter Arm **der Person**; `arms_cross` = Unterarme über
+  Schulterhöhe gekreuzt („X über dem Kopf“), nicht vor der Brust verschränkt (Alltagshaltung). Gilt nach
+  `gesture_hold_s` in ≥ 80 % der Pose-Bilder (mind. 3), danach 5 s Sperre je Track. Pose-Rate: 2 Hz (`pose_enabled`)
+  bzw. 5 Hz (`gesture_enabled`), nur bei bestätigtem Personen-Track.
+- `vg/internal/system.perf.pose` zusätzlich `runs_per_min`, `skipped`, `cameras`, `gestures`. Worker-Env:
+  `VG_POSE_MODEL` (`yolo11n-pose.pt`, wird einmalig nach `/models/pose` geladen), `VG_POSE_FPS`, `VG_GESTURE_FPS`,
+  `VG_POSE_MAX_BUSY` (0,2), `VG_POSE_MAX_BATCH`, `VG_POSE_IMGSZ`, `VG_POSE_UNLOAD_S`.
+- Platzhalter `{posture}`/`{gesture}`/`{repeat}` sind bei `trigger=time` leer.
+
 ### W2.D Exemplare (B4) und Rückfragen (D2)
 
 ```jsonc

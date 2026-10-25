@@ -184,4 +184,7 @@ def main():
                   settings.WORKER_ID)
         raise SystemExit(2)
     log.info("worker id: %s", settings.WORKER_ID)
+    # Diagnose: `docker kill --signal=USR1 <worker>` schreibt die Stacks aller Threads ins Log (Hänger finden)
+    import faulthandler
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     Service().run()

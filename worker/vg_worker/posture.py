@@ -29,7 +29,10 @@ UPRIGHT_ANGLE = 30.0        # Rumpf aufrecht
 THIGH_SITTING = 50.0        # Oberschenkel (Hüfte→Knie) flacher als das → sitzt
 THIGH_STANDING = 30.0       # Oberschenkel steiler als das → steht
 
+UPRIGHT_ASPECT = 0.8        # Box deutlich höher als breit → liegt sicher nicht
+
 POSTURES = ("standing", "sitting", "lying", "unknown")
+# Einzelbild-Beobachtung zusätzlich: "upright" = sicher nicht liegend, aber stehen/sitzen unklar (beendet „liegt“)
 
 
 def _mean(kp: np.ndarray, kc: np.ndarray, idx) -> np.ndarray | None:
@@ -78,13 +81,13 @@ def box_aspect(box) -> float | None:
 
 
 def classify(kp: np.ndarray | None, kc: np.ndarray | None, box) -> str:
-    """Haltung eines Einzelbilds. `kp`/`kc` dürfen None sein (Pose hat die Person nicht gefunden) – dann zählt
-    nur die Box (liegt bzw. unknown)."""
+    """Haltung eines Einzelbilds: standing | sitting | lying | upright | unknown. `kp`/`kc` dürfen None sein (Pose
+    hat die Person nicht gefunden) – dann zählt nur die Box (liegt, aufrecht bzw. unknown)."""
     asp = box_aspect(box)
     if asp is not None and asp > LYING_ASPECT:
         return "lying"
     if kp is None or kc is None:
-        return "unknown"
+        return "upright" if asp is not None and asp < UPRIGHT_ASPECT * 0.75 else "unknown"
     ta = torso_angle(kp, kc)
     ba = body_angle(kp, kc)
     angles = [a for a in (ta, ba) if a is not None]
@@ -101,6 +104,8 @@ def classify(kp: np.ndarray | None, kc: np.ndarray | None, box) -> str:
         # Knie verdeckt (Tisch, Bildrand): sehr schmale Box → steht
         if asp is not None and asp < 0.45 and ta <= UPRIGHT_ANGLE:
             return "standing"
+        if ta <= UPRIGHT_ANGLE or (asp is not None and asp < UPRIGHT_ANGLE):
+            return "upright"
     return "unknown"
 
 
@@ -150,6 +155,12 @@ class PostureSmoother:
         if not known:
             return False
         best = max(set(known), key=known.count)
+        if best == "upright":
+            # sicher nicht (mehr) liegend: beendet „liegt“, lässt stehen/sitzen unverändert
+            if self.posture == "lying" and known.count(best) / len(self.obs) >= self.share and len(self.obs) >= 2:
+                self.posture, self.since = "unknown", ts
+                return True
+            return False
         # Anteil an allen Beobachtungen im Fenster (unknown zählt mit, damit ein einzelner Treffer nicht reicht),
         # Ausnahme: der Wechsel nach „liegt“ braucht nur die Mehrheit der bekannten Beobachtungen (Pose verliert
         # liegende Personen häufig, die Box-Regel ist präzise)

@@ -66,6 +66,7 @@ class Track:
     # Pose (C1): zuletzt per Track-update gemeldete Bewegung und Zeitpunkt
     motion_sent: float | None = None
     motion_sent_ts: float = 0.0
+    released: bool = False              # Nachlauf beendet (an der Stelle steht jetzt jemand)
 
     def obj(self) -> dict:
         return {"track_id": self.tid, "label": self.label, "score": round(self.score, 3),
@@ -81,6 +82,14 @@ def _iou(a, b) -> float:
         return 0.0
     ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
     return inter / ua if ua > 0 else 0.0
+
+
+def _overlap_of(a, b) -> float:
+    """Anteil der Fläche von a, der in b liegt."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    area = max(1e-12, (a[2] - a[0]) * (a[3] - a[1]))
+    return ix * iy / area
 
 
 def _center_dist(a, b) -> float:
@@ -122,8 +131,10 @@ class CameraTracker:
                 self.by_ext.clear()
 
     def _zones_of(self, bbox) -> list[str]:
-        x = (bbox[0] + bbox[2]) / 2.0
-        y = bbox[3]
+        # Fußpunkt knapp ins Bild ziehen: am unteren Rand abgeschnittene Personen (y2 = 1,0) lagen sonst nie in
+        # einer Zone, die bis zum Bildrand reicht (Punkt-in-Polygon ist am Rand „außen“) – z. B. Sofa-Ausschluss
+        x = min(max((bbox[0] + bbox[2]) / 2.0, 0.001), 0.999)
+        y = min(max(bbox[3], 0.001), 0.999)
         out = []
         for z in self.cfg.get("zones") or []:
             poly = z.get("polygon") or []
@@ -165,7 +176,9 @@ class CameraTracker:
                 tid = self.by_ext.get(ext)
                 tr = self.tracks.get(tid) if tid is not None else None
                 if tr is None or tr.ended:
-                    held = self._held_lying(bbox, ts, cur_ext) if label == "person" else None
+                    # nur eine wieder gefundene *liegende* Person anhängen (Box breiter als ~hoch), sonst neuer Track
+                    flat = (bbox[2] - bbox[0]) * w > 1.0 * (bbox[3] - bbox[1]) * h
+                    held = self._held_lying(bbox, ts, cur_ext) if label == "person" and flat else None
                     if held is not None:
                         # C1: liegende Person nach Track-Abriss wiedergefunden → derselbe Track (Liegedauer bleibt)
                         log.info("camera %s: lying track %s re-attached after %.1fs", self.camera_id, held.tid,
@@ -220,6 +233,8 @@ class CameraTracker:
                 if tr.confirmed:
                     objects.append(tr.obj())
                     touched.append(tr)
+
+            self._release_stood_up(touched, w, h)
 
             # updates: zone change / identity / attributes immediately, better crop at most 1/s
             for tr in touched:
@@ -282,7 +297,7 @@ class CameraTracker:
 
     # ------------------------------------------------------------------ Pose (C1/D1)
     def _lying_hold(self, tr: Track) -> bool:
-        return (bool(self.cfg.get("pose_enabled")) and self.lying_grace_s > 0 and tr.confirmed
+        return (bool(self.cfg.get("pose_enabled")) and self.lying_grace_s > 0 and tr.confirmed and not tr.released
                 and tr.label == "person" and tr.attributes.get("posture") == "lying")
 
     def _held_lying(self, bbox: list[float], ts: float, cur_ext: set[int]) -> Track | None:
@@ -298,6 +313,24 @@ class CameraTracker:
                 if d < best_d:
                     best, best_d = tr, d
         return best
+
+    def _release_stood_up(self, visible: list[Track], w: int, h: int):
+        """Gehaltener Liegend-Track (gerade nicht detektiert) und an seiner Stelle steht/sitzt jetzt eine Person
+        (aufrechte Box deckt ≥ 30 % der Liegend-Box ab) → Person ist vermutlich aufgestanden: Nachlauf beenden."""
+        held = [t for t in self.tracks.values() if t.confirmed and not t.ended and t not in visible
+                and self._lying_hold(t)]
+        if not held:
+            return
+        for v in visible:
+            if v.label != "person" or v.attributes.get("posture") == "lying":
+                continue
+            if (v.bbox[2] - v.bbox[0]) * w >= 0.8 * (v.bbox[3] - v.bbox[1]) * h:
+                continue
+            for t in held:
+                if _overlap_of(t.bbox, v.bbox) >= 0.3 and not t.released:
+                    log.info("camera %s: lying track %s released (person upright at the same place, track %s)",
+                             self.camera_id, t.tid, v.tid)
+                    t.released = True
 
     def person_tracks(self) -> list[dict]:
         """Bestätigte Personen-Tracks für die Pose-Stufe (`held` = gerade nicht detektiert, liegend gehalten)."""
@@ -335,7 +368,11 @@ class CameraTracker:
                     tr.dirty_reason.add("pose")
 
     def pose_keepalive(self, box: list[float], ts: float):
-        """Pose-Modell sieht eine Person, die der Detektor nicht liefert: liegenden Track an dieser Stelle halten."""
+        """Pose-Modell sieht eine Person, die der Detektor nicht liefert: liegenden Track an dieser Stelle halten
+        (nur wenn die Pose-Box selbst flach ist – eine aufgestandene Person hält den Liegend-Track nicht)."""
+        fw, fh = self.last_frame_size
+        if fw and fh and (box[2] - box[0]) * fw <= 1.0 * (box[3] - box[1]) * fh:
+            return
         with self.lock:
             for tr in self.tracks.values():
                 if tr.ended or not self._lying_hold(tr):
