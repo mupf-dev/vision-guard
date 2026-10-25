@@ -1988,6 +1988,16 @@ Bedeutung (nur `kind:"face"`; `pet`/`plate`/`item` unverändert):
   Galerie nach Vielfalt (`face_match.select_gallery`, k-Center, Tag/Nacht getrennt, manuelle bleiben).
 - `single` (Altverhalten): wie bisher, aber neue Identität ebenfalls nur über den Qualitätsgrenzen.
 - Neue Sample-Spalten werden aus den Feldern übernommen; `camera_id` aus dem Request.
+- Ergänzungen der Umsetzung (Paket C): Profil/unscharf = `|yaw| > 40°`, `|pitch| > 30°` oder `sharpness < 25`
+  (fehlende Werte = brauchbar) → nie als Beispielbild; gelernt werden nur Einzelbilder mit Kosinus ≥ 0,35 zum
+  Track-Mittel und (bei Treffer) Top-3-Score zur Person ≥ Schwelle − `face_match_margin`. Neue Identität zusätzlich
+  nur, wenn mindestens ein Bild lernbar ist; unbekannte `face_size` (alte Worker) wird nicht geprüft. `final` ohne
+  gültiges Embedding/Bild entfernt die Identität des Events. Eine per ReID weitergegebene Identität
+  (`attributes.identity_source:"reid"`) entfernt `final` nicht. Nach `final` ersetzt das Backend die Identität in
+  späteren Track-Meldungen dieses Tracks 15 min lang durch die endgültige. `ambiguous` → Rückfrage
+  `identity_match` zwischen Bestem und Zweitbestem (nie zwei benannte; Quelle = unbenannte bzw. jüngere,
+  `dedup_key "idm:{src}:{dst}"`, `data.reason:"ambiguous"`, je Paar höchstens 1×/h). Tiere bleiben beim alten
+  Abgleich (Einzelmaximum).
 
 ### ID.G MQTT Worker ↔ Backend (Paket B)
 

@@ -63,7 +63,7 @@ Beobachtungszeitraum ≈ 0,5 Tage, Schwelle `face_match_threshold` 0,30.
 | Kickoff (CONTRACT, Gerüste, Messskript, Messung vorher) | erledigt |
 | A Mehrfachauswahl (Backend + UI) | erledigt, gemergt |
 | B Worker-Gesichter (Qualität, Track-Sammlung, volle Auflösung) | erledigt, gemergt (siehe unten) |
-| C Zuordnungslogik (Backend) | offen |
+| C Zuordnungslogik (Backend) | erledigt, gemergt (siehe unten) |
 | D Nachtlauf | offen |
 | Integration, Messung „nachher“ | offen |
 
@@ -186,3 +186,37 @@ Identität; MQTT `track`: alle 17 beendeten Personen-Tracks enden mit `identity.
 letzten Treffer), vorläufige Identitäten kommen per `update` mit `phase: "provisional"`. Für `cam1` meldet der Worker
 „kein Gewinn“ (kein Leser). Der Vollbild-Leser endet beim Herunterfahren sauber. Die neuen Sample-Spalten bleiben bis
 Paket C leer (das Backend des Kickoffs wertet `phase`/`samples` noch nicht aus).
+
+## Paket C – Zuordnungslogik (Zweig `id/c-zuordnung`)
+
+Umgesetzt in `backend/app/face_match.py` (`top_k_scores`, `decide`, `select_gallery`, `is_poor`,
+`mean_embedding`), `backend/app/identity.py` (`_identify_face`, Galerie `_learn_face`/`_prune_face`,
+`final_track_identity`) und `backend/app/events.py` (`Processor._final_guard`: endgültige Zuordnung gewinnt gegen
+spätere Track-Meldungen). Tiere/Kennzeichen/Exemplare unverändert.
+
+Entscheidungen (ohne Rückfrage):
+- Profil/unscharf als feste Konstanten (|Gier| > 40°, |Nicken| > 30°, Laplace < 25), nicht als Settings.
+- Neue Identität nur, wenn mindestens ein Bild als Beispiel taugt – sonst wäre sie nie wiedererkennbar (Fragment).
+- Gelernt werden nur Einzelbilder, die zum Track-Mittel passen (≥ 0,35) und bei Treffer auch einzeln zur Person
+  (Top-3 ≥ Schwelle − Abstand) – Schutz gegen vertauschte Tracks.
+- `ambiguous` erzeugt eine Rückfrage `identity_match` (Bester ↔ Zweitbester), nie zwischen zwei Benannten.
+- Galerie: Ausreißer (Ähnlichkeit zum Zentroid > 0,25 unter dem Median) zählen wie Profilbilder; k-Center gewichtet
+  den Abstand mit der Qualität (0,5 + 0,5·q). `prune_samples` nutzt für Gesichter dieselbe Auswahl.
+
+Simulation (synthetische 512-d-Embeddings, 10 Personen, 400 Tracks à 1–8 Gesichter, 30 % Nacht, Wegwerf-DB;
+„alt“ = Code vor Paket C mit altem Worker (3× `single`), „kompatibel“ = neuer Code mit altem Worker,
+„neu“ = neuer Code mit `provisional` + `final`):
+
+| Kennzahl | alt | kompatibel | neu |
+|---|---|---|---|
+| Identitäten (Seed 7) | 72 | 26 | 11 |
+| davon ohne Ereignis (verwaist) | 32 | 4 | 0 |
+| Einzelbild-Identitäten | 79 % | 54 % | 9 % |
+| Fragmente je Person (Mittel) | 4,0 | 2,2 | 1,1 |
+| Ereignisse mit Identität | 100 % | 91 % | 97 % |
+| Fehlzuordnungen | 0 | 0 | 0 |
+| Rückfragen (knapp) | 0 | 14 | 1 |
+
+Mit ähnlicheren Personen (Seed 11, gemeinsamer Anteil 0,6): Fragmente je Person 3,2 → 2,1 → **1,0**,
+Einzelbild-Identitäten 77 % → 57 % → **0 %**, Fehlzuordnungen jeweils 0. Die Simulation prüft die Logik, nicht die
+echte Bildqualität; Messung „nachher“ an echten Daten erst nach Integration mit Paket B.
