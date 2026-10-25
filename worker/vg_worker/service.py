@@ -93,6 +93,9 @@ class Service:
         client.subscribe([("vg/internal/config", 1), ("vg/internal/cmd/+", 1), ("vg/internal/embed", 1),
                           # W3 (K3): GPU-Lease für den vlm-Dienst
                           ("vg/internal/gpu/request", 1), ("vg/internal/gpu/release", 1)])
+        if not getattr(self, "_lease_announced", False):
+            self._lease_announced = True
+            self.pipeline.lease.announce_restart()
         self.reload_ev.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):

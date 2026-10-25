@@ -57,7 +57,22 @@ class LeaseClient:
             p = json.loads(msg.payload or b"{}")
         except ValueError:
             return
-        if not isinstance(p, dict) or str(p.get("holder") or "") != self.holder:
+        if not isinstance(p, dict):
+            return
+        if msg.topic == TOPIC_RELEASED and p.get("holder") == "*":
+            # R1: Worker neu gestartet → keine Lease gilt mehr (auch nach Absturz ohne eigenes „released“)
+            with self._cv:
+                had = self.request_id is not None
+                self.request_id = None
+                self._cv.notify_all()
+            if had and self.on_lost is not None:
+                log.info("Worker neu gestartet – GPU-Lease verfällt")
+                try:
+                    self.on_lost(p)
+                except Exception:  # noqa: BLE001
+                    log.exception("on_lost fehlgeschlagen")
+            return
+        if str(p.get("holder") or "") != self.holder:
             return
         rid = str(p.get("request_id") or "")
         lost = None

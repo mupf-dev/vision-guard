@@ -92,6 +92,12 @@ class GpuLeaseManager:
         if self.active():
             self._end("expired")
 
+    def announce_restart(self) -> None:
+        """R1: beim ersten MQTT-Connect nach dem Start – „alle Leases ungültig“. Stürzte der vorige Worker ab
+        (`docker kill`), glaubte der vlm-Dienst sonst weiter, er halte die Lease, und behielt sein Modell im
+        VRAM, während dieser Worker YOLOE neu lädt (W0: Spitze 5,7 GB von 6 GB)."""
+        self.publish(TOPIC_RELEASED, {"request_id": "*", "holder": "*", "reason": "restart"}, 1, False)
+
     # ------------------------------------------------------------------ MQTT (aus dem MQTT-Thread aufrufen)
     def on_message(self, topic: str, payload: dict, retained: bool = False) -> None:
         if retained:
