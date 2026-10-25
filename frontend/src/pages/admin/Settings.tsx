@@ -7,6 +7,7 @@ import { Loading, Range, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
 import { InventorySettingsCard } from "./InventorySettings";
 import { NotificationSettingsCard, targetProblem } from "./NotificationSettings";
+import { TvSettingsCard, tvProblem } from "./TvSettings";
 import { ReviewSettingsCard } from "./ReviewSettings";
 import { PersonSettingsCard } from "./PersonSettings";
 import { ReidSettingsCard } from "./ReidSettings";
@@ -22,7 +23,7 @@ import { FaceSettingsCard, NightlySettingsCard } from "./FaceSettings";
 const SECTIONS: [string, string][] = [
   ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gesichter", "Gesichter"], ["s-nachtlauf", "Nachtlauf"],
   ["s-gegenstaende", "Gegenstände"],
-  ["s-benachrichtigungen", "Benachrichtigungen"], ["s-rueckfragen", "Rückfragen"], ["s-haltung", "Haltung & Gesten"],
+  ["s-benachrichtigungen", "Benachrichtigungen"], ["s-fernseher", "Fernseher"], ["s-rueckfragen", "Rückfragen"], ["s-haltung", "Haltung & Gesten"],
   ["s-reid", "Über Kameras"], ["s-tiere", "Tiere"], ["s-bericht", "Tagesbericht"], ["s-ki", "KI-Sprachmodell"],
   ["s-frag", "Frag die Kamera"], ["s-sensoren", "Sensoren"], ["s-zeitmaschine", "Zeitmaschine"], ["s-mqtt", "MQTT"],
   ["s-zugriff", "Externer Zugriff"],
@@ -35,7 +36,9 @@ export function SettingsPage() {
   useEffect(() => { if (q.data) setF(q.data); }, [q.data]);
   const save = useMutation({
     // weather_location null → {} (PUT ignoriert null-Werte, {} setzt zurück)
-    mutationFn: (s: Settings) => api.saveSettings({ ...s, weather_location: s.weather_location ?? ({} as Settings["weather_location"]) }),
+    // tv_stream_base_url null → "" (setzt zurück)
+    mutationFn: (s: Settings) => api.saveSettings({ ...s, weather_location: s.weather_location ?? ({} as Settings["weather_location"]),
+      tv_stream_base_url: s.tv_stream_base_url ?? "" }),
     onSuccess: (r) => { toast.success("Einstellungen gespeichert"); qc.setQueryData(["settings"], r ?? f); },
     onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
   });
@@ -49,7 +52,8 @@ export function SettingsPage() {
   }, [dirty]);
   if (q.isLoading || !f) return <Loading />;
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setF({ ...f, [k]: v });
-  const invalid = (f.push_targets ?? []).some((t) => targetProblem(t) !== null);
+  const invalid = (f.push_targets ?? []).some((t) => targetProblem(t) !== null)
+    || (f.tv_targets ?? []).some((t) => tvProblem(t) !== null);
 
   return (
     <>
@@ -57,7 +61,7 @@ export function SettingsPage() {
         <div><h1>Einstellungen</h1><div className="sub">{dirty ? "Ungespeicherte Änderungen" : "Erkennung, Benachrichtigungen, KI, Zugriff – Speichern gilt für alle Bereiche"}</div></div>
         <div className="row">
           {dirty && <button className="btn btn-ghost" onClick={() => setF(q.data!)}><RotateCcw size={16} />Verwerfen</button>}
-          <button className="btn btn-primary" disabled={!dirty || invalid || save.isPending} title={invalid ? "Push-Ziel unvollständig" : undefined} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
+          <button className="btn btn-primary" disabled={!dirty || invalid || save.isPending} title={invalid ? "Push-Ziel oder Fernseher unvollständig" : undefined} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
         </div>
       </div>
       <nav className="settings-toc" aria-label="Bereiche">
@@ -102,6 +106,9 @@ export function SettingsPage() {
         </div>
         <div id="s-benachrichtigungen" className="settings-anchor">
           <NotificationSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-fernseher" className="settings-anchor">
+          <TvSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         </div>
         {/* W2: je Thema eine Karte (Fach-Agenten ändern nur ihre Datei) */}
         <div id="s-rueckfragen" className="settings-anchor">

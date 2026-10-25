@@ -24,6 +24,7 @@ import type {
 } from "./types";
 import type { Presence, PresenceStatus } from "./types";
 import type { PtzInfo, PtzPreset, PtzProbeResult, PtzState } from "./types";
+import type { TvProbeResult, TvStatus } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -191,6 +192,14 @@ export const api = {
   ptzGoto: (id: number, preset: string | null, hold_s?: number) =>
     post<PtzState>(`/cameras/${id}/ptz/goto`, { preset, hold_s }),
   ptzSavePreset: (id: number, name: string) => post<PtzPreset>(`/cameras/${id}/ptz/presets`, { name }),
+  ptzSetHome: (id: number, name?: string) =>
+    post<PtzPreset & { state: PtzState }>(`/cameras/${id}/ptz/home`, name ? { name } : {}),
+  // Fernseher (CONTRACT TV.C)
+  tvs: () => get<TvStatus[]>("/tv"),
+  tvProbe: (description_url: string) => post<TvProbeResult>("/tv/probe", { description_url }),
+  tvShow: (id: string, camera_id: number, duration_s = 60) =>
+    post<TvStatus>(`/tv/${encodeURIComponent(id)}/show`, { camera_id, duration_s }),
+  tvStop: (id: string) => post<TvStatus>(`/tv/${encodeURIComponent(id)}/stop`, {}),
   ptzDeletePreset: (id: number, token: string) => del(`/cameras/${id}/ptz/presets/${encodeURIComponent(token)}`),
   ptzResume: (id: number) => post<PtzState>(`/cameras/${id}/ptz/resume`, {}),
   ptzPause: (id: number, minutes: number) => post<PtzState>(`/cameras/${id}/ptz/pause`, { minutes }),

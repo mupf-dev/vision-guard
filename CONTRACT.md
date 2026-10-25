@@ -1792,6 +1792,9 @@ werden aber beim Ausführen geprüft („Position … gibt es auf der Kamera nic
   (`manual`, `until` = jetzt + (`hold_s` oder `return_s`)).
 - `POST /presets {name: 1..40}` → `{token, name}` (aktuelle Position speichern); `DELETE /presets/{token}` → 204,
   409 wenn Grundposition oder in der Patrouille benutzt.
+- `POST /home {name?: 1..40 = "Grundposition"}` → `{token, name, state}`: aktuelle Ausrichtung als Grundposition
+  speichern (Live-Ansicht). Vorhandene Grundposition wird überschrieben (ONVIF `SetPreset` mit Token; lehnt die Kamera
+  das ab, entsteht ein neues Preset), `ptz.home_preset` wird gesetzt, `view` = `home`, `manual` endet.
 - `POST /resume` → beendet `manual`/`rule`/`follow`, fährt zur Grundposition, Automatik läuft wieder.
 - `POST /pause {minutes: 1..1440}` → Patrouille/Verfolgung pausieren (`paused_until`); `minutes: 0` hebt auf.
 - Fehler: 409 „PTZ ist für diese Kamera nicht eingeschaltet“, 502 mit deutscher Meldung bei Kamerafehlern.
@@ -2172,3 +2175,61 @@ Ergänzungen der Integration (Pakete A–D, additiv):
   bzw. auf „ohne Identität“ gesetzt.
 - `vg/internal/system` `perf.face` zusätzlich `by_source: {main|detect: {jobs_per_min, faces_per_min}}` (Ausbeute
   Vollbild-Ausschnitt vs. Analysebild, letzte 60 s).
+
+## Nachträge: Fernseher – Livebild per DLNA
+
+Verbindlich wie der Rest, rein additiv. Eine Regel kann das Livebild einer Kamera auf einem Fernseher im Heimnetz
+zeigen. Weg: **DLNA/UPnP MediaRenderer** (AVTransport `SetAVTransportURI` + `Play`, nach Ablauf `Stop`) – getestet mit
+Samsung QN900A (Tizen, `http://<ip>:9197/dmr`). Der Fernseher übernimmt das Bild im Vollbild; nach `Stop` kehrt er zur
+vorherigen Quelle zurück (Samsung). Kein Bild-im-Bild.
+
+### TV.A Settings (zusätzlich; beide **nur mit Anmeldung im Browser** änderbar, für API-Keys ausgeblendet)
+
+```jsonc
+{ ...,
+  "tv_targets": [ { "id": "wohnzimmer",          // ^[a-z0-9_-]{1,40}$, eindeutig; max. 10
+      "name": "Fernseher Wohnzimmer", "enabled": true,
+      "type": "dlna",
+      "description_url": "http://10.10.100.245:9197/dmr" } ],   // UPnP-Gerätebeschreibung; nur IP → Samsung-Standard :9197/dmr
+  "tv_stream_base_url": null }   // Adresse, unter der Fernseher VisionGuard erreichen (z. B. "http://10.10.100.158:8090",
+                                 // ohne / am Ende); PUT "" → null. Ohne Wert zeigt keine Aktion etwas an.
+```
+Unter WSL2 (NAT) braucht es dafür eine Windows-Portweiterleitung auf `127.0.0.1:8080`, die nur der Fernseher nutzen darf
+(siehe AGENTS.md).
+
+### TV.B Stream für den Fernseher (ohne Anmeldung, nur signiert)
+
+- `GET|HEAD /api/tv/stream/{camera_id}.ts?exp=&t=&sig=` – Live-MPEG-TS der Kamera. `sig = base64url_ohne_padding(
+  HMAC-SHA256(VG_SECRET_KEY, "tv:" + camera_id + ":" + exp + ":" + t)[:16])`, `t` = Zufallskennung der Anzeige,
+  `exp` höchstens 1 h in der Zukunft. Falsch/abgelaufen → 403. Der Strom endet spätestens bei `exp`.
+- Das Backend packt den go2rtc-RTSP-Strom (`cam_N`) mit **ffmpeg** um (Bild `copy`, Ton AAC 48 kHz Stereo,
+  MPEG-TS): go2rtcs eigenes TS/HLS enthält bei Reolink keine SPS/PPS im Strom, fragmentiertes MP4 spielt Samsung live
+  nicht. Antwort mit `Content-Length` 50 GiB (Samsung spielt nur Ströme mit bekannter Länge), DLNA-Kopfzeilen
+  `transferMode.dlna.org: Streaming`, `contentFeatures.dlna.org`. nginx: `location /api/tv/` ohne chunked-Encoding.
+  Höchstens 4 Ströme gleichzeitig (sonst 429).
+
+### TV.C REST (Präfix `/api/tv`; GET Scope `read`, sonst `write`)
+
+```jsonc
+// TvStatus
+{ "id": "wohnzimmer", "name": "Fernseher Wohnzimmer", "enabled": true,
+  "showing": { "camera_id": 3, "camera_name": "Wohnzimmer", "since": "...", "until": "...", "source": "rule|manual|mcp" } | null,
+  "last_error": "Fernseher … nicht erreichbar (eingeschaltet?)" | null }
+```
+- `GET /tv` → `TvStatus[]` (konfigurierte Fernseher).
+- `POST /tv/probe {description_url}` → `{ok, description_url, name, model, error}` – prüft Erreichbarkeit und
+  AVTransport (auch ungespeichert; nur IP → `http://<ip>:9197/dmr`).
+- `POST /tv/{id}/show {camera_id, duration_s: 10..3600 = 60}` → `TvStatus` (502 mit deutscher Meldung bei Fehlern,
+  409 ohne `tv_stream_base_url`, 404 unbekannt).
+- `POST /tv/{id}/stop` → `TvStatus` (stoppt nur, wenn der Fernseher noch unseren Strom zeigt).
+- Eine neue Anzeige auf demselben Fernseher ersetzt die laufende (neue Kamera bzw. neues Ende). Nach `duration_s` wird
+  gestoppt, sofern der Fernseher noch unseren Strom zeigt (sonst hat jemand umgeschaltet → nichts tun).
+
+### TV.D Regel-Aktion und MCP
+
+- Regel-Aktion `{ "type": "tv", "target": null | "wohnzimmer" (null = alle aktiven), "camera_id": null | int
+  (null = Kamera des Ereignisses), "duration_s": 60 (10..3600) }`. Wirkt bei Track- und ereignislosen Regeln
+  (dort ohne `camera_id` wirkungslos, außer bei Sensor-Regeln: Kamera des Sensors). Läuft im Hintergrund, blockiert die
+  Regel nicht; Zeitfenster/Sperrzeit über `schedule`/`cooldown_s` der Regel.
+- MCP `show_on_tv` (write): `camera_id?`/`camera_name?`, `tv: str?` (id oder Name; leer = einziger/erster aktiver),
+  `duration_s: int = 60` → `TvStatus`.

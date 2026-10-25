@@ -10,6 +10,7 @@ from ..auth import require_user
 from ..db import get_db
 from ..models import Camera
 from ..onvif import OnvifError
+from ..sync import cameras_changed
 from ..schemas import PtzGotoIn, PtzMoveIn, PtzPauseIn, PtzPresetIn, PtzProbeIn
 
 log = logging.getLogger("vg.ptz")
@@ -95,6 +96,18 @@ async def ptz_goto(cam_id: int, body: PtzGotoIn, db: Session = Depends(get_db)):
 async def ptz_save_preset(cam_id: int, body: PtzPresetIn, db: Session = Depends(get_db)):
     ctl = _controller(db, cam_id)
     return await _do(ctl.save_preset, body.name.strip())
+
+
+@router.post("/home")
+async def ptz_set_home(cam_id: int, body: PtzPresetIn | None = None, db: Session = Depends(get_db)):
+    """Aktuelle Ausrichtung als Grundposition speichern (PTZ.C) → {token, name, state}."""
+    ctl = _controller(db, cam_id)
+    res = await _do(ctl.set_home_here, (body.name.strip() if body else "") or "Grundposition")
+    c = _camera(db, cam_id)
+    c.ptz = {**dict(c.ptz or {}), "home_preset": res["token"]}
+    db.commit()
+    await cameras_changed()
+    return {**res, "state": ctl.state()}
 
 
 @router.delete("/presets/{token}", status_code=204)

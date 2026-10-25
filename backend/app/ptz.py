@@ -273,6 +273,38 @@ class Controller:
         self.presets(max_age=0)
         return {"token": token, "name": name}
 
+    def set_home_here(self, name: str) -> dict[str, str]:
+        """Aktuelle Ausrichtung als Grundposition speichern (Live-Ansicht). Gibt es schon eine Grundposition, wird
+        dieses Preset überschrieben (ONVIF SetPreset mit Token); lehnt die Kamera das ab, entsteht ein neues.
+        Die Kamera steht danach „in der Grundposition“; die Automatik läuft wieder. Den Token in der Kamera-
+        Konfiguration speichert der Router."""
+        self._require()
+        old = self.cfg.get("home_preset")
+        token = None
+        if old:
+            try:
+                token = self._wait(self._submit(lambda: self._require().set_preset(name, old)))
+            except OnvifError as e:
+                log.info("PTZ Kamera %s: Grundposition überschreiben abgelehnt (%s) – neue Position", self.id, e)
+        if not token:
+            token = self._wait(self._submit(lambda: self._require().set_preset(name)))
+        in_patrol = any(str(st.get("preset")) == str(old) for st in self.cfg["patrol"].get("steps") or [])
+        if old and token != old and not in_patrol:   # Kamera hat ein neues Preset angelegt → alte Grundposition weg
+            try:
+                self._wait(self._submit(lambda: self._require().remove_preset(old)))
+            except OnvifError as e:
+                log.info("PTZ Kamera %s: alte Grundposition %s nicht entfernt (%s)", self.id, old, e)
+        with self.lock:
+            self.preset = token
+            self.moving = False
+            if self.mode == "manual":
+                self.mode, self.until = "idle", None
+            self.view = "home"
+        self._presets = (0.0, self._presets[1])
+        self.presets(max_age=0)
+        self._publish_state()
+        return {"token": token, "name": name}
+
     def remove_preset(self, token: str) -> None:
         self._require()
         self._wait(self._submit(lambda: self._require().remove_preset(token)))

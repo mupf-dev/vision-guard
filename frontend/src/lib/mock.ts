@@ -66,6 +66,7 @@ const INV_OFF = {
 };
 
 // PTZ-Mock: Kamera 1 schwenkbar, Zustand im Speicher
+const tvShowing: Record<string, { camera_id: number; camera_name: string | null; since: string; until: string; source: string } | undefined> = {};
 const ptzPresets = [{ token: "1", name: "Grundposition" }, { token: "2", name: "Tor" }];
 let ptzState: PtzState = {
   mode: "idle", view: "home", moving: false, preset: "1", preset_name: "Grundposition", until: null,
@@ -183,6 +184,8 @@ let settings: Settings = {
   nightly_mode: "preview", nightly_time: "03:00", nightly_auto_merge_min: 0.55, nightly_auto_merge_margin: 0.08,
   nightly_review_min: 0.4, nightly_review_max_per_day: 5, nightly_curate: true, nightly_thresholds: true,
   nightly_cleanup_days: 3,
+  tv_targets: [{ id: "wohnzimmer", name: "Fernseher Wohnzimmer", enabled: true, type: "dlna", description_url: "http://192.168.1.50:9197/dmr" }],
+  tv_stream_base_url: "http://192.168.1.10:8090",
   llm_key_configured: { openai_compat: false, anthropic: false },
 };
 
@@ -619,8 +622,34 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     }
     if (sub === "/resume") return json(ptzSet({ mode: "idle", view: "home", preset: "1", preset_name: "Grundposition", until: null }));
     if (sub === "/pause") return json(ptzSet({ paused_until: body?.minutes ? new Date(Date.now() + body.minutes * 60_000).toISOString() : null }));
+    if (sub === "/home" && method === "POST") {
+      const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "Grundposition" }; ptzPresets.push(p);
+      const cam = cameras.find((c) => c.id === Number(m![1])); if (cam) cam.ptz = { ...cam.ptz, home_preset: p.token };
+      return json({ ...p, state: ptzSet({ mode: "idle", view: "home", preset: p.token, preset_name: p.name, until: null }) });
+    }
     if (sub === "/presets" && method === "POST") { const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "Neu" }; ptzPresets.push(p); return json(p, 201); }
     if (sub === "/presets" && method === "DELETE") { const i = ptzPresets.findIndex((x) => x.token === decodeURIComponent((m![3] ?? "").slice(1))); if (i >= 0) ptzPresets.splice(i, 1); return json(undefined, 204); }
+  }
+  // Fernseher (CONTRACT TV.C)
+  if (path === "/tv" && method === "GET") {
+    return json(settings.tv_targets.map((t) => ({ id: t.id, name: t.name, enabled: t.enabled, last_error: null,
+      showing: tvShowing[t.id] && Date.parse(tvShowing[t.id]!.until) > Date.now() ? tvShowing[t.id] : null })));
+  }
+  if (path === "/tv/probe") {
+    await new Promise((r) => setTimeout(r, 600));
+    return json(String(body?.description_url).includes("fail")
+      ? { ok: false, description_url: body?.description_url, name: null, model: null, error: "Fernseher nicht erreichbar (eingeschaltet?)" }
+      : { ok: true, description_url: /^https?:/.test(body?.description_url) ? body.description_url : `http://${body?.description_url}:9197/dmr`, name: "Samsung QN900A 75 TV", model: "GQ75QN900ATXZG", error: null });
+  }
+  if ((m = path.match(/^\/tv\/([^/]+)\/(show|stop)$/))) {
+    const t = settings.tv_targets.find((x) => x.id === decodeURIComponent(m![1]));
+    if (!t) return json({ detail: "Fernseher nicht gefunden" }, 404);
+    if (m[2] === "show") {
+      const cam = cameras.find((c) => c.id === body?.camera_id);
+      tvShowing[t.id] = { camera_id: body?.camera_id, camera_name: cam?.name ?? null, since: new Date().toISOString(),
+        until: new Date(Date.now() + (body?.duration_s ?? 60) * 1000).toISOString(), source: "manual" };
+    } else delete tvShowing[t.id];
+    return json({ id: t.id, name: t.name, enabled: t.enabled, showing: tvShowing[t.id] ?? null, last_error: null });
   }
   if (path === "/cameras/test") {
     await new Promise((r) => setTimeout(r, 900));

@@ -219,7 +219,15 @@ class ActionPtz(BaseModel):
     hold_s: float = Field(30, ge=5, le=3600)
 
 
-Action = ActionSnapshot | ActionClip | ActionMqtt | ActionWebhook | ActionPush | ActionPtz
+class ActionTv(BaseModel):
+    """Fernseher: Livebild einer Kamera per DLNA auf einem Fernseher zeigen (CONTRACT TV.D)."""
+    type: Literal["tv"]
+    target: Optional[str] = Field(None, max_length=40)   # id aus tv_targets; None = alle aktiven
+    camera_id: Optional[int] = None                      # None = Kamera des Ereignisses
+    duration_s: float = Field(60, ge=10, le=3600)
+
+
+Action = ActionSnapshot | ActionClip | ActionMqtt | ActionWebhook | ActionPush | ActionPtz | ActionTv
 
 
 # ---------- PTZ (ONVIF) – Kamera-Feld `ptz`
@@ -468,6 +476,24 @@ NOTIFY_SOURCES = ("rule", "health", "pet", "review", "report", "sensor")
 NOTIFY_ROUTE_SOURCES = ("health", "pet", "review", "report", "sensor")   # rule: Ziel steht in der Aktion push
 
 
+class TvTarget(BaseModel):
+    """Fernseher (DLNA-MediaRenderer), CONTRACT TV.A."""
+    id: str = Field(pattern=r"^[a-z0-9_-]{1,40}$")
+    name: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
+    type: Literal["dlna"] = "dlna"
+    description_url: str = Field(min_length=1, max_length=300)
+
+    @field_validator("description_url")
+    @classmethod
+    def _desc(cls, v: str) -> str:
+        from .tv import normalize_description_url
+        try:
+            return normalize_description_url(v)
+        except ValueError as e:
+            raise ValueError(str(e)) from None
+
+
 class PushTarget(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9_-]{1,40}$")
     type: Literal["ntfy", "pushover"]
@@ -641,6 +667,9 @@ class SettingsModel(BaseModel):
     nightly_curate: bool = True
     nightly_thresholds: bool = True
     nightly_cleanup_days: int = Field(3, ge=0, le=365)
+    # Fernseher (DLNA), CONTRACT TV.A
+    tv_targets: list[TvTarget] = Field(default_factory=list, max_length=10)
+    tv_stream_base_url: Optional[str] = Field(None, max_length=300)
 
     @field_validator("nightly_time")
     @classmethod
@@ -734,16 +763,24 @@ class SettingsModel(BaseModel):
             raise ValueError("Vokabular-Schlüssel (label) müssen eindeutig sein")
         return v
 
-    @field_validator("public_base_url")
+    @field_validator("public_base_url", "tv_stream_base_url")
     @classmethod
-    def _base_url(cls, v: Optional[str]) -> Optional[str]:
+    def _base_url(cls, v: Optional[str], info: Any) -> Optional[str]:
         if v is None:
             return None
         v = v.strip().rstrip("/")
         if not v:
             return None
         if not re.match(r"^https?://[^\s/]+", v):
-            raise ValueError("public_base_url muss mit http:// oder https:// beginnen")
+            raise ValueError(f"{info.field_name} muss mit http:// oder https:// beginnen")
+        return v
+
+    @field_validator("tv_targets")
+    @classmethod
+    def _tv_unique(cls, v: list[TvTarget]) -> list[TvTarget]:
+        ids = [t.id for t in v]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Fernseher-IDs müssen eindeutig sein")
         return v
 
     @field_validator("mqtt_prefix")
@@ -838,6 +875,8 @@ class SettingsPatch(BaseModel):
     nightly_curate: Optional[bool] = None
     nightly_thresholds: Optional[bool] = None
     nightly_cleanup_days: Optional[int] = None
+    tv_targets: Optional[list[dict[str, Any]]] = None
+    tv_stream_base_url: Optional[str] = None   # "" → null
 
 
 class PushTestIn(BaseModel):

@@ -210,7 +210,34 @@ export type RuleAction =
   /** W1: Push an ein Ziel aus Settings.push_targets (target null = alle aktiven Ziele) */
   | { type: "push"; target: string | null; title: string; message: string; priority: PushPriority; image: "snapshot" | "crop" | "none" }
   /** PTZ: Kamera zu einer gespeicherten Position fahren (null = Kamera des Ereignisses / Grundposition) */
-  | { type: "ptz"; camera_id: number | null; preset: string | null; hold_s: number };
+  | { type: "ptz"; camera_id: number | null; preset: string | null; hold_s: number }
+  /** Fernseher: Livebild per DLNA zeigen (target null = alle aktiven, camera_id null = Kamera des Ereignisses) */
+  | { type: "tv"; target: string | null; camera_id: number | null; duration_s: number };
+
+/** Fernseher (DLNA-MediaRenderer), Settings.tv_targets (CONTRACT TV.A) */
+export interface TvTarget {
+  id: string;
+  name: string;
+  enabled: boolean;
+  type: "dlna";
+  description_url: string;
+}
+
+export interface TvStatus {
+  id: string;
+  name: string;
+  enabled: boolean;
+  showing: { camera_id: number; camera_name: string | null; since: string; until: string; source: string } | null;
+  last_error: string | null;
+}
+
+export interface TvProbeResult {
+  ok: boolean;
+  description_url: string;
+  name: string | null;
+  model: string | null;
+  error: string | null;
+}
 
 export interface Rule {
   id: number;
@@ -567,6 +594,9 @@ export interface Settings {
   nightly_curate: boolean;
   nightly_thresholds: boolean;
   nightly_cleanup_days: number;
+  // Fernseher (CONTRACT TV.A) – nur mit Anmeldung im Browser änderbar, für API-Keys ausgeblendet
+  tv_targets: TvTarget[];
+  tv_stream_base_url: string | null;
 }
 
 export interface InventoryVocabEntry {

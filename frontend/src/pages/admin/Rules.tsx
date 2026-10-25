@@ -9,7 +9,7 @@ import { toast } from "../../lib/store";
 import { ConditionsBlock, RULE_TEMPLATES, SENSOR_STATE_NAME, SensorStatePicker, useConditionSummary, useSensors } from "../../components/RuleConditions";
 import { ALL_GESTURES, GESTURE_HINT, GESTURE_NAME, POSTURE_TRIGGER_NAME, fmtDuration } from "../../lib/pose";
 import { GestureIcon } from "../../components/GestureIcon";
-import { Move } from "lucide-react";
+import { Move, Tv } from "lucide-react";
 
 const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}", "{posture}", "{gesture}", "{repeat}", "{sensor}", "{sensor_state}"];
 
@@ -33,6 +33,7 @@ const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactN
   webhook: { name: "Webhook", icon: <Globe size={15} /> },
   push: { name: "Push", icon: <BellRing size={15} /> },
   ptz: { name: "Kamera schwenken", icon: <Move size={15} /> },
+  tv: { name: "Auf Fernseher zeigen", icon: <Tv size={15} /> },
 };
 
 function newAction(t: RuleAction["type"]): RuleAction {
@@ -43,6 +44,7 @@ function newAction(t: RuleAction["type"]): RuleAction {
     case "webhook": return { type: "webhook", url: "", method: "POST", headers: {}, body: null };
     case "push": return { type: "push", target: null, title: "{rule}", message: "{label} an {camera} ({zone})", priority: "default", image: "snapshot" };
     case "ptz": return { type: "ptz", camera_id: null, preset: null, hold_s: 30 };
+    case "tv": return { type: "tv", target: null, camera_id: null, duration_s: 60 };
   }
 }
 
@@ -201,6 +203,39 @@ function PtzActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "ptz"
   );
 }
 
+/** Fernseher: Livebild per DLNA im Vollbild zeigen (CONTRACT TV.D). */
+function TvActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "tv" }>; onChange: (a: RuleAction) => void }) {
+  const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
+  const tvs = useQuery({ queryKey: ["tvs"], queryFn: api.tvs, staleTime: 30_000 });
+  if (tvs.data && !tvs.data.length) {
+    return <div className="hint" style={{ fontSize: 13, color: "var(--warn)" }}>Noch kein Fernseher eingerichtet – unter Einstellungen → „Fernseher“ anlegen.</div>;
+  }
+  return (
+    <div className="form-grid">
+      <div className="field"><label>Fernseher</label>
+        <select className="select" value={a.target ?? ""} onChange={(e) => onChange({ ...a, target: e.target.value || null })}>
+          <option value="">Alle aktiven</option>
+          {a.target && !(tvs.data ?? []).some((t) => t.id === a.target) && <option value={a.target}>{a.target} (unbekannt)</option>}
+          {(tvs.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}{t.enabled ? "" : " (aus)"}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Kamera</label>
+        <select className="select" value={a.camera_id ?? ""} onChange={(e) => onChange({ ...a, camera_id: e.target.value ? Number(e.target.value) : null })}>
+          <option value="">Kamera des Ereignisses</option>
+          {(cams.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+      <div className="field span-2"><label>Anzeigen für</label>
+        <Range value={a.duration_s} min={10} max={600} step={10} format={(v) => (v < 120 ? `${v} s` : `${Math.round(v / 60)} min`)} onChange={(v) => onChange({ ...a, duration_s: v })} />
+      </div>
+      <div className="hint muted span-2" style={{ fontSize: 12 }}>
+        Unterbricht das laufende Programm im Vollbild und kehrt danach zurück. Gegen nächtliches Einschalten: Zeitplan
+        und Sperrzeit der Regel nutzen.
+      </div>
+    </div>
+  );
+}
+
 function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: RuleAction) => void; onRemove: () => void }) {
   const meta = ACTION_META[a.type];
   return (
@@ -211,6 +246,7 @@ function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: 
       {a.type === "snapshot" && <div className="muted" style={{ fontSize: 13 }}>Speichert ein Vollbild zum Ereignis.</div>}
       {a.type === "push" && <PushActionFields a={a} onChange={onChange} />}
       {a.type === "ptz" && <PtzActionFields a={a} onChange={onChange} />}
+      {a.type === "tv" && <TvActionFields a={a} onChange={onChange} />}
       {a.type === "clip" && (
         <div className="form-grid">
           <div className="field"><label>Vorlauf</label><Range value={a.pre_s} min={0} max={30} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, pre_s: v })} /></div>

@@ -34,9 +34,12 @@ RAM-Ringpuffer, Push aufs Handy, MQTT-Nachricht oder Webhook.
   MQTT, Webhook oder Mail
 - **Frag die Kamera:** Fragen zum aktuellen Bild an ein lokales Bildmodell (Moondream, Dienst `vlm`, optional)
 - **Kamera-Gesundheit:** verdeckt, unscharf, zu dunkel, eingefroren oder verschoben – mit Hinweis
-- **Schwenk-Kameras (PTZ über ONVIF):** Steuerkreuz im Live-Bild, gespeicherte Positionen, Grundposition,
+- **Schwenk-Kameras (PTZ über ONVIF):** Steuerkreuz im Live-Bild, Positionen und Grundposition direkt dort speichern,
   Patrouille nach Zeitplan, Verfolgen von Personen/Tieren, Regel-Aktion „Kamera schwenken“; Zonen, Gegenstände und
   Sensoren gelten für die Grundposition und pausieren, solange die Kamera woanders hinschaut
+- **Livebild auf dem Fernseher (DLNA):** Regel-Aktion „Auf Fernseher zeigen“ (z. B. Person an der Tür → Kamera
+  60 s im Vollbild, danach zurück zum Programm), Test-Knopf in den Einstellungen, MCP `show_on_tv`; getestet mit
+  Samsung (Tizen). Der Fernseher muss VisionGuard im Heimnetz erreichen (unter WSL2: Portweiterleitung, AGENTS.md)
 - **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
 - **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
 - **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse, Sensoren;
@@ -161,6 +164,7 @@ damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten könne
 | `list_sensors(…)` / `get_sensor(…)` | virtuelle Sensoren und Vorräte |
 | `get_shopping_list()` / `add_to_shopping_list(name)` ✎ | Einkaufsliste |
 | `ptz_status(camera_id? \| camera_name?)` / `ptz_move_to(preset, camera_id? \| camera_name?, hold_s?)` ✎ | Schwenk-Kameras: Ausrichtung und Positionen / Position anfahren (danach `get_camera_snapshot`) |
+| `show_on_tv(camera_id? \| camera_name?, tv?, duration_s?)` ✎ | Livebild einer Kamera auf dem Fernseher zeigen |
 
 Beispiel Claude Code:
 

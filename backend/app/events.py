@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from . import go2rtc, media_sign, notifications, registry, rules, settings_store, state
+from . import go2rtc, media_sign, notifications, registry, rules, settings_store, state, tv
 from .db import SessionLocal
 from .models import KV, Event, Identity, utcnow
 from .rules import TrackState
@@ -654,6 +654,8 @@ class Processor:
             self._run_push(action, rule, tr, ev, ctx, date, cond)
         elif typ == "ptz":
             self._run_ptz(action, rule, tr.camera_id)
+        elif typ == "tv":
+            tv.run_action(action, tr.camera_id, rule["name"])
         else:
             log.warning("Unbekannte Aktion: %s", typ)
 
@@ -1081,6 +1083,8 @@ class Processor:
                     log.debug("%s '%s': Snapshot = Standbild des Sensors (%s)", label, rule["name"], snap)
                 elif typ == "ptz":
                     self._run_ptz(a, rule, cam_id)
+                elif typ == "tv":
+                    tv.run_action(a, cam_id, rule["name"])
                 elif typ in ("snapshot", "clip"):
                     log.info("%s '%s': Aktion %s braucht ein Ereignis – übersprungen", label, rule["name"], typ)
             except Exception:
