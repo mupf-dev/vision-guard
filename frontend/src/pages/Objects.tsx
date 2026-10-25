@@ -9,6 +9,7 @@ import type { InventoryItem, InventorySearchHit, InventoryState } from "../lib/t
 import { fmtAgo, fmtDateTime, fmtTime } from "../lib/format";
 import { ConfirmDialog, Dialog, Empty, Img, Loading } from "../components/ui";
 import { toast, useLive } from "../lib/store";
+import { ObjectChanges } from "./ObjectChanges";
 
 const STATE_NAME: Record<InventoryState, string> = { present: "sichtbar", missing: "nicht mehr gesehen", stale: "unbestätigt" };
 const STATE_HINT: Record<InventoryState, string> = {
@@ -254,6 +255,12 @@ export function ObjectsPage() {
     return [...m.entries()].sort(([a], [b]) => (a === NO_ROOM ? 1 : b === NO_ROOM ? -1 : a.localeCompare(b, "de")));
   }, [items, f.q]);
 
+  const tab = sp.get("tab") === "changes" ? "changes" : "overview";
+  const setTab = (t: string) => {
+    const n = new URLSearchParams(sp);
+    if (t === "changes") n.set("tab", t); else n.delete("tab");
+    setSp(n, { replace: true });
+  };
   const hasFilter = [f.q, f.camera, f.room, f.state, f.label].some(Boolean);
   const q = f.q ? search : list;
   const loading = q.isLoading;
@@ -270,12 +277,18 @@ export function ObjectsPage() {
         </div>
       </div>
 
+      <div className="tabs">
+        <button className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}><Package size={15} />Übersicht</button>
+        <button className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}><History size={15} />Veränderungen</button>
+      </div>
+
+      {tab === "changes" ? <ObjectChanges cams={cams.data ?? []} rooms={rooms} onPick={setPicked} /> : <>
       <div className="card filters">
         <div className="field" style={{ flex: "1 1 280px" }}><label>Suche</label>
           <div className="input-group">
             <Search size={15} />
             <input className="input input-sm" value={qInput} placeholder="Wo ist …? z. B. Fernbedienung, Schlüssel, Brille"
-              onChange={(e) => setQInput(e.target.value)} autoFocus />
+              onChange={(e) => setQInput(e.target.value)} autoFocus={tab === "overview"} />
           </div>
         </div>
         <div className="field"><label>Kamera</label>
@@ -339,6 +352,7 @@ export function ObjectsPage() {
             ))}
           </div>
         ) : <ItemGrid items={items} onPick={setPicked} />}
+      </>}
 
       {picked && <ItemDialog item={picked} onClose={() => setPicked(null)} />}
     </div>
