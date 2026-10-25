@@ -114,6 +114,20 @@ POSE_MATCH_IOU = _float("VG_POSE_MATCH_IOU", 0.3)                      # Pose-Pe
 POSE_UNLOAD_S = _float("VG_POSE_UNLOAD_S", 600.0)                      # Modell entladen ohne Pose-Kamera
 LYING_GRACE_S = _float("VG_LYING_GRACE_S", 30.0)                       # Vorgabe für fall_track_grace_s (Settings gewinnen)
 
+# --- Personen-Wiedererkennung über Kameras (C2, ReID) ----------------------
+# OSNet x0_25 (MSMT17, torchreid, MIT) als ONNX; Standard CPU (≈ 6 ms je Ausschnitt, 0 VRAM – reidtest).
+REID_MODEL_URL = _env("VG_REID_MODEL_URL", "https://huggingface.co/kornia/osnet/resolve/main/osnet_x0_25_msmt17.onnx")
+REID_MODEL_SHA256 = _env("VG_REID_MODEL_SHA256", "e78604f4ccda49b8f41cd0f8f7303800ce75d2361895ebb0729513c1bf53d277")
+REID_DEVICE = _env("VG_REID_DEVICE", "cpu").lower()                   # cpu | cuda
+REID_THREADS = _int("VG_REID_THREADS", 2)                              # CPU-Threads der ONNX-Sitzung
+REID_INTERVAL_S = _float("VG_REID_INTERVAL_S", 3.0)                    # je Track höchstens alle n s ein Embedding
+REID_MAX_PER_TRACK = _int("VG_REID_MAX_PER_TRACK", 5)                  # höchstens n Embeddings je Track
+REID_MIN_HEIGHT = _int("VG_REID_MIN_HEIGHT", 128)                      # Box-Höhe im Detect-Bild (px)
+REID_MIN_SCORE = _float("VG_REID_MIN_SCORE", 0.5)                      # Detektions-Score des Tracks
+REID_FLIP = _bool("VG_REID_FLIP", False)                               # Mittel aus Bild + Spiegelbild (bringt laut reidtest nichts)
+REID_MAX_BATCH = _int("VG_REID_MAX_BATCH", 16)
+REID_UNLOAD_S = _float("VG_REID_UNLOAD_S", 600.0)                      # Modell entladen ohne ReID-Kamera
+
 # --- misc -----------------------------------------------------------------
 STATUS_INTERVAL_S = _float("VG_STATUS_INTERVAL_S", 5.0)
 CONFIG_REFRESH_S = _float("VG_CONFIG_REFRESH_S", 60.0)
