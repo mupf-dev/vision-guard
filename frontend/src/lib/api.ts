@@ -116,6 +116,9 @@ export interface EventQuery extends Query {
   active?: boolean;
   has_snapshot?: boolean;
   has_clip?: boolean;
+  /** W2 C1: nur Notfall-Events (attributes.alert) bzw. quittiert ja/nein */
+  alert?: boolean;
+  acknowledged?: boolean;
   limit?: number;
   offset?: number;
 }

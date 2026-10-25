@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { CameraStatus, DetectionsMsg, VGEvent } from "./types";
-import type { InventoryItem, InventoryMsg } from "./types";
+import type { GestureMsg, InventoryItem, InventoryMsg } from "./types";
 
 export type WsState = "connecting" | "open" | "closed";
 
@@ -21,6 +21,9 @@ interface LiveState {
   /** per WebSocket gelöschte Item-IDs */
   inventoryDeleted: Record<number, true>;
   applyInventory: (m: InventoryMsg) => void;
+  /** W2 D1: letzte Geste je Kamera (Live-Overlay blendet sie kurz am Track ein) */
+  gestures: Record<number, GestureMsg & { at: number }>;
+  setGesture: (m: GestureMsg) => void;
 }
 
 const FEED_MAX = 80;
@@ -51,6 +54,8 @@ export const useLive = create<LiveState>((set) => ({
       merged.sort((a, b) => (a.start_ts < b.start_ts ? 1 : -1));
       return { feed: merged.slice(0, FEED_MAX) };
     }),
+  gestures: {},
+  setGesture: (m) => set((s) => ({ gestures: { ...s.gestures, [m.camera_id]: { ...m, at: Date.now() } } })),
   inventory: {},
   inventoryFlash: {},
   inventoryDeleted: {},

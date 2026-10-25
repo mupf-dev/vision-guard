@@ -1,7 +1,9 @@
 import { Fragment, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera as CamIcon, Clapperboard, Clock, Film, Image as ImageIcon, ScanFace, Trash2, Zap, MapPin, Fingerprint } from "lucide-react";
+import { Camera as CamIcon, CheckCheck, Clapperboard, Clock, Film, Image as ImageIcon, ScanFace, Siren, Trash2, Zap, MapPin, Fingerprint } from "lucide-react";
+import { eventAlert, POSTURE_NAME } from "../lib/pose";
+import type { Posture } from "../lib/types";
 import type { Camera, VGEvent } from "../lib/types";
 import { api } from "../lib/api";
 import { labelColor } from "../lib/labels";
@@ -34,9 +36,20 @@ export function FeedItem({ e, onClick }: { e: VGEvent; onClick: () => void }) {
         </div>
         <div className="t2"><CamIcon />{e.camera_name}<Clock />{fmtTime(e.start_ts)}</div>
         {e.rules?.length > 0 && <div className="t2" style={{ color: "var(--warn)" }}><Zap />{e.rules.join(", ")}</div>}
+        {eventAlert(e) && <AlertBadge e={e} />}
       </div>
     </div>
   );
+}
+
+/** W2 C1: Notfall-Kennzeichnung (offen / quittiert) */
+export function AlertBadge({ e }: { e: VGEvent }) {
+  const a = eventAlert(e);
+  if (!a) return null;
+  const p = a.posture ? POSTURE_NAME[a.posture] : "Alarm";
+  return e.acknowledged_at
+    ? <span className="badge outline" title={`quittiert ${fmtDateTime(e.acknowledged_at)}`}><CheckCheck size={11} />{p} · quittiert</span>
+    : <span className="badge bad" title={`Regel „${a.rule}“`}><Siren size={11} />{p}{e.active ? "" : " · beendet"}</span>;
 }
 
 export function EventDetailDialog({ event, onClose }: { event: VGEvent; onClose: () => void }) {
@@ -54,7 +67,15 @@ export function EventDetailDialog({ event, onClose }: { event: VGEvent; onClose:
     onError: (err: Error) => toast.error("Löschen fehlgeschlagen", err.message),
   });
   const plate = e.attributes?.plate_text ? String(e.attributes.plate_text) : null;
-  const extraAttrs = Object.entries(e.attributes ?? {}).filter(([k, v]) => k !== "plate_text" && v !== null && v !== undefined && v !== "");
+  const alert = eventAlert(e);
+  const ack = useMutation({
+    mutationFn: () => api.ackEvent(e.id),
+    onSuccess: (ev) => { toast.success("Quittiert"); qc.setQueryData(["event", e.id], ev); qc.invalidateQueries({ queryKey: ["events"] }); },
+    onError: (err: Error) => toast.error("Quittieren fehlgeschlagen", err.message),
+  });
+  const HIDDEN = new Set(["plate_text", "alert", "posture", "posture_since", "motion"]);
+  const extraAttrs = Object.entries(e.attributes ?? {}).filter(([k, v]) => !HIDDEN.has(k) && v !== null && v !== undefined && v !== "" && typeof v !== "object");
+  const posture = e.attributes?.posture ? String(e.attributes.posture) as Posture : null;
 
   return (
     <Dialog size="lg" onClose={onClose} icon={<LabelPill label={e.label} score={e.score} />}
@@ -62,6 +83,7 @@ export function EventDetailDialog({ event, onClose }: { event: VGEvent; onClose:
       footer={<>
         <button className="btn btn-danger" onClick={() => setConfirm(true)}><Trash2 size={16} />Löschen</button>
         <span className="spacer" />
+        {alert && !e.acknowledged_at && <button className="btn btn-danger" disabled={ack.isPending} onClick={() => ack.mutate()}>{ack.isPending ? <span className="spinner" /> : <CheckCheck size={16} />}Quittieren</button>}
         {e.snapshot_url && <a className="btn" href={e.snapshot_url} target="_blank" rel="noreferrer" download><ImageIcon size={16} />Snapshot</a>}
         {e.clip_url && <a className="btn" href={e.clip_url} target="_blank" rel="noreferrer" download><Film size={16} />Clip</a>}
         <button className="btn btn-primary" onClick={onClose}>Schließen</button>
@@ -93,6 +115,8 @@ export function EventDetailDialog({ event, onClose }: { event: VGEvent; onClose:
             <dt>Identität</dt>
             <dd>{e.identity ? <Link to={`/identitaeten/${e.identity.id}`} onClick={onClose}><Fingerprint size={13} style={{ verticalAlign: -2 }} /> {e.identity.display_name}</Link> : <span className="muted">–</span>}</dd>
             {plate && <><dt>Kennzeichen</dt><dd><Plate text={plate} /></dd></>}
+            {posture && <><dt>Haltung</dt><dd>{POSTURE_NAME[posture] ?? posture}{typeof e.attributes?.motion === "number" ? <span className="muted"> · Bewegung {Number(e.attributes.motion).toFixed(2)}</span> : null}</dd></>}
+            {alert && <><dt>Notfall</dt><dd><AlertBadge e={e} />{alert.repeat ? <span className="muted"> · {alert.repeat}× wiederholt</span> : null}{e.acknowledged_at ? <span className="muted"> · {fmtDateTime(e.acknowledged_at)}</span> : null}</dd></>}
             {extraAttrs.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{String(v)}</dd></Fragment>)}
             <dt>Zonen</dt>
             <dd>{e.zones?.length ? <span className="row-wrap" style={{ gap: 4 }}>{e.zones.map((z) => <span key={z} className="badge outline"><MapPin size={11} />{zoneName(z)}</span>)}</span> : <span className="muted">–</span>}</dd>

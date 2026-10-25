@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { useLive, useUi } from "../lib/store";
 import { useLiveSocket } from "../lib/useLiveSocket";
 import { isMock } from "../lib/mock";
+import { AlertBanner } from "./AlertBanner";
 
 export function Brand() {
   return (
@@ -84,6 +85,7 @@ export function Layout() {
         </div>
       </header>
       <main className="main">
+        <AlertBanner />
         <Outlet />
       </main>
     </div>

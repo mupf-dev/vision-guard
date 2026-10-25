@@ -102,6 +102,18 @@ HEALTH_ENABLED = _bool("VG_HEALTH", True)                              # globale
 HEALTH_INTERVAL_S = _float("VG_HEALTH_INTERVAL_S", 10.0)               # Prüfabstand je Kamera
 HEALTH_PUBLISH_S = _float("VG_HEALTH_PUBLISH_S", 30.0)                 # vg/internal/health spätestens alle n s
 
+# --- Pose / Haltung / Gesten (C1/D1) -----------------------------------------
+POSE_MODEL = _env("VG_POSE_MODEL", "yolo11n-pose.pt")                  # messungen.md §2: n genügt (s bringt nichts)
+POSE_IMGSZ = _int("VG_POSE_IMGSZ", 640)                                # Ganzbild
+POSE_MIN_CONF = _float("VG_POSE_MIN_CONF", 0.25)
+POSE_FPS = _float("VG_POSE_FPS", 2.0)                                  # Haltung: Bilder/s je Kamera (nur mit Person)
+GESTURE_FPS = _float("VG_GESTURE_FPS", 5.0)                            # Gesten-Kameras
+POSE_MAX_BATCH = _int("VG_POSE_MAX_BATCH", 8)                          # Kameras je Pose-Batch
+POSE_MAX_BUSY = _float("VG_POSE_MAX_BUSY", 0.2)                        # max. GPU-Zeitanteil der Pose-Stufe
+POSE_MATCH_IOU = _float("VG_POSE_MATCH_IOU", 0.3)                      # Pose-Person ↔ Track
+POSE_UNLOAD_S = _float("VG_POSE_UNLOAD_S", 600.0)                      # Modell entladen ohne Pose-Kamera
+LYING_GRACE_S = _float("VG_LYING_GRACE_S", 30.0)                       # Vorgabe für fall_track_grace_s (Settings gewinnen)
+
 # --- misc -----------------------------------------------------------------
 STATUS_INTERVAL_S = _float("VG_STATUS_INTERVAL_S", 5.0)
 CONFIG_REFRESH_S = _float("VG_CONFIG_REFRESH_S", 60.0)

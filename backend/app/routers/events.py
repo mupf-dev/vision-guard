@@ -22,7 +22,8 @@ def _utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def query_events(db: Session, *, camera_id=None, label=None, identity_id=None, since=None, until=None,
-                 active=None, has_snapshot=None, has_clip=None, limit=50, offset=0) -> dict:
+                 active=None, has_snapshot=None, has_clip=None, alert=None, acknowledged=None,
+                 limit=50, offset=0) -> dict:
     conds = []
     if camera_id is not None:
         conds.append(Event.camera_id == camera_id)
@@ -41,6 +42,11 @@ def query_events(db: Session, *, camera_id=None, label=None, identity_id=None, s
         conds.append(Event.snapshot_path.isnot(None) if has_snapshot else Event.snapshot_path.is_(None))
     if has_clip is not None:
         conds.append(Event.clip_path.isnot(None) if has_clip else Event.clip_path.is_(None))
+    if alert is not None:
+        # C1: Notfall-Events = von einer Haltungs-Regel oder Regel mit Wiederholung ausgelöst (attributes.alert)
+        conds.append(Event.attributes.has_key("alert") if alert else ~Event.attributes.has_key("alert"))
+    if acknowledged is not None:
+        conds.append(Event.acknowledged_at.isnot(None) if acknowledged else Event.acknowledged_at.is_(None))
     total = db.scalar(select(func.count()).select_from(Event).where(*conds)) or 0
     rows = db.scalars(select(Event).where(*conds).order_by(Event.start_ts.desc(), Event.id)
                       .limit(limit).offset(offset)).unique().all()
@@ -58,12 +64,15 @@ def list_events(
     active: Optional[bool] = None,
     has_snapshot: Optional[bool] = None,
     has_clip: Optional[bool] = None,
+    alert: Optional[bool] = Query(None, description="nur Notfall-Events (Haltung/Wiederholung, attributes.alert)"),
+    acknowledged: Optional[bool] = Query(None, description="quittiert ja/nein"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
     return query_events(db, camera_id=camera_id, label=label, identity_id=identity_id, since=since,
                         until=until, active=active,
-                        has_snapshot=has_snapshot, has_clip=has_clip, limit=limit, offset=offset)
+                        has_snapshot=has_snapshot, has_clip=has_clip, alert=alert, acknowledged=acknowledged,
+                        limit=limit, offset=offset)
 
 
 @router.get("/{event_id}")

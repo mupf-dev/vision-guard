@@ -370,6 +370,13 @@ function mkEvent(i: number, ageS: number): VGEvent {
   };
 }
 let events: VGEvent[] = Array.from({ length: 140 }, (_, i) => mkEvent(i, i * 620 + 20));
+// W2 C1: ein laufender, unquittierter Sturz-Notfall (Banner „Quittieren“)
+events = [{
+  ...events[0], id: "mock-fall-1", label: "person", active: true, end_ts: null, acknowledged_at: null, rules: ["Sturz Wohnzimmer"],
+  attributes: { posture: "lying", posture_since: Date.now() / 1000 - 95, motion: 0.01,
+    alert: { rule: "Sturz Wohnzimmer", rule_id: 9, trigger: "posture", repeat: 1, fired_at: ago(35), first_fired_at: ago(35),
+      posture: "lying", posture_since: ago(95) } },
+}, ...events.slice(1)];
 
 function json(data: unknown, status = 200): Response {
   return new Response(data === undefined ? null : JSON.stringify(data), {
@@ -405,6 +412,8 @@ function filterEvents(p: URLSearchParams, base = events) {
   const since = p.get("since"); if (since) list = list.filter((e) => e.start_ts >= since);
   const until = p.get("until"); if (until) list = list.filter((e) => e.start_ts <= until);
   const active = p.get("active"); if (active) list = list.filter((e) => String(e.active) === active);
+  const alert = p.get("alert"); if (alert) list = list.filter((e) => ("alert" in (e.attributes ?? {})) === (alert === "true"));
+  const ack = p.get("acknowledged"); if (ack) list = list.filter((e) => (e.acknowledged_at != null) === (ack === "true"));
   const limit = Number(p.get("limit") ?? 50), offset = Number(p.get("offset") ?? 0);
   return { items: list.slice(offset, offset + limit), total: list.length };
 }

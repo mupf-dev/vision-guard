@@ -19,7 +19,9 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 | `frame_metrics.py` | Bildkennzahlen auf der CPU (320 px Graustufen): Helligkeit, Kontrast, normierte Schärfe, flache Blöcke, Sättigung; Vergleich mit Referenz per Phasenkorrelation (C5, später A3) |
 | `health.py` | Kamera-Gesundheit (C5, eigener Thread, nur CPU): `dark`/`covered`/`blur`/`frozen`/`moved`, Referenzbilder, `vg/internal/health/{id}`, Kommando `health_reference` (siehe unten) |
 | `util.py` | Hilfsfunktionen; **einzige Schreibstelle für Medien**: `store_media(rel_path, bytes)` / `write_jpeg` und `media_target(rel_path, suffix)` für ffmpeg-Ausgaben (Clips), jeweils atomar. Andere Module schreiben nie direkt nach `VG_MEDIA_DIR` (Vorbereitung Medien-Upload, D3) |
-| `selftest.py` | Standalone-Test ohne Backend/MQTT (`--inventory` für die Gegenstands-Pipeline) |
+| `pose.py` / `posture.py` / `gestures.py` | Pose-Stufe (C1/D1): YOLO11n-pose auf Kameras mit `pose_enabled`/`gesture_enabled`, Haltung `standing/sitting/lying`, Armgesten → `vg/internal/gesture/{id}` (siehe unten) |
+| `selftest.py` | Standalone-Test ohne Backend/MQTT (`--inventory` für die Gegenstands-Pipeline, `--pose`/`--gestures` für die Pose-Stufe) |
+| `posecheck.py` | Messwerkzeug C1/D1: Videodatei offline durch Detektor + Tracker + Pose (Stürze gegen Standbild-Abschnitte, Gesten) |
 
 ### Identifikation
 
@@ -90,6 +92,24 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 * `vg/internal/health/{id}` (QoS 1, retain) alle `VG_HEALTH_PUBLISH_S` (30 s) und bei Änderung; bei abgeschalteter
   Prüfung einmal `enabled: false`. `vg/internal/system.perf.health = {ms, cameras}`.
 
+## Pose, Haltung und Gesten (C1/D1)
+
+* Nur auf Kameras mit `pose_enabled` oder `gesture_enabled` und nur, solange ein bestätigter Personen-Track läuft:
+  **Ganzbild-Pose** `yolo11n-pose` (640 px, fp16; messungen.md §2: genauer und billiger als Ausschnitte) mit 2 Hz
+  (Haltung) bzw. 5 Hz (Gesten). Eigener Thread, neuestes Bild je Kamera (ältere verworfen), mehrere Kameras je
+  Batch, GPU abwechselnd mit der Detektion (`GpuTurn`), Budget `VG_POSE_MAX_BUSY` (20 %). Modell lädt bei Bedarf
+  (einmaliger Download nach `/models/pose`), entlädt nach 10 min ohne Pose-Kamera; Ladefehler → `models.pose =
+  "error: …"`, Detektion läuft weiter. ≈ 0,1 GB VRAM, 9–13 ms je Bild.
+* **Haltung** je Bild: `lying`, wenn die Box breiter als 1,3 × hoch ist oder Rumpf/Körper > 55° geneigt ist;
+  `upright` (Box deutlich höher als breit bzw. Rumpf senkrecht) beendet „liegt“; sonst `standing`/`sitting` über
+  Oberschenkelwinkel. Geglättet über 2 s → `attributes.posture`, `posture_since`, `motion` (Track-`update` bei
+  Wechsel).
+* **Nachlauf** (`fall_track_grace_s`, Settings): Der Detektor verliert liegende Personen oft. Ein liegender Track
+  endet erst nach dieser Zeit; eine flache Detektion oder Pose-Person an derselben Stelle wird wieder angehängt.
+  Steht an der Stelle eine Person aufrecht, endet der Nachlauf sofort.
+* **Gesten** (`arms_up`, `arm_left`, `arm_right`, `arms_cross` = X über dem Kopf) regelbasiert auf den Keypoints;
+  gelten nach `gesture_hold_s` in ≥ 80 % der Pose-Bilder, danach 5 s Sperre je Track.
+
 ## Track-Lebenszyklus
 
 * `start`: nach ≥ 3 Treffern mit `score ≥ min_score` (Label = score-gewichtete Mehrheit).
@@ -118,6 +138,9 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 | `VG_INVENTORY_IMGSZ` / `VG_INVENTORY_TILE_IMGSZ` | `1280` / `960` | Auflösung Gesamtbild / je Kachel |
 | `VG_INVENTORY_TILES` / `VG_INVENTORY_OVERLAP` | `2x2` / `0.15` | Kacheln (Spalten×Zeilen, `0` = aus) |
 | `VG_INVENTORY_MAX_BUSY` | `0.25` | max. GPU-Zeitanteil des Inventars (sonst wird das Intervall gestreckt) |
+| `VG_POSE_MODEL` | `yolo11n-pose.pt` | Pose-Modell (C1/D1) |
+| `VG_POSE_FPS` / `VG_GESTURE_FPS` | `2` / `5` | Pose-Bilder je Sekunde und Kamera (Haltung / Gesten-Kameras) |
+| `VG_POSE_MAX_BUSY` | `0.2` | max. GPU-Zeitanteil der Pose-Stufe (darüber werden Bilder übersprungen) |
 | `VG_INVENTORY_HALF` / `VG_INVENTORY_MIN_CONF` | `1` / `0.05` | fp16; Untergrenze für `predict(conf)` |
 | `VG_INVENTORY_SOURCE` | `auto` | `auto` (Ringpuffer → go2rtc → RTSP), `buffer`, `go2rtc`, `rtsp` |
 | `VG_INVENTORY_CROP_MIN_S` / `VG_INVENTORY_UNLOAD_S` / `VG_INVENTORY_PERSON_HOLD_S` | `60` / `600` / `3` | Crop-Abstand, Entladen ohne Inventar-Kamera, Zeitfenster für Verdeckung |
@@ -140,6 +163,13 @@ docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://go2
     --no-face --no-plate --no-pet --inventory --inventory-interval 3 --seconds 60
 # Kamera-Gesundheit mitprüfen (sonst im Selbsttest aus; Referenzbilder nur in einem temporären Ordner):
 docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://testcam:8554/cam5 --health --seconds 40
+# Pose-Stufe (Haltung/Gesten) auf allen Testkameras, z. B. Sturz-Video:
+flock ~/vg-gpu.lock docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://testcam:8554/cam3 --pose --seconds 120
+# Offline-Messung: Stürze (Standbild-Abschnitte von sturz.mp4) bzw. Gesten
+flock ~/vg-gpu.lock docker compose run --rm --no-deps -v "$PWD/testcam/videos:/videos:ro" worker \
+    python -m vg_worker.posecheck /videos/sturz.mp4 --dwell 5
+# Hänger untersuchen: Stacks aller Threads ins Log
+docker compose kill --signal=USR1 worker
 # Im Betrieb:
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -C 20 -v
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/health/#' -C 2 -v

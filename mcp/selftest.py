@@ -23,6 +23,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 EXPECTED = {"find_object", "list_visible_objects", "get_object_history", "list_cameras",
             "get_camera_snapshot", "who_is_where"}
 EXPECTED |= {"what_changed", "list_notifications", "get_camera_health"}   # Welle 1 (B2, A1, C5)
+EXPECTED |= {"list_alerts", "acknowledge_alert"}   # Welle 2 (C1/D1)
 
 
 def _text(result) -> str:
@@ -64,6 +65,10 @@ async def main() -> int:
         # W1 B2: Veränderungen der letzten Stunde (Medien-URLs signiert)
         res = await client.call_tool("what_changed", {"since": "1h"})
         print(f"\n== what_changed {{'since': '1h'}} {'(Fehler)' if res.is_error else ''}\n{_text(res)}")
+        failed += bool(res.is_error)
+        # W2 C1: offene Notfälle (nur lesen; Quittieren braucht write und ändert Daten)
+        res = await client.call_tool("list_alerts", {"active_only": False, "limit": 3})
+        print(f"\n== list_alerts {{'active_only': False}} {'(Fehler)' if res.is_error else ''}\n{_text(res)}")
         failed += bool(res.is_error)
     print("\nSelbsttest", "mit Fehlern" if failed else "OK")
     return 1 if failed else 0
