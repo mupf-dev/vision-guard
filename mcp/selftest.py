@@ -6,7 +6,7 @@ Aufruf (API-Key aus Administration → API-Zugänge, nie ins Repo schreiben):
 
 URL Standard `http://localhost:8100/mcp` (im Container) bzw. von außen `http://localhost:8080/mcp`.
 Prüft: ohne Key → 401, list_tools, list_cameras, find_object, list_visible_objects, who_is_where,
-what_changed (W1 B2).
+what_changed (W1 B2), search_history (W3 B1).
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ EXPECTED = {"find_object", "list_visible_objects", "get_object_history", "list_c
 EXPECTED |= {"what_changed", "list_notifications", "get_camera_health"}   # Welle 1 (B2, A1, C5)
 EXPECTED |= {"list_alerts", "acknowledge_alert"}   # Welle 2 (C1/D1)
 EXPECTED |= {"list_open_questions", "answer_question", "get_pet_diary", "get_daily_report"}   # Welle 2 (D2, C3, B3)
+EXPECTED |= {"search_history"}   # Welle 3 (B1)
 
 
 def _text(result) -> str:
@@ -70,6 +71,11 @@ async def main() -> int:
         # W2 C1: offene Notfälle (nur lesen; Quittieren braucht write und ändert Daten)
         res = await client.call_tool("list_alerts", {"active_only": False, "limit": 3})
         print(f"\n== list_alerts {{'active_only': False}} {'(Fehler)' if res.is_error else ''}\n{_text(res)}")
+        failed += bool(res.is_error)
+        # W3 B1: Zeitmaschine (503 ohne pgvector/Worker ist ein Fehler – Selbsttest gegen einen vollständigen Stack)
+        res = await client.call_tool("search_history", {"query": os.environ.get("VG_HISTORY_QUERY", "eine Person"),
+                                                         "limit": 3})
+        print(f"\n== search_history {'(Fehler)' if res.is_error else ''}\n{_text(res)}")
         failed += bool(res.is_error)
     print("\nSelbsttest", "mit Fehlern" if failed else "OK")
     return 1 if failed else 0
