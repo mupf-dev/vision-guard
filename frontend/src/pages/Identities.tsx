@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Calendar, Car, Check, Clock, Combine, Eye, Fingerprint, Hand, Images, Lightbulb, Lock, PawPrint, Pencil, Save, Search,
-  Trash2, User, X,
+  ArrowLeft, Calendar, Car, Check, Clock, Combine, Eye, Fingerprint, Hand, History, Images, Lightbulb, ListChecks, Lock, PawPrint, Pencil,
+  Save, Search, Trash2, User, X,
 } from "lucide-react";
 import { api, asPaged } from "../lib/api";
 import type { Identity, IdentityKind, IdentitySuggestion, Sample, VGEvent } from "../lib/types";
@@ -13,6 +13,7 @@ import { ConfirmDialog, Dialog, Empty, Img, Loading, SearchSelect, Switch } from
 import { EventDetailDialog, Plate } from "../components/EventBits";
 import { EventGrid } from "./Events";
 import { toast } from "../lib/store";
+import { BulkDeleteDialog, BulkMergeDialog, MergeHistoryDialog, SelectionBar, similarIds, useNightlyPairs } from "./IdentityBulk";
 
 const KINDS: { k: IdentityKind; icon: React.ReactNode }[] = [
   { k: "face", icon: <User size={16} /> },
@@ -194,10 +195,28 @@ function PickSample({ s, on, onToggle }: { s: Sample; on: boolean; onToggle: () 
   );
 }
 
-function IdCard({ i, onClick, delay }: { i: Identity; onClick: () => void; delay: number }) {
+function IdCard({ i, onClick, delay, selecting, selected, onSelect }: {
+  i: Identity; onClick: () => void; delay: number;
+  /** Paket A: Auswahlmodus – Klick (bzw. Leertaste) schaltet das Häkchen, Umschalt-Klick wählt einen Bereich */
+  selecting?: boolean; selected?: boolean; onSelect?: (shift: boolean) => void;
+}) {
+  const act = (shift: boolean) => (selecting && onSelect ? onSelect(shift) : onClick());
   return (
-    <div className="id-card" onClick={onClick} role="button" tabIndex={0} onKeyDown={(k) => k.key === "Enter" && onClick()} style={{ animationDelay: `${delay}ms` }}>
+    <div className={`id-card ${selecting ? "selecting" : ""} ${selected ? "selected" : ""}`} role={selecting ? "checkbox" : "button"}
+      aria-checked={selecting ? !!selected : undefined} tabIndex={0} data-id={i.id}
+      onMouseDown={(e) => { if (e.shiftKey && selecting) e.preventDefault(); }}
+      onClick={(e) => act(e.shiftKey)}
+      onKeyDown={(k) => {
+        if (k.key === "Enter" || (selecting && k.key === " ")) { k.preventDefault(); act(k.shiftKey); }
+      }} style={{ animationDelay: `${delay}ms` }}>
       <div className="cover">
+        {onSelect && (
+          <span className="sel-check" role="presentation" title={selected ? "Abwählen" : "Auswählen (Umschalt: Bereich)"}
+            onMouseDown={(e) => e.shiftKey && e.preventDefault()}
+            onClick={(e) => { e.stopPropagation(); onSelect(e.shiftKey); }}>
+            {selected && <Check size={15} strokeWidth={3} />}
+          </span>
+        )}
         <Img src={i.cover_url} fallback={<div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--line-2)" }}><KindIcon kind={i.kind} size={56} /></div>} />
         {!i.name && <span className="badge warn">unbenannt</span>}
         {i.learning_locked && (
@@ -410,11 +429,78 @@ export function IdentitiesPage() {
   }, [all.data, kind, named, faceView, search]);
   const countOf = (k: IdentityKind) => all.data?.filter((i) => i.kind === k).length ?? 0;
 
+  // ---- Paket A: Mehrfachauswahl
+  const [selecting, setSelecting] = useState(false);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const anchor = useRef<number | null>(null);
+  const [bulk, setBulk] = useState<null | "merge" | "delete">(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const nightlyPairs = useNightlyPairs(selecting);
+  const byId = useMemo(() => new Map((all.data ?? []).map((i) => [i.id, i])), [all.data]);
+  // Auswahl gilt je Art; verschwundene Identitäten (gelöscht/zusammengeführt) fallen heraus
+  useEffect(() => { setSel(new Set()); anchor.current = null; }, [kind]);
+  useEffect(() => {
+    setSel((prev) => {
+      const next = new Set([...prev].filter((x) => byId.get(x)?.kind === kind));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [byId, kind]);
+  const selected = useMemo(() => [...sel].map((x) => byId.get(x)).filter((x): x is Identity => !!x), [sel, byId]);
+  const visibleIds = useMemo(() => new Set(list.map((i) => i.id)), [list]);
+  const hiddenSel = selected.filter((i) => !visibleIds.has(i.id)).length;
+  const allVisibleSelected = list.length > 0 && list.every((i) => sel.has(i.id));
+  const stopSelecting = useCallback(() => { setSelecting(false); setSel(new Set()); anchor.current = null; }, []);
+
+  const toggleSel = (id: number, shift: boolean) => {
+    setSelecting(true);
+    setSel((prev) => {
+      const next = new Set(prev);
+      const idx = list.findIndex((i) => i.id === id);
+      const from = anchor.current != null ? list.findIndex((i) => i.id === anchor.current) : -1;
+      if (shift && from >= 0 && idx >= 0) {
+        // Bereich: alle zwischen Anker und Klick auf den Zustand des Ankers setzen (Standard: auswählen)
+        const on = prev.has(anchor.current!);
+        const [a, b] = from < idx ? [from, idx] : [idx, from];
+        for (const i of list.slice(a, b + 1)) { if (on) next.add(i.id); else next.delete(i.id); }
+      } else {
+        if (next.has(id)) next.delete(id); else next.add(id);
+        anchor.current = id;
+      }
+      return next;
+    });
+  };
+  const selectAll = () => setSel((prev) => new Set([...prev, ...list.map((i) => i.id)]));
+  const selectSimilar = () => {
+    const add = similarIds(all.data ?? [], selected, nightlyPairs.data ?? []);
+    const fresh = add.filter((x) => !sel.has(x));
+    if (!fresh.length) { toast.info("Keine weiteren ähnlichen gefunden", "Vorschläge gibt es nur für unbenannte Gesichter und Tiere, die einer benannten Identität ähneln."); return; }
+    setSel((prev) => new Set([...prev, ...fresh]));
+    toast.success(`${fresh.length} ähnliche hinzugefügt`, fresh.some((x) => !visibleIds.has(x)) ? "Teilweise in der anderen Ansicht (Unbekannt/Bekannt)" : undefined);
+  };
+  const similarPossible = selected.some((i) => (i.kind === "face" || i.kind === "pet") && (!!i.name || !!i.suggestion));
+  const mergeBlock = selected.length === 0 ? "Mindestens eine Identität auswählen"
+    : new Set(selected.map((i) => i.kind)).size > 1 ? "Nur Identitäten gleicher Art" : null;
+  useEffect(() => {
+    if (!selecting) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !bulk && !historyOpen && !identityId) stopSelecting();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selecting, bulk, historyOpen, identityId, stopSelecting]);
+
   return (
     <div className="page">
       <div className="page-header">
         <div><h1>Identitäten</h1><div className="sub">Wiedererkannte Personen, Fahrzeuge und Tiere – benennen, zusammenführen, bereinigen.</div></div>
-        <div className="row">
+        <div className="row-wrap">
+          <button className={`btn btn-sm ${selecting ? "btn-primary" : ""}`} onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
+            aria-pressed={selecting} title="Mehrere Identitäten auswählen, um sie zusammenzuführen oder zu löschen">
+            <ListChecks size={15} />{selecting ? "Auswahl beenden" : "Auswählen"}
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setHistoryOpen(true)} title="Verlauf der Zusammenführungen (zurücksetzen)">
+            <History size={15} />Verlauf
+          </button>
           <div className="input-group" style={{ width: 240 }}><Search size={15} />
             <input className="input input-sm" placeholder="Suchen …" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
@@ -445,9 +531,24 @@ export function IdentitiesPage() {
         <Empty icon={<Fingerprint size={44} />} title={kind === "face" ? (faceView === "known" ? "Keine bekannten Personen" : "Keine unbekannten Personen") : `Keine ${KIND_PLURAL[kind]}`} text="Identitäten werden automatisch angelegt, sobald die Erkennung Gesichter, Kennzeichen oder Tiere sieht." />
       ) : (
         <div className="id-grid">
-          {list.map((i, n) => <IdCard key={i.id} i={i} delay={Math.min(n, 20) * 20} onClick={() => nav(`/identitaeten/${i.id}`)} />)}
+          {list.map((i, n) => <IdCard key={i.id} i={i} delay={Math.min(n, 20) * 20} onClick={() => nav(`/identitaeten/${i.id}`)}
+            selecting={selecting} selected={sel.has(i.id)} onSelect={(shift) => toggleSel(i.id, shift)} />)}
         </div>
       )}
+      {selecting && (
+        <SelectionBar count={sel.size} hidden={hiddenSel} visibleCount={list.length} allVisibleSelected={allVisibleSelected}
+          onSelectAll={selectAll} onSimilar={selectSimilar} similarDisabled={!similarPossible}
+          onMerge={() => setBulk("merge")} onDelete={() => setBulk("delete")} onClear={() => (sel.size ? setSel(new Set()) : stopSelecting())}
+          mergeDisabledReason={mergeBlock} />
+      )}
+      {bulk === "merge" && selected.length > 0 && (
+        <BulkMergeDialog selected={selected} all={all.data ?? []} onClose={() => setBulk(null)}
+          onDone={() => { setBulk(null); setSel(new Set()); }} />
+      )}
+      {bulk === "delete" && selected.length > 0 && (
+        <BulkDeleteDialog selected={selected} onClose={() => setBulk(null)} onDone={() => { setBulk(null); setSel(new Set()); }} />
+      )}
+      {historyOpen && <MergeHistoryDialog kind={kind} onClose={() => setHistoryOpen(false)} />}
       {identityId && <IdentityDetail key={identityId} id={Number(identityId)} onClose={() => nav("/identitaeten")} />}
     </div>
   );
