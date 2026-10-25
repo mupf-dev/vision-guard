@@ -16,6 +16,8 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 | `tracking.py` | `supervision.ByteTrack` je Kamera, Lebenszyklus laut Contract, Zonen (Fußpunkt = bbox unten-mitte, normiert), bester Crop (score·Fläche) → `crops/YYYY-MM-DD/<uuid>.jpg` |
 | `identify.py` | lazy geladene Modelle in eigenen Threads mit begrenzten Queues (Jobs werden verworfen, wenn voll); Fehler eines Modells stoppen die Detektion nicht |
 | `inventory.py` | Inventar (Gegenstände) auf ausgewählten Kameras: Keyframe in voller Auflösung, YOLOE mit Text-Prompts, Kachelung, Stabilisierung, `vg/internal/inventory/{id}` (siehe unten) |
+| `frame_metrics.py` | Bildkennzahlen auf der CPU (320 px Graustufen): Helligkeit, Kontrast, normierte Schärfe, flache Blöcke, Sättigung; Vergleich mit Referenz per Phasenkorrelation (C5, später A3) |
+| `health.py` | Kamera-Gesundheit (C5, eigener Thread, nur CPU): `dark`/`covered`/`blur`/`frozen`/`moved`, Referenzbilder, `vg/internal/health/{id}`, Kommando `health_reference` (siehe unten) |
 | `util.py` | Hilfsfunktionen; **einzige Schreibstelle für Medien**: `store_media(rel_path, bytes)` / `write_jpeg` und `media_target(rel_path, suffix)` für ffmpeg-Ausgaben (Clips), jeweils atomar. Andere Module schreiben nie direkt nach `VG_MEDIA_DIR` (Vorbereitung Medien-Upload, D3) |
 | `selftest.py` | Standalone-Test ohne Backend/MQTT (`--inventory` für die Gegenstands-Pipeline) |
 
@@ -72,6 +74,22 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
   Kamera/des Inventars und beim Beenden des Workers einmal `stopped: true` mit `items: []`. `session` ist je
   Worker-Start neu.
 
+## Kamera-Gesundheit (C5)
+
+* Alle `VG_HEALTH_INTERVAL_S` (10 s) je Kamera mit `health_enabled` und Zustand `online` ein Prüfbild aus dem Ingest
+  (kein zusätzlicher Stream), ca. 3–6 ms CPU je Prüfung. Schwellen aus der Messung W0 (`docs/plan/roadmap/messungen.md`).
+* Befunde: `dark` (Mittelwert < 25 und 95-Perzentil < 60) vor `covered` (flache Blöcke +35 %-Punkte oder Kontrast
+  < 25 % der Referenz) vor `blur` (Schärfe < 0,45 × Referenz) vor `moved` (Verschiebung > 2 % oder Korrelation
+  < 0,5 × gleitende Basis); zusätzlich `frozen` (Differenz zum vorigen Prüfbild < 0,05).
+* Gemeldet wird ein Befund nach zwei Prüfungen in Folge (`since` = erste), er endet nach zwei unauffälligen.
+  Warnung/Entwarnung (60 s) entscheidet das Backend.
+* Referenzen `health/cam<N>_<day|night>.jpg` (640 px; Nacht = Graustufen/IR). Automatisch beim ersten brauchbaren Bild
+  des Modus, manuell über `vg/internal/cmd/{id}` `{action:"health_reference", mode:"day|night|auto"}`. Beim Start
+  werden vorhandene Referenzen geladen. Tag/Nacht wird nur aus brauchbaren Bildern bestimmt (ein abgedecktes Bild ist
+  farblos und gälte sonst als Nachtbild).
+* `vg/internal/health/{id}` (QoS 1, retain) alle `VG_HEALTH_PUBLISH_S` (30 s) und bei Änderung; bei abgeschalteter
+  Prüfung einmal `enabled: false`. `vg/internal/system.perf.health = {ms, cameras}`.
+
 ## Track-Lebenszyklus
 
 * `start`: nach ≥ 3 Treffern mit `score ≥ min_score` (Label = score-gewichtete Mehrheit).
@@ -103,6 +121,7 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 | `VG_INVENTORY_HALF` / `VG_INVENTORY_MIN_CONF` | `1` / `0.05` | fp16; Untergrenze für `predict(conf)` |
 | `VG_INVENTORY_SOURCE` | `auto` | `auto` (Ringpuffer → go2rtc → RTSP), `buffer`, `go2rtc`, `rtsp` |
 | `VG_INVENTORY_CROP_MIN_S` / `VG_INVENTORY_UNLOAD_S` / `VG_INVENTORY_PERSON_HOLD_S` | `60` / `600` / `3` | Crop-Abstand, Entladen ohne Inventar-Kamera, Zeitfenster für Verdeckung |
+| `VG_HEALTH` / `VG_HEALTH_INTERVAL_S` / `VG_HEALTH_PUBLISH_S` | `1` / `10` / `30` | Kamera-Gesundheit: globaler Schalter, Prüfabstand je Kamera, spätestes Senden |
 | `VG_GO2RTC_URL` | `http://go2rtc:1984` | nur für den Keyframe-Fallback |
 | `VG_LOG_LEVEL` | `INFO` | |
 
@@ -119,8 +138,11 @@ docker compose run --rm --no-deps worker python -m vg_worker.selftest \
 # Inventar (Gegenstände) auf der Wohnzimmer-Kamera (2880×1616, Tischchen mit Lampe/Buch/Fernbedienung):
 docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 \
     --no-face --no-plate --no-pet --inventory --inventory-interval 3 --seconds 60
+# Kamera-Gesundheit mitprüfen (sonst im Selbsttest aus; Referenzbilder nur in einem temporären Ordner):
+docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://testcam:8554/cam5 --health --seconds 40
 # Im Betrieb:
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -C 20 -v
+docker compose exec mosquitto mosquitto_sub -t 'vg/internal/health/#' -C 2 -v
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/inventory/#' -C 2 -v
 ```
 

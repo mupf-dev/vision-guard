@@ -24,6 +24,7 @@ from .routers import media as media_router
 from .routers import tokens as tokens_router
 from .routers import notifications as notifications_router
 from .rules import reload as reload_rules
+from . import health as camera_health
 from . import rule_conditions  # noqa: F401  – registriert die Bedingungs-Auswertungen (A1)
 from .sync import load_cameras
 from .util import ensure_media_dirs
@@ -112,6 +113,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(registry.reload)
     await asyncio.to_thread(reload_rules)
     await asyncio.to_thread(inventory_memory.startup)
+    await asyncio.to_thread(camera_health.startup)
     bus.start()
     bus.publish_config_changed()
     tasks = [asyncio.create_task(t) for t in (_ticker(), _retention_loop(), _go2rtc_startup_sync())]

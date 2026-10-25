@@ -7,7 +7,7 @@ import type {
   InventoryHistoryEntry, InventoryItem, InventoryLabel, InventorySearchResult,
 } from "./types";
 import type {
-  CameraHealth, InventoryChanges, NotificationLevel, NotificationSource, PushTestInput, PushTestResult, VGNotification,
+  CameraHealth, HealthReferenceResult, InventoryChanges, NotificationLevel, NotificationSource, PushTestInput, PushTestResult, VGNotification,
 } from "./types";
 import type { RuleCheckResult } from "./types";
 
@@ -180,7 +180,7 @@ export const api = {
   // W1 C5: Kamera-Gesundheit
   cameraHealth: (id: number, hours = 168) => get<CameraHealth>(`/cameras/${id}/health`, { hours }),
   setHealthReference: (id: number, mode: "day" | "night" | "auto" = "auto") =>
-    post<{ request_id: string }>(`/cameras/${id}/health/reference`, { mode }),
+    post<HealthReferenceResult>(`/cameras/${id}/health/reference`, { mode }),
 };
 
 /** Antwort von /identities/{id}/events darf laut Vertrag "wie /events" sein – tolerant auch für Arrays. */

@@ -155,7 +155,9 @@ class Bus:
                 if kind == "track":
                     processor.handle_track(cam_id, msg)
                 elif kind == "cmd_result":
-                    processor.handle_cmd_result(msg)
+                    from . import health
+                    if not health.handle_cmd_result(msg):
+                        processor.handle_cmd_result(msg)
                 elif kind == "inventory":
                     from .inventory import memory as inventory_memory
                     inventory_memory.handle(cam_id, msg)

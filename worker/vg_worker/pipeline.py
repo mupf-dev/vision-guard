@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from . import settings
+from .health import HealthMonitor
 from .identify import PETS, VEHICLES, Identifier, Job
 from .ingest import FrameSource
 from .inventory import GpuTurn, InventoryEngine
@@ -92,6 +93,8 @@ class Pipeline:
         # Inventar (Gegenstände): eigener Thread, GPU abwechselnd mit _infer_loop
         self.gpu = GpuTurn()
         self.inventory = InventoryEngine(publish, self.gpu, lambda cid: self.cams.get(cid))
+        # Kamera-Gesundheit (C5): eigener CPU-Thread, Prüfbilder aus dem Ingest
+        self.health = HealthMonitor(publish, self._cams_snapshot)
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
@@ -106,10 +109,16 @@ class Pipeline:
     def start(self):
         threading.Thread(target=self._infer_loop, name="infer", daemon=True).start()
         threading.Thread(target=self._expire_loop, name="expire", daemon=True).start()
+        self.health.start()
+
+    def _cams_snapshot(self) -> dict[int, CameraRuntime]:
+        with self.lock:
+            return dict(self.cams)
 
     def stop(self):
         self._stop.set()
         self.inventory.stop()
+        self.health.stop()
         with self.lock:
             cams = list(self.cams.values())
             self.cams.clear()
@@ -288,6 +297,14 @@ class Pipeline:
         c = self.cams.get(camera_id)
         if c is None:
             return reply(False, f"camera {camera_id} not active in worker")
+        if action == "health_reference":
+            try:
+                path = self.health.set_reference(c, str(msg.get("mode") or "auto"))
+                reply(True)
+            except Exception as e:  # noqa: BLE001
+                log.warning("health reference camera %s failed: %s", camera_id, e)
+                reply(False, str(e))
+            return
         if not path:
             return reply(False, "missing path")
         if action == "snapshot":
@@ -338,9 +355,10 @@ class Pipeline:
         now = time.time()
         h = [x for x in self.batch_hist if now - x[0] <= 10]
         if not h:
-            return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf()}
+            return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf(),
+                    "health": self.health.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
                 "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
-                "inventory": self.inventory.perf()}
+                "inventory": self.inventory.perf(), "health": self.health.perf()}

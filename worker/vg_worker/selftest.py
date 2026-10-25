@@ -37,6 +37,8 @@ def main():
     ap.add_argument("--inventory", action="store_true", help="inventory pipeline on the first camera")
     ap.add_argument("--inventory-interval", type=float, default=3.0)
     ap.add_argument("--no-tiling", action="store_true")
+    ap.add_argument("--health", action="store_true",
+                    help="Kamera-Gesundheit (C5) mitprüfen; Referenzbilder dann nur in einem temporären Ordner")
     ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -50,6 +52,14 @@ def main():
 
     from .gpu import gpu_info
     from .pipeline import Pipeline
+    # Kamera-Gesundheit: Selbsttest-Kameras haben IDs 1..N wie echte Kameras – Referenzbilder dürfen nie im
+    # gemeinsamen Medienordner landen (sie würden health/cam<N>_*.jpg echter Kameras überschreiben)
+    if a.health:
+        import tempfile
+        settings.MEDIA_DIR = tempfile.mkdtemp(prefix="vg-selftest-media-")
+        print(f"health checks on, media (references) in {settings.MEDIA_DIR}")
+    else:
+        settings.HEALTH_ENABLED = False
 
     counts: Counter = Counter()
     labels_started: Counter = Counter()

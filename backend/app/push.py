@@ -113,7 +113,13 @@ def _ntfy(client: httpx.Client, target: dict[str, Any], msg: PushMessage) -> htt
             headers["Click"] = msg.click_url
         if msg.tags:
             headers["Tags"] = ",".join(msg.tags)
-        return client.put(f"{server}/{topic}", content=data, headers=headers)
+        resp = client.put(f"{server}/{topic}", content=data, headers=headers)
+        # Server ohne Anhänge (ntfy-Standard ohne attachment-cache-dir: 400 „attachments not allowed“) oder Bild
+        # zu groß (413): Nachricht ohne Bild senden statt ganz zu scheitern
+        if not (resp.status_code == 413 or (resp.status_code == 400 and "attachment" in resp.text.lower())):
+            return resp
+        log.info("ntfy-Ziel '%s' nimmt keine Anhänge an – sende ohne Bild", target.get("id"))
+        headers = {k: v for k, v in headers.items() if k == "Authorization"}
     body: dict[str, Any] = {"topic": topic, "title": msg.title, "message": msg.message, "priority": prio}
     if msg.click_url:
         body["click"] = msg.click_url

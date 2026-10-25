@@ -4,6 +4,7 @@ import { Boxes, Cpu, Radio, Server } from "lucide-react";
 import { api } from "../../lib/api";
 import { Loading, Empty } from "../../components/ui";
 import { StatusBadge } from "../Live";
+import { HealthBadge } from "../../components/HealthBadge";
 import { useLive } from "../../lib/store";
 import { fmtAgo } from "../../lib/format";
 
@@ -70,7 +71,7 @@ export function SystemPage() {
         <div className="card" style={{ overflow: "auto" }}>
           <div className="card-head"><h3>Kameras</h3></div>
           <table className="table">
-            <thead><tr><th>Kamera</th><th>Status</th><th>FPS</th><th>Inferenz</th><th>Auflösung</th><th>Zuletzt</th></tr></thead>
+            <thead><tr><th>Kamera</th><th>Status</th><th title="Kamera-Gesundheit: verdeckt, unscharf, zu dunkel, eingefroren, verschoben">Bild</th><th>FPS</th><th>Inferenz</th><th>Auflösung</th><th>Zuletzt</th></tr></thead>
             <tbody>
               {cameras.map((c) => {
                 const s = live[c.id] ?? c.status;
@@ -78,6 +79,7 @@ export function SystemPage() {
                   <tr key={c.id}>
                     <td><b>{c.name}</b> <span className="muted mono">cam_{c.id}</span></td>
                     <td><StatusBadge status={s} /></td>
+                    <td>{s?.state === "disabled" ? "–" : <HealthBadge health={s?.health} full />}</td>
                     <td className="mono">{s?.fps != null ? s.fps.toFixed(1) : "–"}</td>
                     <td className="mono">{s?.inference_ms != null ? `${s.inference_ms.toFixed(1)} ms` : "–"}</td>
                     <td className="mono">{s?.width ? `${s.width}×${s.height}` : "–"}</td>

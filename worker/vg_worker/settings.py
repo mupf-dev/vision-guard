@@ -97,6 +97,11 @@ INVENTORY_CROP_MIN_S = _float("VG_INVENTORY_CROP_MIN_S", 60.0)         # neuer C
 INVENTORY_UNLOAD_S = _float("VG_INVENTORY_UNLOAD_S", 600.0)            # Modell entladen, wenn so lange keine Kamera aktiv
 INVENTORY_PERSON_HOLD_S = _float("VG_INVENTORY_PERSON_HOLD_S", 3.0)    # Personen so lange als Verdeckung werten
 
+# --- Kamera-Gesundheit (C5, nur CPU) --------------------------------------
+HEALTH_ENABLED = _bool("VG_HEALTH", True)                              # globaler Schalter der Bildprüfung
+HEALTH_INTERVAL_S = _float("VG_HEALTH_INTERVAL_S", 10.0)               # Prüfabstand je Kamera
+HEALTH_PUBLISH_S = _float("VG_HEALTH_PUBLISH_S", 30.0)                 # vg/internal/health spätestens alle n s
+
 # --- misc -----------------------------------------------------------------
 STATUS_INTERVAL_S = _float("VG_STATUS_INTERVAL_S", 5.0)
 CONFIG_REFRESH_S = _float("VG_CONFIG_REFRESH_S", 60.0)

@@ -7,7 +7,9 @@ import { ALL_LABELS, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, Img, LabelIcon, Loading, Range, Switch } from "../../components/ui";
 import { ZoneEditor } from "../../components/ZoneEditor";
 import { CameraInventoryTab } from "./CameraInventory";
-import { Package } from "lucide-react";
+import { HeartPulse, Package } from "lucide-react";
+import { CameraHealthTab } from "./CameraHealth";
+import { HealthBadge } from "../../components/HealthBadge";
 import { StatusBadge } from "../Live";
 import { toast, useLive } from "../../lib/store";
 import { isMock, mockSnapshot } from "../../lib/mock";
@@ -28,7 +30,7 @@ function strip(c: Camera): CameraInput {
 function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState<CameraInput>(cam ? strip(cam) : EMPTY);
-  const [tab, setTab] = useState<"general" | "zones" | "inventory">("general");
+  const [tab, setTab] = useState<"general" | "zones" | "inventory" | "health">("general");
   const [test, setTest] = useState<{ url: string; res?: CameraTestResult; busy?: boolean; err?: string } | null>(null);
   const set = <K extends keyof CameraInput>(k: K, v: CameraInput[K]) => setF((p) => ({ ...p, [k]: v }));
   const valid = f.name.trim() && f.url.trim();
@@ -64,6 +66,7 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
         <button className={tab === "general" ? "on" : ""} onClick={() => setTab("general")}><Cctv size={15} />Allgemein</button>
         <button className={tab === "zones" ? "on" : ""} onClick={() => setTab("zones")}><MapPin size={15} />Zonen<span className="count">{f.zones.length}</span></button>
         <button className={tab === "inventory" ? "on" : ""} onClick={() => setTab("inventory")}><Package size={15} />Gegenstände{f.inventory_enabled && <span className="count">an</span>}</button>
+        <button className={tab === "health" ? "on" : ""} onClick={() => setTab("health")}><HeartPulse size={15} />Zustand{cam?.status?.health?.state === "warn" && <span className="count" style={{ color: "var(--warn)" }}>!</span>}</button>
       </div>
       {tab === "general" ? (
         <div className="form-grid">
@@ -99,6 +102,8 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
         </div>
       ) : tab === "inventory" ? (
         <CameraInventoryTab f={f} set={set} />
+      ) : tab === "health" ? (
+        <CameraHealthTab cam={cam} f={f} set={set} />
       ) : (
         <ZoneEditor cameraId={cam?.id ?? null} zones={f.zones} onChange={(z) => set("zones", z)} />
       )}
@@ -137,7 +142,7 @@ export function CamerasPage() {
             <div key={c.id} className={`list-item ${c.enabled ? "" : "disabled"}`} style={{ animationDelay: `${i * 30}ms` }}>
               <Img src={isMock ? mockSnapshot(c.id) : api.snapshotUrl(c.id)} className="cam-thumb" fallback={<div className="cam-thumb" style={{ display: "grid", placeItems: "center", color: "var(--line-2)" }}><Cctv size={26} /></div>} />
               <div className="grow">
-                <div className="title">{c.name}<StatusBadge status={live[c.id] ?? c.status} enabled={c.enabled} /><span className="badge outline mono">cam_{c.id}</span></div>
+                <div className="title">{c.name}<StatusBadge status={live[c.id] ?? c.status} enabled={c.enabled} />{c.enabled && c.health_enabled && <HealthBadge health={(live[c.id] ?? c.status)?.health} />}<span className="badge outline mono">cam_{c.id}</span></div>
                 <div className="sub mono">{c.url}</div>
                 <div className="row-wrap" style={{ marginTop: 6, gap: 6 }}>
                   <span className="badge">{c.detect_fps} fps</span>
