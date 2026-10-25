@@ -28,6 +28,7 @@ from . import health as camera_health
 from . import rule_conditions  # noqa: F401  – registriert die Bedingungs-Auswertungen (A1)
 # Welle 2 (K2): Fach-Module mit fertiger Verdrahtung (Inhalt: C1, C3, D2, B3)
 from . import embed_client, pet_diary, pose_events, review
+from . import review_effects  # D2: Rückfragen-Erzeuger und -Wirkungen
 from . import report as daily_report
 from .mqtt_bus import register_handler
 from .routers import pets as pets_router
@@ -71,7 +72,8 @@ def seed_demo() -> None:
 
 def _w2_tick() -> None:
     """W2: Ticks der Fach-Module (jedes drosselt sich selbst); Fehler eines Moduls stoppen die anderen nicht."""
-    for name, fn in (("review", review.tick), ("pet_diary", pet_diary.tick), ("report", daily_report.tick)):
+    for name, fn in (("review", review.tick), ("review_effects", review_effects.tick), ("pet_diary", pet_diary.tick),
+                     ("report", daily_report.tick)):
         try:
             fn()
         except Exception:
@@ -161,7 +163,7 @@ for r in (tokens_router.router, media_router.router):
 
 app.include_router(inventory_router.router)
 app.include_router(notifications_router.router)
-for r in (review_router.router, pets_router.router, reports_router.router):   # W2
+for r in (review_router.router, review_router.public_router, pets_router.router, reports_router.router):   # W2
     app.include_router(r)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,

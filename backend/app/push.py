@@ -41,6 +41,22 @@ class PushMessage:
     image_url: Optional[str] = None           # absolute, signierte URL → ntfy „Attach“ (kein Upload)
     image_path: Optional[str] = None          # relativer Medienpfad → Upload (ntfy PUT, Pushover attachment)
     tags: list[str] = field(default_factory=list)
+    # W2 (D2): ntfy-Aktionsknöpfe, z. B. {"action":"http","label":"Ja","url":…,"method":"POST","clear":true}
+    actions: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _ntfy_actions_header(actions: list[dict[str, Any]]) -> str:
+    """ntfy-Kurzform für den Header `Actions` (PUT mit Anhang): "http, Ja, <url>, method=POST, clear=true; …"."""
+    parts = []
+    for a in actions[:3]:
+        p = [str(a.get("action") or "view"), str(a.get("label") or "").replace(",", " ").replace(";", " "),
+             str(a.get("url") or "")]
+        if a.get("method"):
+            p.append(f"method={a['method']}")
+        if a.get("clear"):
+            p.append("clear=true")
+        parts.append(", ".join(p))
+    return "; ".join(parts)
 
 
 def _result(target: dict[str, Any], ok: bool, error: Optional[str] = None) -> dict[str, Any]:
@@ -113,6 +129,8 @@ def _ntfy(client: httpx.Client, target: dict[str, Any], msg: PushMessage) -> htt
             headers["Click"] = msg.click_url
         if msg.tags:
             headers["Tags"] = ",".join(msg.tags)
+        if msg.actions:
+            headers["Actions"] = _rfc2047(_ntfy_actions_header(msg.actions))
         resp = client.put(f"{server}/{topic}", content=data, headers=headers)
         # Server ohne Anhänge (ntfy-Standard ohne attachment-cache-dir: 400 „attachments not allowed“) oder Bild
         # zu groß (413): Nachricht ohne Bild senden statt ganz zu scheitern
@@ -127,6 +145,8 @@ def _ntfy(client: httpx.Client, target: dict[str, Any], msg: PushMessage) -> htt
         body["attach"] = msg.image_url
     if msg.tags:
         body["tags"] = msg.tags
+    if msg.actions:
+        body["actions"] = msg.actions[:3]
     return client.post(f"{server}/", json=body, headers=headers)   # JSON-Publish auf die Server-Wurzel
 
 

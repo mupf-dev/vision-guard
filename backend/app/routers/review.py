@@ -1,16 +1,20 @@
 """Rückfragen („Bitte bestätigen“) – REST (W2: Gerüst K2, Ausbau D2).
 
-Vertrag: CONTRACT.md „Nachträge: Welle 2“, W2.D. Fertig: Liste, Einzelabruf, Beantworten (Scope write).
-D2 ergänzt: `/review/thresholds` (Inhalt), signierte Antwort-Links `/review/a/{id}` (eigener Router ohne Login,
-in main.py einhängen), `signed=1` wirkt bereits über die Middleware.
+Vertrag: CONTRACT.md „Nachträge: Welle 2“, W2.D. Liste, Einzelabruf, Beantworten (Scope write), Schwellen je
+Kamera+Label (`/review/thresholds`) und signierte Antwort-Links ohne Login (`public_router`: `GET /review/a/{id}`
+zeigt eine Bestätigungsseite – kein Beantworten beim Link-Prefetch –, `POST` beantwortet mit `answer_source:"push"`).
+`signed=1` wirkt über die Middleware.
 """
+import html
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import review as review_svc
+from .. import review_effects
 from ..auth import current_principal, require_user
 from ..db import get_db
 from ..models import ReviewRequest
@@ -46,9 +50,10 @@ def list_reviews(db: Session = Depends(get_db), status: Optional[str] = "open", 
 
 
 @router.get("/thresholds")
-def thresholds(camera_id: Optional[int] = None):
-    """D2: [{camera_id, label, base, current, auto, yes, no}] – bis zur Umsetzung leer."""
-    return []
+def thresholds(camera_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """[{camera_id, label, name_de, base, current, auto, yes, no}] – Schwellen je Kamera+Label mit Antworten oder
+    eigenem Wert. `auto:false` = von Hand gesetzt (wird nicht nachgeführt)."""
+    return review_effects.thresholds(db, camera_id)
 
 
 @router.get("/{review_id}")
@@ -67,3 +72,63 @@ def answer_review(review_id: int, body: ReviewAnswerIn, request: Request, db: Se
         return review_svc.answer(db, review_id, body.answer, source=source, correct_label=body.correct_label)
     except review_svc.ReviewError as e:
         raise HTTPException(e.status, str(e)) from None
+
+
+# ------------------------------------------------------------------ Antwort-Links ohne Login (Push)
+
+public_router = APIRouter(prefix="/api/review/a", tags=["review"])
+
+_ANSWER_DE = {"yes": "Ja", "no": "Nein"}
+
+
+def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
+    doc = f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>{html.escape(title)} – VisionGuard</title>
+<style>body{{font-family:system-ui,sans-serif;background:#0f1115;color:#e8eaed;margin:0;padding:24px;}}
+main{{max-width:440px;margin:0 auto;}}h1{{font-size:20px}}p{{color:#aab;line-height:1.5}}
+button{{font-size:18px;padding:12px 28px;border-radius:10px;border:0;background:#3b82f6;color:#fff;cursor:pointer}}
+button.no{{background:#555}}</style></head><body><main>{body}</main></body></html>"""
+    return HTMLResponse(doc, status_code=status, headers={"Cache-Control": "no-store",
+                                                          "Referrer-Policy": "no-referrer"})
+
+
+def _check(review_id: int, a: str, exp: Optional[str], sig: Optional[str]) -> None:
+    if not review_effects.verify_answer_sig(review_id, a, exp, sig):
+        raise HTTPException(403, "Link ungültig oder abgelaufen")
+
+
+@public_router.get("/{review_id}", response_class=HTMLResponse)
+def answer_page(review_id: int, a: str = "", exp: Optional[str] = None, sig: Optional[str] = None,
+                db: Session = Depends(get_db)):
+    """Bestätigungsseite (beantwortet noch nicht – Messenger und Mail-Programme rufen Links vorab auf)."""
+    try:
+        _check(review_id, a, exp, sig)
+    except HTTPException:
+        return _page("Link ungültig", "<h1>Link ungültig oder abgelaufen</h1>", 403)
+    r = db.get(ReviewRequest, review_id)
+    if r is None:
+        return _page("Unbekannt", "<h1>Diese Frage gibt es nicht mehr.</h1>", 404)
+    q = html.escape(r.question or "")
+    if r.status != "open":
+        return _page("Erledigt", f"<h1>{q}</h1><p>Diese Frage ist bereits beantwortet oder abgelaufen.</p>")
+    cls = "" if a == "yes" else "no"
+    return _page("Bitte bestätigen", f"""<h1>{q}</h1><p>Antwort: <b>{_ANSWER_DE[a]}</b></p>
+<form method="post"><button class="{cls}" type="submit">{_ANSWER_DE[a]} – absenden</button></form>""")
+
+
+@public_router.post("/{review_id}")
+def answer_by_link(review_id: int, request: Request, a: str = "", exp: Optional[str] = None,
+                   sig: Optional[str] = None, db: Session = Depends(get_db)):
+    """Beantwortet ohne Login (`answer_source:"push"`); ntfy-Aktion oder Knopf der Bestätigungsseite."""
+    _check(review_id, a, exp, sig)
+    try:
+        out = review_svc.answer(db, review_id, a, source="push")
+    except review_svc.ReviewError as e:
+        if "text/html" in (request.headers.get("accept") or ""):
+            return _page("Nicht möglich", f"<h1>{html.escape(str(e))}</h1>", e.status)
+        raise HTTPException(e.status, str(e)) from None
+    if "text/html" in (request.headers.get("accept") or ""):
+        return _page("Danke", f"<h1>Danke!</h1><p>{html.escape(out['question'])} – <b>{_ANSWER_DE[a]}</b> "
+                              "gespeichert.</p>")
+    return out
