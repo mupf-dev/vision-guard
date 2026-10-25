@@ -1115,6 +1115,16 @@ niedriger Priorität (wartet nicht auf die Detektion, blockiert sie aber auch ni
   (Bearer `VG_LLM_API_KEY`, falls gesetzt); `anthropic`: Messages-API `https://api.anthropic.com/v1/messages`
   (Header `x-api-key` aus `VG_ANTHROPIC_API_KEY`, `anthropic-version: 2023-06-01`). Kein neues Paket (httpx).
   Test-Server ohne Kosten: `scripts/llm_mock.py` (OpenAI-kompatibel, nur Standardbibliothek).
+- Ergänzungen der Umsetzung (B3, additiv): Zeitraum eines `daily` = Berichtszeitpunkt des Vortags bis
+  `report_time` (am Umstellungstag 23/25 h). `facts` = `{version, period{start,end,date,weekday,hours}, events[],
+  people{events,named[],unknown_faces,new_faces,without_face}, vehicles{total,by_label[],plates[]}, animals{total,
+  by_label[],named[],visits[]}, rules[{name,count,first,last,snapshot_url}], inventory (B2-Änderungen kompakt)|null,
+  notifications{by_source,items[]}, system{cameras[],offline_cameras[]}, counts, sections[{key,title,text}],
+  generation?{requested,ok,model,ms,error,problems[],rejected_text}}` (Typ `ReportFacts` in `types.ts`).
+  Vorschau: `id: null`. `delivery` je Kanal zusätzlich Detailfelder (`topic`, `notification_id`, `targets`,
+  `status`, `recipients`, `note`); nicht eingerichtete Kanäle fehlen. Endet ein Zeitraum genau um Mitternacht,
+  gilt der Vortag als Berichtstag (Überschrift, MCP `get_daily_report`). `preview`/`generate`: Zeitangaben wie
+  B2 (`parse_when`), höchstens 31 Tage, sonst 422.
 
 ### W2.H MCP
 

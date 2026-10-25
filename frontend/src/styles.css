@@ -680,3 +680,7 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .pet-visit:last-child { border-bottom: 0; }
 .pet-thumb { width: 56px; height: 42px; border-radius: 6px; object-fit: cover; flex: none; background: var(--bg-4); }
 .pet-thumb.ph { display: grid; place-items: center; color: var(--text-3); }
+/* ---------------- Berichte (B3) ---------------- */
+.reports-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.reports-grid details > summary::-webkit-details-marker { display: none; }
+@media (max-width: 900px) { .reports-grid { grid-template-columns: minmax(0, 1fr); } }

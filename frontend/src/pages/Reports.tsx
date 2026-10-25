@@ -1,32 +1,270 @@
-import { useQuery } from "@tanstack/react-query";
-import { FileText } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowRight, Bell, Bike, Bot, Car, Dog, Eye, FileText, Package, PawPrint, Plus, Send, Trash2, TriangleAlert, Users, Workflow,
+} from "lucide-react";
 import { api } from "../lib/api";
-import { fmtDateTime } from "../lib/format";
-import { Empty, Loading } from "../components/ui";
+import type { Report, ReportDelivery, ReportFacts } from "../lib/types";
+import { fmtDateTime, parseTs } from "../lib/format";
+import { ConfirmDialog, Empty, Img, Loading, Switch } from "../components/ui";
+import { toast } from "../lib/store";
 
 /**
- * Seite „Berichte“ – Tagesberichte (W2, Platzhalter aus K2 – Umsetzung B3): Liste nach Datum, Ansicht mit Text und
- * Abschnitten, „Bericht für heute erstellen“. Daten: api.reports(), api.report(id), api.generateReport().
+ * Seite „Berichte“ (B3): Tagesberichte nach Datum, Ansicht mit Text oben und aufklappbaren Abschnitten (Personen,
+ * Fahrzeuge, Tiere, Gegenstände mit Vorher/Nachher-Ausschnitten aus B2, Regeln, Hinweise), Vorschau ohne Speichern
+ * und „Bericht für heute erstellen“ (optional mit Versand über alle eingerichteten Kanäle).
  */
+
+const CHANNEL_NAME: Record<string, string> = { mqtt: "MQTT", push: "Push", webhook: "Webhook", mail: "Mail" };
+
+function dayTitle(r: Report): string {
+  const d = parseTs(r.period_end);
+  if (!d) return "–";
+  const day = d.toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" });
+  return r.kind === "daily" ? day : `${day}, ${hmf.format(d)}`;
+}
+
+function generatorBadge(g: string) {
+  if (g.startsWith("llm:")) return <span className="badge info" title="Text vom Sprachmodell (geprüft)"><Bot size={11} />{g.slice(4)}</span>;
+  if (g.includes("Fallback")) return <span className="badge warn" title="Sprachmodell-Text verworfen – Satzbausteine"><TriangleAlert size={11} />Satzbausteine (Rückfall)</span>;
+  return <span className="badge outline">Satzbausteine</span>;
+}
+
+function DeliveryBadges({ delivery }: { delivery: Record<string, ReportDelivery> }) {
+  const keys = Object.keys(delivery);
+  if (!keys.length) return <span className="badge outline">nicht versendet</span>;
+  return <>{keys.map((k) => {
+    const d = delivery[k];
+    const note = typeof d.note === "string" ? d.note : null;
+    const cls = !d.ok ? "bad" : note ? "outline" : "ok";
+    return <span key={k} className={`badge ${cls}`} title={d.error ?? note ?? (d.ts ? `zugestellt ${fmtDateTime(d.ts)}` : undefined)}>
+      <Send size={11} />{CHANNEL_NAME[k] ?? k}: {d.ok ? (note ? "nur Hinweis" : "ok") : "Fehler"}
+    </span>;
+  })}</>;
+}
+
+function Section({ icon, title, summary, children, open }: { icon: ReactNode; title: string; summary?: string; children?: ReactNode; open?: boolean }) {
+  return (
+    <details className="card" open={open} style={{ padding: 0 }}>
+      <summary style={{ cursor: "pointer", padding: "12px 16px", display: "flex", gap: 10, alignItems: "baseline", listStyle: "none" }}>
+        <span style={{ color: "var(--accent)", alignSelf: "center", display: "flex" }}>{icon}</span>
+        <strong style={{ flex: "none" }}>{title}</strong>
+        {summary && <span className="dim" style={{ fontSize: 13, minWidth: 0 }}>{summary}</span>}
+      </summary>
+      {children && <div style={{ padding: "0 16px 14px" }}>{children}</div>}
+    </details>
+  );
+}
+
+const hmf = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" });
+const dayf = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit" });
+type TimeFn = (v?: string | null) => string;
+
+/** Uhrzeit „14:02“, an anderen Tagen als dem Berichtstag „24.10. 14:02“ (Bericht bis Mitternacht → Vortag) */
+function timeFmt(endIso?: string): TimeFn {
+  const end = parseTs(endIso);
+  const ref = end && end.getHours() === 0 && end.getMinutes() === 0 ? new Date(end.getTime() - 1000) : end;
+  return (v) => {
+    const d = parseTs(v);
+    if (!d) return "–";
+    return ref && d.toDateString() === ref.toDateString() ? hmf.format(d) : `${dayf.format(d)} ${hmf.format(d)}`;
+  };
+}
+
+const span = (t: TimeFn, a?: string | null, b?: string | null) => {
+  const x = t(a), y = t(b);
+  return x === y ? x : `${x}–${y}`;
+};
+
+function Rows({ rows }: { rows: [ReactNode, ReactNode][] }) {
+  return <dl className="kv" style={{ gridTemplateColumns: "minmax(110px, auto) 1fr" }}>{rows.map(([k, v], i) => <div key={i} style={{ display: "contents" }}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;
+}
+
+function Thumb({ src, label }: { src?: string | null; label: string }) {
+  return (
+    <div style={{ width: 92 }}>
+      <div style={{ aspectRatio: "4 / 3", borderRadius: 6, overflow: "hidden", background: "var(--bg-4)" }}>
+        <Img src={src} className="contain-img" fallback={<div className="muted" style={{ fontSize: 11, padding: 6, textAlign: "center" }}>–</div>} />
+      </div>
+      <div className="muted" style={{ fontSize: 11, textAlign: "center", marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+function FactSections({ f, text }: { f: ReportFacts; text: Record<string, string> }) {
+  const pe = f.people, ve = f.vehicles, an = f.animals, inv = f.inventory;
+  const t = timeFmt(f.period?.end);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Section icon={<Users size={16} />} title="Personen" summary={text.people ?? text.quiet}>
+        {pe.events > 0 && <Rows rows={[
+          ...pe.named.map((p): [ReactNode, ReactNode] => [p.display_name, `${p.count}× · ${span(t, p.first, p.last)}${p.cameras.length ? ` · ${p.cameras.join(", ")}` : ""}`]),
+          ["Unbekannte Gesichter", `${pe.unknown_faces}${pe.new_faces ? ` (davon ${pe.new_faces} neu)` : ""}`],
+          ["Ohne Gesicht", `${pe.without_face}×`],
+        ]} />}
+      </Section>
+      {ve.total > 0 && (
+        <Section icon={<Car size={16} />} title="Fahrzeuge" summary={text.vehicles}>
+          <Rows rows={[
+            ...ve.by_label.map((e): [ReactNode, ReactNode] => [<span className="row" style={{ gap: 6 }}>{e.label === "bicycle" ? <Bike size={13} /> : <Car size={13} />}{e.name_de}</span>, `${e.count}× · ${span(t, e.first, e.last)}`]),
+            ...ve.plates.map((p): [ReactNode, ReactNode] => [p.name ?? "Kennzeichen", `${p.plate_text ?? ""} · ${p.count}× · ${span(t, p.first, p.last)}`]),
+          ]} />
+        </Section>
+      )}
+      {(an.total > 0 || an.visits.length > 0) && (
+        <Section icon={<Dog size={16} />} title="Tiere" summary={text.animals}>
+          <Rows rows={[
+            ...an.named.map((p): [ReactNode, ReactNode] => [p.display_name, `${p.count}× · ${span(t, p.first, p.last)}`]),
+            ...an.by_label.map((e): [ReactNode, ReactNode] => [e.name_de, `${e.count}× insgesamt`]),
+            ...an.visits.map((v): [ReactNode, ReactNode] => [<span className="row" style={{ gap: 6 }}><PawPrint size={13} />{v.pet ?? v.label}</span>, `${v.purpose_de} ${v.count}× · zuletzt ${t(v.last)}`]),
+          ]} />
+        </Section>
+      )}
+      {(inv?.changes.length || f.inventory_error) ? (
+        <Section icon={<Package size={16} />} title="Gegenstände" summary={text.inventory}>
+          {inv && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {inv.changes.map((c, i) => (
+              <div key={i} className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <Thumb src={c.before?.crop_url} label={c.before ? `vorher ${t(c.before.ts)}` : "vorher"} />
+                <ArrowRight size={14} color="var(--text-3)" />
+                <Thumb src={c.after?.crop_url} label={c.after ? `nachher ${t(c.after.ts)}` : "nachher"} />
+                <div style={{ flex: 1, minWidth: 180, fontSize: 13 }}><strong>{c.name_de}</strong><div className="dim">{c.text}</div></div>
+              </div>
+            ))}
+          </div>}
+        </Section>
+      ) : null}
+      {f.rules.length > 0 && (
+        <Section icon={<Workflow size={16} />} title="Regeln" summary={text.rules}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {f.rules.map((r) => (
+              <div key={r.name} style={{ width: 180 }}>
+                {r.snapshot_url && <div style={{ aspectRatio: "16 / 9", borderRadius: 6, overflow: "hidden", background: "var(--bg-4)", marginBottom: 4 }}><Img src={r.snapshot_url} className="cover-img" /></div>}
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name}</div>
+                <div className="muted" style={{ fontSize: 12 }}>{r.count}× · zuletzt {t(r.last)}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+      {text.system && (
+        <Section icon={<Bell size={16} />} title="Hinweise" summary={text.system}>
+          {f.notifications.items.length > 0 && <Rows rows={f.notifications.items.map((n): [ReactNode, ReactNode] => [t(n.ts), `${n.source_de}: ${n.title}`])} />}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function ReportView({ r, preview, onDelete }: { r: Report; preview?: boolean; onDelete?: () => void }) {
+  const f = r.facts;
+  const text = Object.fromEntries((f?.sections ?? []).map((s) => [s.key, s.text]));
+  const gen = f?.generation;
+  const [first, ...rest] = r.text.split("\n");
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+      <div className="card"><div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="row-wrap" style={{ gap: 8, alignItems: "center" }}>
+          <h2 style={{ margin: 0, fontSize: 18, flex: 1, minWidth: 200 }}>{first}</h2>
+          {preview ? <span className="badge warn"><Eye size={11} />Vorschau – nicht gespeichert</span>
+            : <button className="btn btn-sm btn-ghost" onClick={onDelete} title="Bericht löschen"><Trash2 size={14} />Löschen</button>}
+        </div>
+        <div className="row-wrap" style={{ gap: 6 }}>
+          {generatorBadge(r.generator)}
+          <span className="badge outline">{r.kind === "daily" ? "Tagesbericht" : "manuell"}</span>
+          {!preview && <DeliveryBadges delivery={r.delivery} />}
+        </div>
+        {gen && !gen.ok && (
+          <div className="dim" style={{ fontSize: 13, borderLeft: "3px solid var(--warn, #f59e0b)", paddingLeft: 10 }}>
+            Sprachmodell nicht verwendet: {gen.error ?? (gen.problems ?? []).join("; ")}
+          </div>
+        )}
+        <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{rest.join("\n")}</div>
+      </div></div>
+      {f && <FactSections f={f} text={text} />}
+    </div>
+  );
+}
+
 export function ReportsPage() {
-  const q = useQuery({ queryKey: ["reports"], queryFn: () => api.reports() });
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["reports"], queryFn: () => api.reports(60) });
+  const [sel, setSel] = useState<number | null>(null);
+  const [preview, setPreview] = useState<Report | null>(null);
+  const [send, setSend] = useState(false);
+  const [del, setDel] = useState<number | null>(null);
+  const items = q.data?.items ?? [];
+  const current = sel ?? items[0]?.id ?? null;
+  useEffect(() => { if (sel !== null && items.length && !items.some((r) => r.id === sel)) setSel(null); }, [items, sel]);
+  const detail = useQuery({ queryKey: ["report", current], enabled: current !== null && !preview, queryFn: () => api.report(current as number) });
+
+  const pv = useMutation({
+    mutationFn: () => api.reportPreview("today"),
+    onSuccess: (r) => setPreview(r),
+    onError: (e) => toast.error("Vorschau fehlgeschlagen", (e as Error).message),
+  });
+  const gen = useMutation({
+    mutationFn: () => api.generateReport({ since: "today", deliver: send }),
+    onSuccess: (r) => {
+      setPreview(null);
+      setSel(r.id);
+      qc.invalidateQueries({ queryKey: ["reports"] });
+      const failed = Object.entries(r.delivery).filter(([, d]) => !d.ok).map(([k]) => CHANNEL_NAME[k] ?? k);
+      if (failed.length) toast.error("Bericht erstellt", `Versand fehlgeschlagen: ${failed.join(", ")}`);
+      else toast.success("Bericht erstellt", send ? "und versendet" : undefined);
+    },
+    onError: (e) => toast.error("Bericht fehlgeschlagen", (e as Error).message),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => api.deleteReport(id),
+    onSuccess: () => { setDel(null); setSel(null); qc.invalidateQueries({ queryKey: ["reports"] }); toast.success("Bericht gelöscht"); },
+  });
+
   if (q.isLoading) return <Loading />;
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Berichte</h1><div className="sub">Tägliche Zusammenfassung in Sätzen</div></div>
-      </div>
-      {!q.data?.items.length ? (
-        <Empty icon={<FileText size={44} />} title="Noch keine Berichte" text="Den Tagesbericht schalten Sie unter Administration → Einstellungen ein." />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {q.data.items.map((r) => (
-            <div className="card" key={r.id}><div className="card-body">
-              <div className="muted" style={{ fontSize: 13 }}>{fmtDateTime(r.period_end)} · {r.generator}</div>
-              <div>{r.text}</div>
-            </div></div>
-          ))}
+        <div><h1>Berichte</h1><div className="sub">Tägliche Zusammenfassung: Personen, Fahrzeuge, Tiere, Gegenstände, Regeln</div></div>
+        <div className="row-wrap" style={{ gap: 8, alignItems: "center" }}>
+          <Switch checked={send} onChange={setSend} label="auch versenden" />
+          <button className="btn" disabled={pv.isPending} onClick={() => pv.mutate()}>{pv.isPending ? <span className="spinner" /> : <Eye size={15} />}Vorschau heute</button>
+          <button className="btn btn-primary" disabled={gen.isPending} onClick={() => gen.mutate()}>{gen.isPending ? <span className="spinner" /> : <Plus size={15} />}Bericht für heute erstellen</button>
         </div>
+      </div>
+      {!items.length && !preview ? (
+        <Empty icon={<FileText size={44} />} title="Noch keine Berichte"
+          text="Den täglichen Bericht schalten Sie unter Administration → Einstellungen → Tagesbericht ein. Hier können Sie jederzeit einen Bericht für heute erstellen." />
+      ) : (
+        <div className="reports-grid">
+          <div className="list" style={{ gap: 6 }}>
+            {preview && (
+              <div className="list-item" style={{ cursor: "pointer", borderColor: "var(--accent)", padding: "10px 12px" }} onClick={() => undefined}>
+                <div className="grow"><div className="title"><Eye size={14} />Vorschau</div><div className="sub">{fmtDateTime(preview.period_end)}</div></div>
+                <button className="btn btn-sm btn-ghost" onClick={() => setPreview(null)}>Schließen</button>
+              </div>
+            )}
+            {items.map((r) => (
+              <div key={r.id} className="list-item" role="button" tabIndex={0}
+                style={{ cursor: "pointer", padding: "10px 12px", borderColor: !preview && r.id === current ? "var(--accent)" : undefined }}
+                onClick={() => { setPreview(null); setSel(r.id); }} onKeyDown={(k) => k.key === "Enter" && (setPreview(null), setSel(r.id))}>
+                <div className="grow">
+                  <div className="title" style={{ fontSize: 14 }}><FileText size={14} />{dayTitle(r)}</div>
+                  <div className="sub">{r.text.split("\n")[1] ?? r.text}</div>
+                </div>
+                {Object.values(r.delivery).some((d) => !d.ok) && <TriangleAlert size={15} color="#fbbf24" />}
+              </div>
+            ))}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            {preview ? <ReportView r={preview} preview />
+              : detail.data ? <ReportView r={detail.data} onDelete={() => setDel(detail.data!.id)} />
+                : detail.isLoading ? <Loading /> : null}
+          </div>
+        </div>
+      )}
+      {del !== null && (
+        <ConfirmDialog title="Bericht löschen?" text="Der Bericht wird endgültig entfernt (Ereignisse und Bilder bleiben erhalten)."
+          confirmLabel="Löschen" danger onConfirm={() => remove.mutate(del)} onClose={() => setDel(null)} />
       )}
     </div>
   );
