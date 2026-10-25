@@ -340,3 +340,59 @@ docker volume rm vg-w0_models   # ≈ 12 GB Testgewichte
 ```
 
 Die Roh-Ergebnisse (JSON) liegen nicht im Repo; Bilder von `cam_3` wurden nie gespeichert.
+
+## 11. C2 – Person über mehrere Kameras (`reidtest`, Welle 4)
+
+Stand: 25.10.2026, Zweig `w4/c2-reid`. In Welle 0 nicht gemessen (§9), deshalb hier nachgeholt.
+
+**Modell.** OSNet x0_25, trainiert auf MSMT17 (torchreid, MIT), als fertiges ONNX von Hugging Face
+(`kornia/osnet`, identisch mit `anriha/osnet_x0_25_msmt17`, SHA-256 `e78604f4…c1bf53d277`, 0,9 MB, 512-d). Kein
+`torchreid`-Export nötig, keine neue Abhängigkeit (onnxruntime-gpu 1.20.2 ist im Image). Der Export hat Batch 16
+fest; die Eingabe lässt sich beim Laden auf eine dynamische Batch-Größe umstellen (Ausgabe bitgleich geprüft).
+
+**Daten.** Market-1501 (Test-Teil: 3 362 Abfragen, 13 102 Galeriebilder, 750 Personen, 6 Kameras; 64×128 px) –
+nicht im Training von OSNet-MSMT17, also ein ehrlicher Domänenwechsel. Nur lokal zur Messung, nicht im Repo.
+
+| Messung | OSNet x0_25 | OSNet + Spiegelbild | DINOv2 ViT-S (Tiermodell) |
+|---|---|---|---|
+| Rank-1 / mAP | **60,5 % / 34,1 %** | 60,4 % / 34,4 % | 8,9 % / 2,9 % |
+| Kosinus gleiche Person (andere Kamera) / andere Person, Median | 0,72 / 0,45 | 0,72 / 0,46 | 0,58 / 0,49 |
+| Zeit je Ausschnitt, Batch 1, **CPU** (2 Threads) | **6,9 ms** | 12,8 ms | – |
+| Zeit je Ausschnitt, Batch 1, CUDA | 5,6–6,0 ms | 5,6 ms | – |
+| VRAM eigener Prozess (CUDA, inkl. Kontext) | +415 MB | | |
+
+**Haushalt-Simulation** (die eigentliche Frage): 400 Gruppen à 4 bzw. 8 Personen, Galerie je Person ≤ 5 Bilder
+einer Kamera, Sonde aus einer anderen Kamera; dazu je Gruppe ein Fremder.
+
+| Schwelle | richtig verknüpft (k=4 / k=8) | falsch verknüpft | bekannt, aber „neu“ | Fremder verknüpft |
+|---|---|---|---|---|
+| 0,60 | 92 % / 89 % | 4,1 % / 7,8 % | 4 % / 3 % | 38 % / 59 % |
+| 0,65 | 86 % / 84 % | 3,4 % / 6,1 % | 11 % / 10 % | 18 % / 36 % |
+| **0,70** | **74 % / 74 %** | **2,3 % / 4,4 %** | 24 % / 22 % | **7 % / 17 %** |
+| 0,75 | 56 % / 57 % | 1,0 % / 2,1 % | 43 % / 41 % | 1,8 % / 8,7 % |
+| **0,80** (= Identität weitergeben) | 34 % / 35 % | **0,6 % / 0,7 %** | 66 % / 64 % | **0,5 % / 0,7 %** |
+
+DINOv2 (geteiltes Tiermodell, 0 MB extra) ist für Personen unbrauchbar (Rank-1 9 %, bei 0,70 werden 10 % falsch und
+17 % Fremde verknüpft, nur 24 % richtig) – ein eigenes ReID-Modell ist nötig.
+
+**Go/No-Go: Go mit Einschränkungen (Hinweis, kein Beweis).**
+- Modell OSNet x0_25 auf der **CPU** (0 MB VRAM, ≈ 7 ms je Ausschnitt; bei höchstens 5 Ausschnitten je Track und
+  3 s Abstand vernachlässigbar). CUDA bringt bei Batch 1 nichts (5,6 ms) und kostet einen eigenen Speicherbereich.
+- Spiegelbild-Mittelung bringt nichts → aus.
+- Standardschwelle **0,70** (Fremde selten, ¾ der Wechsel richtig); Identität (Name) wird erst ab **0,80**
+  weitergegeben (≤ 1 % falsch). Für große Haushalte oder ähnliche Kleidung Schwelle anheben.
+- Verknüpfung nur ohne gleichzeitig aktiven Track desselben Eintrags; das Gesicht hat immer Vorrang.
+- Standardmäßig **aus** (je Kamera `reid_enabled`), Embeddings nur im RAM.
+
+**Grenzen.** Market-1501 sind Außenaufnahmen mit kleinen Ausschnitten (64×128); in Wohnräumen sind die Personen
+größer (≥ 128 px Pflicht), aber Licht, Blickwinkel (Deckenkamera) und Kleidungswechsel sind anders. Eigene Aufnahmen
+derselben Person in zwei Räumen fehlen (nachts nicht möglich) → Schwelle nach einigen Tagen Betrieb prüfen
+(`GET /api/presence/status`: Verhältnis `linked`/`new`).
+
+Reproduzieren (Market-1501 entpackt nach `$M`, Gewichte landen in `$W/reid`):
+```bash
+docker run --rm -e VG_MODELS_DIR=/m -v "$W":/m -v "$PWD/worker/vg_worker":/app/vg_worker:ro -v "$M":/data/market:ro \
+  -v "$PWD/w0-out":/out vision-guard-worker:latest python -m vg_worker.tests_feasibility.reidtest --market /data/market
+# CUDA/VRAM und DINOv2-Vergleich nur unter der GPU-Sperre:
+flock ~/vg-gpu.lock docker run --gpus all … reidtest --market /data/market --device cuda --dino
+```
