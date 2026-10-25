@@ -22,6 +22,9 @@ MODULES = (
     "review",          # W2 D2: list_open_questions, answer_question (write)
     "pets",            # W2 C3: get_pet_diary
     "reports",         # W2 B3: get_daily_report
+    "ask",             # W3 A2: ask_camera
+    "sensors",         # W3 A3+C4: list_sensors, get_sensor, get_shopping_list, add_to_shopping_list (write)
+    "history",         # W3 B1: search_history
 )
 
 
