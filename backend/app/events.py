@@ -99,6 +99,8 @@ class Processor:
         self._last_time_check = 0.0
         self._last_weather_prefetch = 0.0
         self._time_runs: Optional[dict[str, str]] = None
+        # C1: Wiederholungen (repeat_s/repeat_max) je (Regel, Event) bis quittiert/beendet
+        self.repeats: dict[tuple[int, str], dict[str, Any]] = {}
 
     # ---------------------------------------------------------- Hilfen
 
@@ -369,8 +371,14 @@ class Processor:
                 rid = int(rule["id"])
                 st = tr.trigger_state.setdefault(rid, {})
                 zones = ev_fn(rules.TriggerContext(rule=rule, track=tr, msg=msg or {}, now=now, phase=phase, state=st))
-                if zones is not None and rules.static_match(rule, tr, lookup):
-                    self._fire(s, rule, tr, list(zones), now)
+                if zones is None:
+                    continue
+                if rules.static_match(rule, tr, lookup):
+                    self._fire(s, rule, tr, list(zones), now, extra=st.pop("placeholders", None))
+                else:
+                    # z. B. Identität noch nicht aufgelöst / Zeitplan: Evaluator bleibt scharf (C1)
+                    st.pop("fired", None)
+                    st.pop("placeholders", None)
             except Exception:
                 log.exception("Regel %s: Trigger %s fehlgeschlagen", rule.get("name"), rule.get("trigger"))
 
@@ -406,7 +414,8 @@ class Processor:
         last = self.cooldowns.get(ck)
         return last is not None and now - last < float(rule.get("cooldown_s") or 0)
 
-    def _fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float) -> None:
+    def _fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float,
+              extra: Optional[dict[str, Any]] = None) -> None:
         ck = (int(rule["id"]), tr.camera_id)
         if self._cooldown_active(ck, rule, now):
             log.info("Regel '%s' (Kamera %s): Cooldown aktiv", rule["name"], tr.camera_id)
@@ -424,7 +433,7 @@ class Processor:
             rid, zs = int(rule["id"]), list(zones)
 
             def job() -> None:
-                _cond_pool.submit(self._conditional_fire, rid, tr, zs, now)
+                _cond_pool.submit(self._conditional_fire, rid, tr, zs, now, extra)
             if delay > 0:
                 t = threading.Timer(delay, job)
                 t.daemon = True
@@ -433,9 +442,10 @@ class Processor:
                 job()
             return
         self.cooldowns[ck] = now
-        self._do_fire(s, rule, tr, zones, now)
+        self._do_fire(s, rule, tr, zones, now, extra=extra)
 
-    def _conditional_fire(self, rule_id: int, tr: TrackState, zones: list[str], trigger_ts: float) -> None:
+    def _conditional_fire(self, rule_id: int, tr: TrackState, zones: list[str], trigger_ts: float,
+                          extra: Optional[dict[str, Any]] = None) -> None:
         """Läuft im Pool: Bedingungen prüfen (ohne Lock), bei Erfolg Aktionen unter dem Lock ausführen."""
         ck = (rule_id, tr.camera_id)
         try:
@@ -458,7 +468,7 @@ class Processor:
                 self.cooldowns[ck] = now
                 log.info("Regel '%s' (Kamera %s): Bedingungen erfüllt – %s", rule["name"], tr.camera_id, res.reason)
                 with SessionLocal() as s:
-                    self._do_fire(s, rule, tr, zones, now, cond=res)
+                    self._do_fire(s, rule, tr, zones, now, cond=res, extra=extra)
         except Exception:
             log.exception("Regel %s: verzögerte Prüfung fehlgeschlagen", rule_id)
         finally:
@@ -466,15 +476,31 @@ class Processor:
                 self.cond_pending.pop(ck, None)
 
     def _do_fire(self, s: Session, rule: dict[str, Any], tr: TrackState, zones: list[str], now: float,
-                 cond: Optional[rules.CondResult] = None) -> None:
+                 cond: Optional[rules.CondResult] = None, extra: Optional[dict[str, Any]] = None,
+                 repeat: int = 0) -> None:
         ev = s.get(Event, tr.event_id)
         if ev is None:
             return
-        log.info("Regel '%s' ausgelöst (Kamera %s, Track %s, Event %s)", rule["name"], tr.camera_id, tr.track_id, ev.id)
+        log.info("Regel '%s' ausgelöst (Kamera %s, Track %s, Event %s%s)", rule["name"], tr.camera_id, tr.track_id,
+                 ev.id, f", Wiederholung {repeat}" if repeat else "")
         names = list(ev.rules or [])
         if rule["name"] not in names:
             names.append(rule["name"])
             ev.rules = names
+        trig = rule.get("trigger") or "enter"
+        repeat_s = float(rule.get("repeat_s") or 0)
+        posture = (tr.attributes or {}).get("posture")
+        if trig == "posture" or repeat_s > 0:
+            # C1: Notfall-Kennzeichnung (GET /events?alert=1, MCP list_alerts, Banner „Quittieren“)
+            prev = dict((ev.attributes or {}).get("alert") or {})
+            alert = {"rule": rule["name"], "rule_id": int(rule["id"]), "trigger": trig, "repeat": repeat,
+                     "fired_at": utcnow().isoformat(), "first_fired_at": prev.get("first_fired_at") or utcnow().isoformat()}
+            if trig == "posture":
+                alert["posture"] = (rule.get("trigger_options") or {}).get("posture") or posture
+                st = tr.trigger_state.get(int(rule["id"])) or {}
+                if st.get("since"):
+                    alert["posture_since"] = from_unix(float(st["since"])).isoformat()
+            ev.attributes = {**(ev.attributes or {}), "alert": alert}
         s.commit()
         event_data = self._emit(s, ev, "update")
         cam = registry.get(tr.camera_id) or {"name": ev.camera_name, "zones": {}}
@@ -497,7 +523,11 @@ class Processor:
             "clip_url": media_sign.sign_media_path(clip_path, ttl) if clip_path else "",
             # A1: Platzhalter aus den Bedingungen (leer ohne passende Bedingung)
             "items": "", "item_place": "", "weather": "",
+            # C1/D1: Haltung, Geste, Wiederholung (0 = erste Auslösung)
+            "posture": _posture_de(posture), "gesture": "", "repeat": repeat,
         }
+        if extra:
+            ctx.update({k: v for k, v in extra.items() if k in ("posture", "gesture")})
         if cond is not None:
             ctx.update({k: v for k, v in cond.ctx.items() if k in ("items", "item_place", "weather")})
         event_data = media_sign.sign_urls(event_data, ttl)   # Webhook-/MQTT-Payloads gehen nach außen
@@ -506,6 +536,10 @@ class Processor:
                 self._run_action(action, rule, tr, ev, event_data, ctx, date, cond)
             except Exception:
                 log.exception("Regel '%s': Aktion %s fehlgeschlagen", rule["name"], action.get("type"))
+        if repeat == 0 and repeat_s > 0 and rules.is_track_trigger(trig):
+            self.repeats[(int(rule["id"]), ev.id)] = {
+                "rule_id": int(rule["id"]), "event_id": ev.id, "camera_id": tr.camera_id, "track_id": tr.track_id,
+                "count": 0, "next": now + repeat_s, "zones": list(zones), "extra": dict(extra or {})}
         if cond is not None and "push" not in act_types:
             # Regeln mit Bedingungen, aber ohne Push: Hinweis nur anzeigen (CONTRACT W1.B)
             notifications.create(
@@ -668,6 +702,8 @@ class Processor:
                                     log.exception("Dwell-Prüfung fehlgeschlagen")
                             if custom:   # W2: Evaluator-Trigger (posture: Haltedauer) jede Sekunde
                                 self._evaluate_custom(s, tr, {}, now, "tick", lookup)
+                if self.repeats:
+                    self._tick_repeats(now)
                 # abgelaufene Aufträge
                 for rid in [k for k, v in self.pending.items() if now - v["created"] > PENDING_TTL_S]:
                     self.pending.pop(rid, None)
@@ -682,6 +718,45 @@ class Processor:
                 self._check_time_rules()
             except Exception:
                 log.exception("Zeit-Regeln: Prüfung fehlgeschlagen")
+
+    # ---------------------------------------------------------- Wiederholung (C1, repeat_s/repeat_max)
+
+    def _tick_repeats(self, now: float) -> None:
+        """Fällige Wiederholungen auslösen (unter self.lock). Ende: Event quittiert oder beendet, Regel geändert/
+        aus, `repeat_max` erreicht oder – bei `posture` – Haltung besteht nicht mehr."""
+        due = [r for r in self.repeats.values() if now >= r["next"]]
+        if not due:
+            return
+        by_id = {int(r["id"]): r for r in rules.all_rules()}
+        with SessionLocal() as s:
+            for rep in due:
+                key = (rep["rule_id"], rep["event_id"])
+                rule = by_id.get(rep["rule_id"])
+                tr = self.tracks.get((rep["camera_id"], rep["track_id"]))
+                reason = None
+                if rule is None or not rule.get("enabled") or float(rule.get("repeat_s") or 0) <= 0:
+                    reason = "Regel geändert"
+                elif tr is None or tr.event_id != rep["event_id"]:
+                    reason = "Event beendet"
+                elif rule.get("trigger") == "posture" and not (tr.trigger_state.get(rep["rule_id"]) or {}).get("holding"):
+                    reason = "Haltung besteht nicht mehr"
+                elif int(rule.get("repeat_max") or 0) and rep["count"] >= int(rule["repeat_max"]):
+                    reason = "repeat_max erreicht"
+                else:
+                    ack = s.scalar(select(Event.acknowledged_at).where(Event.id == rep["event_id"]))
+                    if ack is not None:
+                        reason = "quittiert"
+                if reason:
+                    log.info("Regel %s, Event %s: keine weiteren Wiederholungen (%s)", rep["rule_id"],
+                             rep["event_id"], reason)
+                    self.repeats.pop(key, None)
+                    continue
+                rep["count"] += 1
+                rep["next"] = now + float(rule["repeat_s"])
+                try:
+                    self._do_fire(s, rule, tr, list(rep["zones"]), now, extra=rep["extra"], repeat=rep["count"])
+                except Exception:
+                    log.exception("Regel '%s': Wiederholung fehlgeschlagen", rule.get("name"))
 
     # ---------------------------------------------------------- Zeit-Regeln (A1, trigger=time)
 
@@ -757,7 +832,7 @@ class Processor:
             "time": now_dt.astimezone(rules.config.tz).isoformat(timespec="seconds"),
             "thumb_url": media_sign.sign_media_path(res.image_path, ttl) if res.image_path else "",
             "snapshot_url": media_sign.sign_media_path(res.snapshot_path, ttl) if res.snapshot_path else "",
-            "clip_url": "", "items": "", "item_place": "", "weather": "",
+            "clip_url": "", "items": "", "item_place": "", "weather": "", "posture": "", "gesture": "", "repeat": "",
         }
         ctx.update({k: v for k, v in res.ctx.items() if k in ("items", "item_place", "weather")})
         created: list[dict[str, Any]] = []
@@ -833,6 +908,11 @@ class Processor:
                 self.tracks.pop(key, None)
             for key in [k for k in self.counts if k[0] == camera_id]:
                 self.counts.pop(key, None)
+
+
+def _posture_de(p: Optional[str]) -> str:
+    from .pose_events import posture_de
+    return posture_de(p)
 
 
 def _cond_message(ctx: dict[str, Any]) -> str:
