@@ -21,6 +21,7 @@ def reload() -> None:
                 "name": c.name,
                 "slug": camera_slug(c.name),
                 "enabled": c.enabled,
+                "health_enabled": True if c.health_enabled is None else bool(c.health_enabled),
                 "labels": list(c.labels or []),
                 "room": c.room,
                 "zones": {z.get("id"): z.get("name") or z.get("id") for z in (c.zones or []) if isinstance(z, dict)},
