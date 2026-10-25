@@ -1,16 +1,16 @@
-"""Tagesbericht (B3) – Gerüst aus K2, Umsetzung: B3 (Paket `backend/app/report/`).
+"""Tagesbericht (B3) – Paket `backend/app/report/`. Vertrag: CONTRACT.md „Nachträge: Welle 2“, W2.G.
 
-Vertrag: CONTRACT.md „Nachträge: Welle 2“, W2.G. Verdrahtung ist fertig:
-- `main.py` ruft `tick()` jede Sekunde im Thread auf (Scheduler: minütlich prüfen, idempotent über
-  `reports.period_key`, Nachholen bis 6 h).
-- LLM nur über `backend/app/llm_client.py` (`configured()`, `complete()`), Test ohne Kosten mit
-  `scripts/llm_mock.py`.
-- Router: `routers/reports.py`.
-Vorschlag für die Aufteilung (Entwurf b2-b3): `facts.py`, `render.py`, `deliver.py`, `scheduler.py`.
+- `facts.py`     – Fakten deterministisch aus der DB (Ereignisse, Personen, Fahrzeuge, Tiere, Gegenstände (B2),
+                   Regeln, Hinweise, Kamerastatus).
+- `render.py`    – Text: Satzbausteine (Standard) oder Sprachmodell über `llm_client` mit Plausibilitätsprüfung
+                   und Rückfall `template (Fallback)`.
+- `deliver.py`   – Versand: MQTT `{prefix}/report`, Push (Notification `source:"report"`), Webhook, Mail.
+- `scheduler.py` – `tick()` (vom Backend-Ticker jede Sekunde), genau ein Bericht je Tag, Nachholen bis 6 h.
+- `service.py`   – bauen/speichern/versenden, gemeinsam für Scheduler und `routers/reports.py`.
+Test ohne Kosten: `scripts/llm_mock.py` (OpenAI-kompatibel, Modi `echo`, `fixed`, `invent`, `error`, `slow`).
 """
 from __future__ import annotations
 
+from .scheduler import tick
 
-def tick() -> None:
-    """Jede Sekunde vom Backend-Ticker (Thread). B3: Scheduler."""
-    return None
+__all__ = ["tick"]
