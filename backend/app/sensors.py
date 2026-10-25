@@ -141,7 +141,7 @@ def raw_state(cfg: dict[str, Any], value: Optional[float]) -> Optional[str]:
         return "on" if on else "off"
     if kind == "blink":
         return "on" if v >= float(p.get("min_std", 0.05)) else "off"
-    if kind == "reference":
+    if kind in ("reference", "vlm"):                 # vlm: 1 = ja, 0 = nein
         return "on" if v >= 0.5 else "off"
     if kind == "fill":
         if v < float(p.get("out_below", 0.15)):
@@ -422,8 +422,9 @@ def _observe(sid: int, value: Optional[float], *, engine: str, now: Optional[flo
             m["cand"], m["count"] = raw, 1
         if not direct and m["count"] < c["confirm_n"]:
             return None
+        # verify_vlm nur zwischen bekannten Zuständen (der erste Zustand nach unknown startet ohnehin keine Regel)
         if (not direct and c["verify_vlm"] and c["kind"] in VERIFY_KINDS and c["state_set"] == "binary"
-                and (c["params"].get("question") or "").strip()):
+                and c["state"] != "unknown" and (c["params"].get("question") or "").strip()):
             blocked = m.get("verify_block")
             if blocked and blocked[0] == raw and now - blocked[1] < c["vlm_max_age_s"]:
                 return None                 # Bildmodell hat diesen Wechsel schon verneint, Bild unverändert
@@ -621,6 +622,7 @@ def _schedule_commit(sid: int, new_state: str, value: Optional[float], engine: s
                      and now - m["last_snapshot"] >= SNAPSHOT_MIN_GAP_S)
         if want_snap or snapshot_path:
             m["last_snapshot"] = now
+        m["last_sample"] = now              # Wechsel steht im Verlauf – nächster Messwert-Eintrag erst später
         if snapshot_path:
             c["snapshot_path"] = snapshot_path
         _stats["commits"] += 1
