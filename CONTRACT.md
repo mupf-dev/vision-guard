@@ -1334,6 +1334,18 @@ Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
 - Medien `ask/YYYY-MM-DD/cam{N}_{unix}.jpg` (beantwortetes Standbild), Aufbewahrung `retention_days_ask`.
 - Prompts intern englisch; Antworten werden **nicht** übersetzt (Vorlagen in der UI; MCP-Beschreibung bittet um
   englische Fragen). `answer` ist Modelltext, `yes_no` heuristisch (`unknown` erlaubt).
+- Ergänzungen der Umsetzung (A2, additiv):
+  - `vlm /infer` liefert zusätzlich `model_ms` (reine Modellzeit); `/health` zusätzlich `enabled, lease, mqtt,
+    download, last_error, stats`; `POST /unload` entlädt sofort. Das Modell läuft in einem Kindprozess (Entladen
+    gibt auch den CUDA-Kontext frei); reicht der Speicher laut `granted.free_mb` nicht, weicht der Dienst auf
+    `smolvlm-500m` aus. Settings liest der Dienst alle 30 s.
+  - Backend: Fragen, die mit is/are/do/can/… bzw. ist/sind/gibt/… beginnen, gehen mit `mode:"yesno"` an das Modell.
+    Bild über go2rtc `frame.jpeg?src=cam_N&cache=3s`. Fehlgeschlagene Fragen stehen mit `error` in `ask_log` (ohne
+    Bild) und erscheinen nicht in `GET /ask`. `auto` weicht auf die Cloud aus, wenn lokal 503/429 und die Cloud für
+    die Kamera erlaubt und eingerichtet ist.
+  - `vlm.ask(camera_id, question, *, region, engine, source, token_name, image=None, record=True)`: für A3
+    (Sensor-Art `vlm`) `image` = eigenes JPEG statt go2rtc-Bild, `record=False` = kein Standbild/kein `ask_log`.
+    Helfer `vlm.is_yes_no_question`, `vlm.parse_yes_no`, `vlm.crop_jpeg`, `cloud_vlm.configured()`.
 
 ### W3.F Virtuelle Sensoren und Vorräte (A3+C4)
 

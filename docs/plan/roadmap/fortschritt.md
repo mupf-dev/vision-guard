@@ -363,3 +363,47 @@ Vertrag und Gerüst für A2, A3+C4 und B1 stehen in CONTRACT.md, Abschnitt „Na
   Beschriftung (11 Hauptpunkte). Kein `pgvector`-Python-Paket (eigener Typ, keine neue Abhängigkeit).
 - **Offen für die Fach-Agenten:** siehe CONTRACT.md W3.C–W3.I. `scripts/llm_mock.py` versteht noch keine Bilder
   (A2 erweitert). Compose-Dienst `vlm` legt A2 an.
+
+## Welle 3 – A2 „Frag die Kamera“ (2026-10-25, nachts, autonom, Zweig `w3/a2-vlm`)
+
+Go/No-Go aus `messungen.md` §6: **Go nur mit GPU-Lease** → umgesetzt wie geplant (Moondream 2 INT4, Lease aus K3).
+
+- **Dienst `vlm`** (`vlm/`, Compose-Profil `vlm`, intern `vlm:8200`): FastAPI `/infer`, `/health`, `/unload`;
+  Modell lazy in einem **Kindprozess** (Entladen gibt auch den CUDA-Kontext frei), GPU-Lease über MQTT
+  (`need_mb` aus Settings, 10 s Zeitlimit → 503), Speichergrenze = `free_mb` − 300 MB, Lease-Verlängerung bei jeder
+  Frage, Entladen nach `vlm_idle_unload_s`, Rückfall auf SmolVLM-500M bei „zu wenig VRAM“, Warteschlange 1 (429),
+  Antwortlimit 20 s. Gewichte beim Start ins Volume `models` (bei vorhandenem Cache ohne Netz). Dockerfile mit
+  derselben ersten pip-Schicht wie `Dockerfile.bench` (Build aus dem Cache in Sekunden).
+- **Backend:** `vlm.py` (go2rtc-Bild mit `cache=3s`, `yesno`-Erkennung, lokal → Cloud-Fallback bei `auto`,
+  Standbild unter `ask/…` ≤ 1920 px, `ask_log`, Aufbewahrung inkl. Tagesordner, `models.vlm` in `/system` aus
+  `vlm /health` alle 10 s), `cloud_vlm.py` (über `llm_client`, Bild ≤ 1600 px, nur mit Kamera-Freigabe und
+  `vlm_cloud_model`), Router `ask` (Liste, Löschen, `Retry-After`). Neue Abhängigkeit `pillow==11.1.0` (Ausschnitt,
+  Verkleinerung).
+- **MCP:** `ask_camera` (ohne `allow_cloud` nur lokal; Standbild als `ImageContent`, signierte `snapshot_url`,
+  `X-VG-Source: mcp`). **Oberfläche:** „Frag die Kamera“ in der Fokusansicht (Live) mit Ausschnitt ziehen,
+  deutschen Vorlagen für englische Fragen, Modellwahl bei Cloud-Freigabe, Antwort mit Standbild, letzte Fragen
+  mit Löschen; Einstellungs-Karte mit Modellzustand und Grafikspeicher-Bedarf. `scripts/llm_mock.py` versteht Bilder.
+
+**Geprüft** (Testprojekt `vg-a2` ohne Worker, `vlm` lieh sich die GPU vom Worker des Haupt-Stacks; GPU-Läufe unter
+`flock ~/vg-gpu.lock`):
+- Dienst direkt: Laden inkl. Lease 4,2 s, erste Antwort 6,6 s, danach 1,0–1,4 s; 5/5 Ja/Nein richtig;
+  VRAM 2,53 → Spitze **5,05 GB** → nach Leerlauf-Entladen wieder 2,53 GB; `cam_3` 4,66–5,16 fps während der Lease,
+  Inventar `paused: GPU-Lease vlm` → `ready`; 4 parallele Anfragen → 2 × 200 / 2 × 429; ungültiges Bild → 400.
+- REST e2e: ohne Dienst 503 („Dienst vlm läuft nicht“), 422 (leere Frage, falsche Region), 404, Cloud ohne Freigabe
+  403, mit Freigabe über `llm_mock` 200 `engine:"cloud"`, `auto` → Cloud-Fallback, Ausschnitt verkleinert das
+  Cloud-Bild; Anbieter nicht erreichbar → 503; Liste/Standbild (Cookie 200, signiert 200, ohne Anmeldung 401),
+  Löschen 204 → Bild 404; Lese-Key: 10 × 200, 11. → 429 „Zu viele Anfragen“ mit `Retry-After`, `source:"api"`,
+  Löschen mit Lese-Key 403. Mit Dienst: `engine:"local"`, `auto` → lokal, Ausschnitt, `/system.models.vlm`
+  `loading` → `ready`, nach Stopp des Dienstes VRAM wieder 2,53 GB. Aufbewahrung: 26 Einträge/22 Bilder gelöscht.
+- MCP mit Lese-Key: `ask_camera` per `camera_id` und `camera_name` → Bild + Text, signierte URL, `source:"mcp"`;
+  unbekannte Kamera und falsche Region → `isError`.
+- `corepack pnpm build` grün; Screenshots (Desktop und 390 px) ohne JS-Fehler.
+
+**Entscheidungen:** Kindprozess statt Laden im Hauptprozess (sonst bleiben ≈ 0,1–0,3 GB CUDA-Kontext belegt);
+Standbild = ganzes Bild (Region nur als Rahmen gespeichert/angezeigt); fehlgeschlagene Fragen nur im Log; MCP fragt
+ohne `allow_cloud` ausschließlich lokal; die UI zeigt die Modellwahl nur bei Kameras mit Cloud-Freigabe.
+
+**Offen:** Kaltstart über das Backend dauert 5–7 s (Laden + Lease), warm 2–3,5 s an `cam_3` (davon go2rtc-Bild
+0,6–2 s) – Abnahme „< 5 s“ gilt warm. Keine Fragen an echte `cam_3`-Bilder gestellt (Personen im Bild; bewusst nur
+Demo-Kameras). Worker-Neustart während einer Lease nicht nachgestellt (der Dienst fragt bei der nächsten Frage neu an).
+Gewichte liegen bisher nur im Test-Volume `vg-w0_models`; der erste Start im Haupt-Stack lädt ≈ 2 GB ins Volume `models`.
