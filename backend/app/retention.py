@@ -69,6 +69,10 @@ def run_once() -> dict:
     if removed_events or removed_files:
         log.info("Aufräumen: %d Events, %d Dateien entfernt", removed_events, removed_files)
     try:
+        _review_retention(now, int(st.get("retention_days_inventory") or 30))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Aufräumen der Rückfragen fehlgeschlagen: %s", e)
+    try:
         inv = _inventory_retention(now, int(st.get("retention_days_inventory") or 30))
     except Exception as e:  # noqa: BLE001
         log.warning("Aufräumen der Gegenstände fehlgeschlagen: %s", e)
@@ -113,6 +117,34 @@ def _w1_retention(now: datetime, notif_days: int, health_days: int) -> dict:
     return {"notifications": n, "health_log": h}
 
 
+UNLINKED_OVERVIEW_DAYS = 2
+REVIEW_KEEP_STATUSES = ("open",)
+EXAMPLES_PER_LABEL_CAMERA = 200
+
+
+def _review_retention(now: datetime, days: int) -> dict:
+    """R1: abgeschlossene Rückfragen (yes/no/skipped/expired) älter als `retention_days_inventory` löschen;
+    Beispielsammlung je (Label, Kamera) auf die neuesten 200 begrenzen (ältere Crops werden danach frei)."""
+    from sqlalchemy import func
+
+    from .models import InventoryExample, ReviewRequest
+
+    with SessionLocal() as s:
+        r = s.execute(delete(ReviewRequest).where(ReviewRequest.status.not_in(REVIEW_KEEP_STATUSES),
+                                                  ReviewRequest.created_at < now - timedelta(days=days))
+                      ).rowcount or 0
+        rn = func.row_number().over(partition_by=(InventoryExample.label, InventoryExample.camera_id),
+                                    order_by=InventoryExample.created_at.desc()).label("rn")
+        sub = select(InventoryExample.id, rn).subquery()
+        old = list(s.scalars(select(sub.c.id).where(sub.c.rn > EXAMPLES_PER_LABEL_CAMERA)).all())
+        if old:
+            s.execute(delete(InventoryExample).where(InventoryExample.id.in_(old)))
+        s.commit()
+    if r or old:
+        log.info("Aufräumen: %d Rückfragen, %d Beispiele entfernt", r, len(old))
+    return {"reviews": r, "examples": len(old)}
+
+
 def _inventory_retention(now: datetime, days: int) -> dict:
     """Gegenstände: Historie und nicht sichtbare Gegenstände älter als `retention_days_inventory` löschen,
     Dateien unter inventory/ ebenso – außer solchen, auf die ein Gegenstand oder die Historie noch zeigt."""
@@ -141,16 +173,24 @@ def _inventory_retention(now: datetime, days: int) -> dict:
                                     .where(ReviewRequest.status == "open")).all():
             keep.update(p for p in (crop, snap) if p)
         keep.update(p for p in s.scalars(select(InventoryExample.crop_path).distinct()).all() if p)
+        # R1: Bilder in Hinweisen (Notification.image_path) bleiben, solange es den Hinweis gibt
+        from .models import Notification
+        keep.update(p for p in s.scalars(select(Notification.image_path)
+                                         .where(Notification.image_path.like("inventory/%")).distinct()).all() if p)
     keep_abs = {os.path.realpath(os.path.join(config.media_dir, p.lstrip("/"))) for p in keep}
     root = os.path.join(config.media_dir, "inventory")
     limit = time.time() - days * 86400
+    # R1: Übersichtsbilder (`cam<N>_<ts>.jpg`), auf die nichts zeigt, schon nach 2 Tagen löschen – sie entstehen
+    # bei jeder Änderung (Flackern) und machten sonst ≈ 0,6 GB/Tag und Kamera aus
+    snap_limit = time.time() - min(days, UNLINKED_OVERVIEW_DAYS) * 86400
     files = 0
     if os.path.isdir(root):
         for dirpath, _dirnames, filenames in os.walk(root, topdown=False):
             for fn in filenames:
                 fp = os.path.join(dirpath, fn)
+                lim = snap_limit if fn.startswith("cam") else limit
                 try:
-                    if os.path.getmtime(fp) < limit and os.path.realpath(fp) not in keep_abs:
+                    if os.path.getmtime(fp) < lim and os.path.realpath(fp) not in keep_abs:
                         os.remove(fp)
                         files += 1
                 except OSError:

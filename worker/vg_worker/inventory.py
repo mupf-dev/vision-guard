@@ -68,6 +68,9 @@ UNCERTAIN_EVERY_S = 600.0      # W2 (D2): je Kamera+Label höchstens ein unsiche
 MATCH_EVERY_S = 600.0          # W2 (B4): Exemplar-Abgleich sonst höchstens alle 10 min
 MATCH_BATCH = 8
 MATCH_MARGIN = 0.10            # Rand des Ausschnitts für das Exemplar-Embedding
+SNAPSHOT_EVERY_S = 300.0        # R1: Übersichtsbild je Kamera höchstens alle 5 min (außer neuer Gegenstand)
+SNAPSHOT_MIN_GAP_S = 60.0       # R1: auch für neue Gegenstände höchstens 1 Bild/min (Session-Start: alle neu)
+SNAPSHOT_MAX_W = 1280           # R1: Übersichtsbild verkleinern (vorher 1920 px, ≈ 250 KiB je Bild)
 
 
 # ============================================================================ GPU-Wechsel
@@ -633,8 +636,9 @@ class InventoryState:
                     for it in self.items.values() if it.state == "present"]
             img = draw_objects(image, objs)
             h, w = img.shape[:2]
-            if w > 1920:
-                img = cv2.resize(img, (1920, int(round(h * 1920 / w))), interpolation=cv2.INTER_AREA)
+            if w > SNAPSHOT_MAX_W:
+                img = cv2.resize(img, (SNAPSHOT_MAX_W, int(round(h * SNAPSHOT_MAX_W / w))),
+                                 interpolation=cv2.INTER_AREA)
             path = f"{day_dir('inventory', frame_ts)}/cam{self.camera_id}_{int(frame_ts)}.jpg"
             return write_jpeg(path, img)
         except Exception as e:  # noqa: BLE001
@@ -655,6 +659,8 @@ class CamInv:
         self.next_due = time.time() + 2.0     # Ringpuffer braucht ein paar Sekunden
         self.interval_eff = self.interval
         self.removed = False
+        self.snap_ts = 0.0                    # R1: letztes Übersichtsbild (frame_ts)
+        self.snap_items: set[str] = set()     # R1: item_ids, die schon auf einem Übersichtsbild waren
         self.persons: deque[tuple[float, list[list[float]]]] = deque(maxlen=400)
         self.last_gpu_s = 0.0
         self.width = 0
@@ -988,7 +994,17 @@ class InventoryEngine:
         except Exception as e:  # noqa: BLE001
             self.match_stats["errors"] += 1
             log.warning("inventory item matching camera %s failed: %s", c.id, e)
-        snapshot = c.state.write_snapshot(image, frame_ts) if changes else None
+        snapshot = None
+        if changes:
+            # R1: Übersichtsbild höchstens alle SNAPSHOT_EVERY_S je Kamera – außer ein Gegenstand erscheint, der
+            # in dieser Session noch auf keinem Übersichtsbild war (Flackern erzeugte sonst ≈ 100 Bilder/h)
+            fresh = {x["item_id"] for x in changes if x.get("type") == "appeared"} - c.snap_items
+            gap = frame_ts - c.snap_ts
+            if (fresh and gap >= SNAPSHOT_MIN_GAP_S) or gap >= SNAPSHOT_EVERY_S:
+                snapshot = c.state.write_snapshot(image, frame_ts)
+                if snapshot:
+                    c.snap_ts = frame_ts
+                    c.snap_items.update(i for i, it in c.state.items.items() if it.state == "present")
         c.last_gpu_s = gpu_s
         # Rechenbudget: Summe(GPU-Zeit / Intervall) über alle Inventar-Kameras ≤ MAX_BUSY
         budget = max(0.01, settings.INVENTORY_MAX_BUSY)

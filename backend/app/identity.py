@@ -433,6 +433,7 @@ def cleanup_orphans(s: Session, days: int) -> list[tuple[int, str]]:
             (Identity.name.is_(None)) | (Identity.name == ""),
             Identity.learning_locked.is_(False),
             Identity.last_seen < cutoff,
+            Identity.kind != "item",   # R1: eigene Exemplare haben nie Events – nur der Nutzer löscht sie
             ~has_events,
         )).all()
         gone = [(i.id, i.kind) for i in rows]

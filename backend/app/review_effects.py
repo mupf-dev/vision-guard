@@ -196,11 +196,27 @@ def _label_confirmed(s: Session, camera_id: int, label: str) -> bool:
         ReviewRequest.label == label, ReviewRequest.status == "yes").limit(1)) is not None
 
 
+LABEL_ASK_EVERY_S = 86400.0   # R1: je Label höchstens eine Rückfrage pro Tag (DB, übersteht Neustarts)
+
+
+def _label_asked_recently(label: str) -> bool:
+    """R1: Nach einem Neustart (Worker-Session neu, Speicher `_asked_items` leer) war das Tageslimit sonst in
+    unter einer Minute verbraucht – mehrfach zum selben Label."""
+    from datetime import datetime, timedelta, timezone
+    since = datetime.now(timezone.utc) - timedelta(seconds=LABEL_ASK_EVERY_S)
+    with SessionLocal() as s:
+        return s.scalar(select(ReviewRequest.id).where(
+            ReviewRequest.kind == "inventory_label", ReviewRequest.label == label,
+            ReviewRequest.created_at >= since).limit(1)) is not None
+
+
 def ask_label(*, camera_id: int, label: str, score: float, threshold: float, bbox: Optional[list[float]],
               crop_path: Optional[str], snapshot_path: Optional[str] = None,
               inventory_item_id: Optional[int] = None, reason: str = "uncertain",
               priority: Optional[float] = None) -> Optional[dict[str, Any]]:
     band = float(settings_store.get().get("review_band", 0.10))
+    if _label_asked_recently(label):
+        return None
     if priority is None:
         priority = max(0.0, 1.0 - abs(threshold - score) / max(band, 1e-3))
     return review.create(
