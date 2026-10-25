@@ -1394,6 +1394,25 @@ Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
   `{sensor}` (Name), `{sensor_state}` (deutsch: an/aus/ok/knapp/leer/unklar). `snapshot`/`clip` in Sensor-Regeln:
   Snapshot über `cmd` ohne Event (A3), Clip übersprungen.
 - Aufbewahrung: `sensor_history` nach `retention_days_sensors`; erledigte Einkaufseinträge nach 30 Tagen.
+- Ergänzungen der Umsetzung (A3+C4, additiv):
+  - `GET /api/internal/cameras.sensors` enthält zusätzlich aktive `vlm`-Sensoren; der Worker meldet für sie nur
+    `change`/`occluded` (`value: null`). `change` = mittlere Absolutdifferenz (0..1, 32×32-Graubild des Bereichs)
+    zu einem Ankerbild; ab `change_threshold` meldet der Worker sie einmal und setzt den Anker neu. Ein
+    `vlm`-Sensor fragt das Bildmodell nur, wenn sich der Bereich seit der letzten Frage verändert hat, ein Wechsel
+    noch bestätigt werden muss oder `vlm_max_age_s` abgelaufen ist (sonst höchstens alle `interval_s` prüfen).
+  - `verify_vlm` (nur `brightness|blink|reference`) braucht `params.question`; widerspricht das Bildmodell,
+    bleibt der Zustand, bis sich das Bild ändert oder `vlm_max_age_s` vergeht. Ist das Bildmodell nicht
+    verfügbar, gilt der billige Befund (`last_engine: "cheap"`).
+  - Referenzbilder (`POST /sensors/{id}/references`) speichern das ganze aktuelle Kamerabild
+    (`sensors/ref/sensor{id}_{state}_{ms}.jpg`); der Worker skaliert es auf die Detect-Auflösung und schneidet den
+    Bereich selbst aus. `sensor_references.embedding` bleibt `NULL`.
+  - `POST /sensors/{id}/evaluate` bewertet sofort **ohne** Hysterese (letzte Worker-Messung, neu zählen bzw.
+    Bildmodell fragen).
+  - `unknown` (deaktiviert, Kamera aus, keine Messwerte seit `max(5 × interval_s, 120 s)`, Referenzen fehlen,
+    Gegenstandserkennung ruht) startet keine Regeln; Regeln laufen nur bei Wechseln zwischen bekannten Zuständen.
+  - Standbild beim bestätigten Wechsel über go2rtc (`sensors/YYYY-MM-DD/sensor{id}_{unix}.jpg`, höchstens 1×/min
+    je Sensor); es ist der Snapshot von Sensor-Regeln (Aktion `snapshot`).
+  - Sensoren gelöschter Kameras entfernt das Backend selbst (Prüfung jede Minute).
 
 ### W3.G Zeitmaschine (B1)
 
