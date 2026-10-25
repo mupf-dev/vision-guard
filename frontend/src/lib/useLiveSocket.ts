@@ -108,6 +108,9 @@ function handle(msg: WsMessage, qc: QueryClient) {
     case "identities":       // Identitäten 07: gebündelt (merged|deleted)
       refreshIdentities(qc, true);
       break;
+    case "nightly":          // Identitäten 07 (Paket D): Nachtlauf gestartet/fertig
+      qc.invalidateQueries({ queryKey: ["nightly"] });
+      break;
     case "notification": {
       qc.invalidateQueries({ queryKey: ["notifications"] });
       if (msg.action === "new" && "title" in msg.notification && useUi.getState().eventToasts) {

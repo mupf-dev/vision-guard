@@ -380,8 +380,10 @@ export interface NightlyAction {
   events?: number;
   review_id?: number | null;
   merge_id?: number | null;
+  direct_score?: number;          // Paket D: Ähnlichkeit direkt zum Ziel (bei Ketten im Bündel)
   // curate/threshold/cleanup
   identity_id?: number;
+  cover_url?: string | null;
   display_name?: string;
   negative_sample_ids?: number[];
   removed_sample_ids?: number[];

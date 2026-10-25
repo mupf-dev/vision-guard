@@ -832,3 +832,18 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .merge-row.undone { opacity: .6; }
 .merge-row .m-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .merge-row .m-sub { font-size: 12px; }
+
+/* Identitäten 07 (Paket D): Nachtlauf-Berichte */
+.nl-reports { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.nl-report { display: flex; gap: 10px; align-items: center; text-align: left; background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: inherit; cursor: pointer; min-width: 0; }
+.nl-report:hover { border-color: var(--line-2); }
+.nl-report-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; min-width: 0; flex: 1; }
+.nl-section h4 { margin: 0 0 6px; font-size: 14px; }
+.nl-action { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.nl-action.skipped { opacity: 0.6; }
+.nl-pair { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.nl-face { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.nl-face-img { width: 36px; height: 36px; border-radius: 8px; object-fit: cover; flex: none; }
+.nl-face-empty { display: grid; place-items: center; background: var(--bg-4); color: var(--line-2); }
+.nl-meta { font-size: 12px; }
+@media (max-width: 600px) { .nl-report { flex-wrap: wrap; } .nl-report-text { white-space: normal; flex-basis: 100%; } }

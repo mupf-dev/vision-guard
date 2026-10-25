@@ -16,10 +16,12 @@ import { AiSettingsCard } from "./AiSettings";
 import { VlmSettingsCard } from "./VlmSettings";
 import { SensorSettingsCard } from "./SensorSettings";
 import { HistorySettingsCard } from "./HistorySettings";
+import { FaceSettingsCard, NightlySettingsCard } from "./FaceSettings";
 
 // R1: Sprungmarken der langen Einstellungsseite (Reihenfolge wie die Karten)
 const SECTIONS: [string, string][] = [
-  ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gegenstaende", "Gegenstände"],
+  ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gesichter", "Gesichter"], ["s-nachtlauf", "Nachtlauf"],
+  ["s-gegenstaende", "Gegenstände"],
   ["s-benachrichtigungen", "Benachrichtigungen"], ["s-rueckfragen", "Rückfragen"], ["s-haltung", "Haltung & Gesten"],
   ["s-reid", "Über Kameras"], ["s-tiere", "Tiere"], ["s-bericht", "Tagesbericht"], ["s-ki", "KI-Sprachmodell"],
   ["s-frag", "Frag die Kamera"], ["s-sensoren", "Sensoren"], ["s-zeitmaschine", "Zeitmaschine"], ["s-mqtt", "MQTT"],
@@ -88,6 +90,12 @@ export function SettingsPage() {
               <span className="hint">Levenshtein-Distanz für OCR-Toleranz.</span>
             </div>
           </div>
+        </div>
+        <div id="s-gesichter" className="settings-anchor">
+          <FaceSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
+        <div id="s-nachtlauf" className="settings-anchor">
+          <NightlySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         </div>
         <div id="s-gegenstaende" className="settings-anchor">
           <InventorySettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
