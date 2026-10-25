@@ -63,11 +63,28 @@ class Track:
                                                "plate_last": 0.0, "plate_tries": 0, "pet_done": False})
     pending: int = 0                    # outstanding identification jobs/HTTP calls
     ended: bool = False
+    # Pose (C1): zuletzt per Track-update gemeldete Bewegung und Zeitpunkt
+    motion_sent: float | None = None
+    motion_sent_ts: float = 0.0
 
     def obj(self) -> dict:
         return {"track_id": self.tid, "label": self.label, "score": round(self.score, 3),
                 "bbox": [round(v, 4) for v in self.bbox], "zones": list(self.zones),
                 "identity": self.identity, "attributes": dict(self.attributes)}
+
+
+def _iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0
+    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _center_dist(a, b) -> float:
+    return float(np.hypot((a[0] + a[2] - b[0] - b[2]) / 2.0, (a[1] + a[3] - b[1] - b[3]) / 2.0))
 
 
 class CameraTracker:
@@ -84,6 +101,9 @@ class CameraTracker:
         self.last_objects: list[dict] = []
         self.last_frame_size = (0, 0)
         self.tracker: sv.ByteTrack | None = None
+        self.last_ts = 0.0
+        # C1: Nachlauf für liegende Personen (Settings fall_track_grace_s); wirkt nur mit pose_enabled
+        self.lying_grace_s = settings.LYING_GRACE_S
 
     # ------------------------------------------------------------------ config
     def configure(self, cfg: dict):
@@ -135,6 +155,7 @@ class CameraTracker:
             msgs: list[dict] = []
             objects: list[dict] = []
             touched: list[Track] = []
+            cur_ext = {int(x) for x in tracked.tracker_id} if len(tracked) else set()
             for k in range(len(tracked)):
                 ext = int(tracked.tracker_id[k])
                 x1, y1, x2, y2 = (float(v) for v in tracked.xyxy[k])
@@ -144,10 +165,19 @@ class CameraTracker:
                 tid = self.by_ext.get(ext)
                 tr = self.tracks.get(tid) if tid is not None else None
                 if tr is None or tr.ended:
-                    tid = _next_track_id()
-                    tr = Track(tid=tid, ext_id=ext, first_seen=ts, last_seen=ts, bbox=bbox, score=score)
-                    self.tracks[tid] = tr
-                    self.by_ext[ext] = tid
+                    held = self._held_lying(bbox, ts, cur_ext) if label == "person" else None
+                    if held is not None:
+                        # C1: liegende Person nach Track-Abriss wiedergefunden → derselbe Track (Liegedauer bleibt)
+                        log.info("camera %s: lying track %s re-attached after %.1fs", self.camera_id, held.tid,
+                                 ts - held.last_seen)
+                        tr = held
+                        tr.ext_id = ext
+                        self.by_ext[ext] = tr.tid
+                    else:
+                        tid = _next_track_id()
+                        tr = Track(tid=tid, ext_id=ext, first_seen=ts, last_seen=ts, bbox=bbox, score=score)
+                        self.tracks[tid] = tr
+                        self.by_ext[ext] = tid
                 tr.last_seen = ts
                 tr.bbox = bbox
                 tr.score = score
@@ -200,6 +230,7 @@ class CameraTracker:
                     msgs.append(self._msg(tr, "update", ts))
 
             self.last_objects = objects
+            self.last_ts = ts
             det_msg = {"camera_id": self.camera_id, "ts": round(ts, 3), "width": w, "height": h, "objects": objects}
             return det_msg, msgs, touched
 
@@ -210,9 +241,12 @@ class CameraTracker:
         with self.lock:
             for tid, tr in list(self.tracks.items()):
                 idle = now - tr.last_seen
-                if not force and idle < settings.TRACK_END_S:
+                end_s = settings.TRACK_END_S
+                if self._lying_hold(tr):
+                    end_s = max(end_s, self.lying_grace_s)
+                if not force and idle < end_s:
                     # identity/attributes resolved while object is not visible in the current frame
-                    if tr.confirmed and tr.dirty_reason & {"identity", "attributes"}:
+                    if tr.confirmed and tr.dirty_reason & {"identity", "attributes", "pose"}:
                         msgs.append(self._msg(tr, "update", now))
                     continue
                 if not tr.confirmed:
@@ -245,6 +279,71 @@ class CameraTracker:
                 if new != tr.attributes:
                     tr.attributes = new
                     tr.dirty_reason.add("attributes")
+
+    # ------------------------------------------------------------------ Pose (C1/D1)
+    def _lying_hold(self, tr: Track) -> bool:
+        return (bool(self.cfg.get("pose_enabled")) and self.lying_grace_s > 0 and tr.confirmed
+                and tr.label == "person" and tr.attributes.get("posture") == "lying")
+
+    def _held_lying(self, bbox: list[float], ts: float, cur_ext: set[int]) -> Track | None:
+        """Liegender Track ohne aktuelle Detektion an (fast) derselben Stelle."""
+        best, best_d = None, 1e9
+        for tr in self.tracks.values():
+            if tr.ended or not self._lying_hold(tr) or ts - tr.last_seen < 0.05:
+                continue
+            if tr.ext_id in cur_ext:
+                continue          # ByteTrack führt den Track in diesem Bild selbst
+            d = _center_dist(bbox, tr.bbox)
+            if _iou(bbox, tr.bbox) >= 0.2 or d < 0.1:
+                if d < best_d:
+                    best, best_d = tr, d
+        return best
+
+    def person_tracks(self) -> list[dict]:
+        """Bestätigte Personen-Tracks für die Pose-Stufe (`held` = gerade nicht detektiert, liegend gehalten)."""
+        with self.lock:
+            out = []
+            for tr in self.tracks.values():
+                if not tr.confirmed or tr.ended or tr.label != "person":
+                    continue
+                held = tr.last_seen < self.last_ts - 1e-3
+                if held and not self._lying_hold(tr):
+                    continue
+                out.append({"tid": tr.tid, "bbox": list(tr.bbox), "zones": list(tr.zones),
+                            "identity": tr.identity, "held": held})
+            return out
+
+    def set_pose(self, tid: int, posture: str, since: float, motion: float | None, changed: bool):
+        """Geglättete Haltung übernehmen. Track-update bei Haltungswechsel sofort, bei deutlich geänderter
+        Bewegung höchstens alle 3 s (für `max_motion` im Backend)."""
+        with self.lock:
+            tr = self.tracks.get(tid)
+            if tr is None or tr.ended:
+                return
+            a = tr.attributes
+            if posture != "unknown" and (changed or a.get("posture") != posture):
+                if a.get("posture") != posture:
+                    a["posture"] = posture
+                    a["posture_since"] = round(since, 3)
+                    tr.dirty_reason.add("attributes")
+            if motion is not None:
+                m = round(float(motion), 3)
+                a["motion"] = m
+                ts = self.last_ts or time.time()
+                if (tr.motion_sent is None or abs(m - tr.motion_sent) > 0.02) and ts - tr.motion_sent_ts >= 3.0:
+                    tr.motion_sent, tr.motion_sent_ts = m, ts
+                    tr.dirty_reason.add("pose")
+
+    def pose_keepalive(self, box: list[float], ts: float):
+        """Pose-Modell sieht eine Person, die der Detektor nicht liefert: liegenden Track an dieser Stelle halten."""
+        with self.lock:
+            for tr in self.tracks.values():
+                if tr.ended or not self._lying_hold(tr):
+                    continue
+                if _iou(box, tr.bbox) >= 0.2 or _center_dist(box, tr.bbox) < 0.1:
+                    if ts > tr.last_seen:
+                        tr.last_seen = ts
+                    return
 
     def change_pending(self, tid: int, delta: int):
         with self.lock:

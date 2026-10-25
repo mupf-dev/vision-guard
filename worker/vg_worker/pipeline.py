@@ -98,6 +98,10 @@ class Pipeline:
         # W2 (K2): Embedding-Dienst vg/internal/embed mit dem geteilten DINOv2 der Tiererkennung
         from .embed import EmbedService
         self.embed = EmbedService(publish, self.identifier.pet)
+        # W2 (C1/D1): Pose-Stufe (Haltung, Gesten) nur auf Kameras mit pose_enabled/gesture_enabled
+        from .pose import PoseEngine
+        self.pose = PoseEngine(publish, self.gpu, lambda cid: self.cams.get(cid))
+        self.lying_grace_s = settings.LYING_GRACE_S
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
@@ -123,6 +127,7 @@ class Pipeline:
         self.inventory.stop()
         self.health.stop()
         self.embed.stop()
+        self.pose.stop()
         with self.lock:
             cams = list(self.cams.values())
             self.cams.clear()
@@ -152,6 +157,7 @@ class Pipeline:
                 if cur is None:
                     log.info("camera %s (%s) start: %s @ %s fps", cid, cfg.get("name"), cfg["detect_url_rtsp"], cfg.get("detect_fps"))
                     rt = CameraRuntime(cfg)
+                    rt.tracker.lying_grace_s = self.lying_grace_s
                     self.cams[cid] = rt
                     rt.start()
                 else:
@@ -169,10 +175,23 @@ class Pipeline:
             self.inventory.configure(list(wanted.values()))
         except Exception:  # noqa: BLE001
             log.exception("inventory configuration failed")
+        try:
+            self.pose.configure(list(wanted.values()))
+        except Exception:  # noqa: BLE001
+            log.exception("pose configuration failed")
 
     def set_settings(self, s: dict | None):
         """Globale Settings aus GET /api/internal/settings (Inventar: confirm_n/miss_m)."""
         self.inventory.set_settings(s)
+        self.pose.set_settings(s)
+        if s and s.get("fall_track_grace_s") is not None:
+            try:
+                self.lying_grace_s = max(0.0, min(300.0, float(s["fall_track_grace_s"])))
+            except (TypeError, ValueError):
+                pass
+            with self.lock:
+                for c in self.cams.values():
+                    c.tracker.lying_grace_s = self.lying_grace_s
 
     # ------------------------------------------------------------------ inference
     def _infer_loop(self):
@@ -232,6 +251,8 @@ class Pipeline:
                 self.inventory.note_persons(c.id, f.ts, [d[2] for d in dets if d[0] == "person" and d[1] >= 0.3])
             for m in msgs:
                 self.publish(f"vg/internal/track/{c.id}", m, 1, False)
+            if self.pose.wants(c.id):
+                self.pose.offer(c, f.ts, f.image)
             self._dispatch_identification(c, f, touched)
         except Exception:
             log.exception("post-processing camera %s failed", c.id)
@@ -354,6 +375,7 @@ class Pipeline:
         d.update(self.identifier.status())
         d["inventory"] = self.inventory.status_text()
         d["embed"] = self.embed.status()
+        d["pose"] = self.pose.status_text()
         return d
 
     def perf(self) -> dict:
@@ -361,9 +383,10 @@ class Pipeline:
         h = [x for x in self.batch_hist if now - x[0] <= 10]
         if not h:
             return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf(),
-                    "health": self.health.perf(), "embed": self.embed.perf()}
+                    "health": self.health.perf(), "embed": self.embed.perf(), "pose": self.pose.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
                 "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
-                "inventory": self.inventory.perf(), "health": self.health.perf(), "embed": self.embed.perf()}
+                "inventory": self.inventory.perf(), "health": self.health.perf(), "embed": self.embed.perf(),
+                "pose": self.pose.perf()}

@@ -2,7 +2,10 @@
 
     python -m vg_worker.selftest rtsp://testcam:8554/cam1 [rtsp://testcam:8554/cam2 ...]
         [--seconds 20] [--fps 5] [--no-face] [--no-plate] [--no-pet] [--clip] [--replicate N]
-        [--inventory] [--inventory-interval 3] [--vocab datei.json]
+        [--inventory] [--inventory-interval 3] [--vocab datei.json] [--pose] [--gestures]
+
+--pose / --gestures schalten die Pose-Stufe (C1: Haltung, D1: Gesten) für alle Kameras ein (Lasttest W2), z. B.
+    python -m vg_worker.selftest rtsp://testcam:8554/cam3 --pose --seconds 120
 
 --inventory schaltet die Inventar-Pipeline (Gegenstände) für die erste Kamera ein, z. B.
     python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 --inventory --seconds 60
@@ -39,6 +42,8 @@ def main():
     ap.add_argument("--no-tiling", action="store_true")
     ap.add_argument("--health", action="store_true",
                     help="Kamera-Gesundheit (C5) mitprüfen; Referenzbilder dann nur in einem temporären Ordner")
+    ap.add_argument("--pose", action="store_true", help="Pose/Haltung (C1) auf allen Kameras")
+    ap.add_argument("--gestures", action="store_true", help="Gesten (D1) auf allen Kameras (impliziert Pose)")
     ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -65,6 +70,9 @@ def main():
     labels_started: Counter = Counter()
     cmd_results: list[dict] = []
     max_objects = Counter()
+    postures: Counter = Counter()          # Haltungswechsel (Track-Attribut posture)
+    gestures_seen: list[dict] = []
+    lying_tracks: dict[tuple[int, int], float] = {}   # (cam, track) -> längste gemeldete Liegedauer
     inventory_last: dict[int, dict] = {}
     inventory_changes: Counter = Counter()
     lock = threading.Lock()
@@ -79,6 +87,17 @@ def main():
                     labels_started[payload["label"]] += 1
                 if payload["type"] == "update" and payload.get("identity"):
                     counts["track_update_with_identity"] += 1
+                attr = payload.get("attributes") or {}
+                if attr.get("posture"):
+                    key = (payload["camera_id"], payload["track_id"])
+                    if attr["posture"] == "lying":
+                        lying_tracks[key] = max(lying_tracks.get(key, 0.0),
+                                                float(payload.get("last_seen") or payload["ts"])
+                                                - float(attr.get("posture_since") or payload["ts"]))
+                    if payload["type"] != "end":
+                        postures[attr["posture"]] += 1
+            elif kind == "gesture":
+                gestures_seen.append(payload)
             elif kind == "detections":
                 max_objects[payload["camera_id"]] = max(max_objects[payload["camera_id"]], len(payload["objects"]))
             elif kind == "cmd_result":
@@ -137,6 +156,7 @@ def main():
                          "detect_fps": a.fps, "labels": [], "min_score": 0.5,
                          "face_recognition": not a.no_face, "plate_recognition": not a.no_plate,
                          "pet_recognition": not a.no_pet,
+                         "pose_enabled": a.pose or a.gestures, "gesture_enabled": a.gestures,
                          "zones": [{"id": "left", "name": "links", "polygon": [[0, 0], [0.5, 0], [0.5, 1], [0, 1]]}]})
     if a.inventory:
         if a.vocab:
@@ -166,6 +186,9 @@ def main():
         print(f"[{time.time() - t_start:5.1f}s] perf={p.perf()} gpu={g} cams={{{cam_s}}}")
         print(f"         models={p.models_status()}")
         print(f"         msgs={dict(counts)} id_calls={dict(id_calls)} id_stats={p.identifier.stats}")
+        if a.pose or a.gestures:
+            print(f"         pose={p.pose.perf()} posture_updates={dict(postures)} lying_tracks={len(lying_tracks)} "
+                  f"gestures={[g['gesture'] for g in gestures_seen]}")
         if a.inventory:
             with lock:
                 inv = dict(inventory_last)
@@ -209,6 +232,11 @@ def main():
     print(f"faces found       : {p.identifier.stats['face_found']}, identify calls {dict(id_calls)}, identities {[(k, len(v)) for k, v in db.items()]}")
     print(f"identify stats    : {p.identifier.stats}")
     print(f"models            : {p.models_status()}")
+    if a.pose or a.gestures:
+        print(f"pose perf         : {p.pose.perf()}")
+        print(f"posture updates   : {dict(postures)}; lying tracks {len(lying_tracks)}: "
+              f"{sorted(round(v, 1) for v in lying_tracks.values())}")
+        print(f"gestures          : {len(gestures_seen)} {Counter(g['gesture'] for g in gestures_seen)}")
     if a.inventory:
         print(f"inventory perf    : {p.inventory.perf()}  changes {dict(inventory_changes)}")
         for cid_, m in inventory_last.items():
