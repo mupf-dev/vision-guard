@@ -18,11 +18,30 @@ export function ReviewSettingsCard({ f, patch }: { f: Settings; patch: (p: Parti
         </div>
         <div className="field"><label>Offene Fragen verfallen nach</label>
           <Range value={f.review_expire_h} min={1} max={168} step={1} format={(v) => `${v} h`} onChange={(v) => patch({ review_expire_h: v })} />
+          <span className="hint">So lange gelten auch die Antwort-Links in Push-Nachrichten.</span>
+        </div>
+        <div className="field"><label>Höchstens offene Fragen</label>
+          <Range value={f.review_max_open} min={1} max={100} step={1} format={(v) => `${v}`} onChange={(v) => patch({ review_max_open: v })} />
+        </div>
+        <div className="field"><label>Unsicherheits-Band unter der Schwelle</label>
+          <Range value={f.review_band} min={0.02} max={0.3} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => patch({ review_band: v })} />
+          <span className="hint">Gegenstände mit einer Konfidenz knapp unter (bzw. knapp über) der Schwelle werden nachgefragt.</span>
+        </div>
+        <div className="field"><label>Schwellen nachführen</label>
+          <div style={{ height: 38, display: "flex", alignItems: "center" }}>
+            <Switch checked={f.review_auto_tune} onChange={(v) => patch({ review_auto_tune: v })} label={f.review_auto_tune ? "aus Antworten lernen (je Kamera und Gegenstand)" : "aus"} />
+          </div>
+          <span className="hint">Ab 3 Antworten, höchstens 0,05 je Antwort; Werte in Administration → Kameras → Gegenstände.</span>
         </div>
         <div className="field"><label>Exemplar-Schwelle (Kosinus-Ähnlichkeit)</label>
           <Range value={f.item_match_threshold} min={0.3} max={0.9} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => patch({ item_match_threshold: v })} />
-          <span className="hint">Darunter wird nachgefragt statt zugeordnet. Kleine Dinge (unter {f.item_min_px} px im Bild) werden nicht automatisch zugeordnet.</span>
+          <span className="hint">Eigene Gegenstände: darunter (bis 0,15 tiefer) wird nachgefragt statt zugeordnet.</span>
         </div>
+        <div className="field"><label>Mindestgröße für eigene Gegenstände</label>
+          <Range value={f.item_min_px} min={0} max={300} step={10} format={(v) => `${v} px`} onChange={(v) => patch({ item_min_px: v })} />
+          <span className="hint">Kleinere Gegenstände im Kamerabild werden nie automatisch zugeordnet (Messung: erst ab ≈ 90 px zuverlässig).</span>
+        </div>
+        <div className="field span-2"><span className="hint">Push für Rückfragen (mit Ja/Nein-Knöpfen bei ntfy): Einstellungen → Benachrichtigungen, Quelle „Rückfragen“. Die Knöpfe brauchen eine öffentliche Adresse (public_base_url).</span></div>
       </div>
     </div>
   );
