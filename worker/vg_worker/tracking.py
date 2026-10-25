@@ -58,8 +58,8 @@ class Track:
     dirty_reason: set = field(default_factory=set)
     last_update_msg: float = 0.0
     # identification bookkeeping (shared with identify.Identifier via `ids`)
-    ids: dict = field(default_factory=lambda: {"lock": threading.Lock(), "face_sent": 0, "face_quality": 0.0,
-                                               "face_last": 0.0, "plate_reads": {}, "plate_sent": set(),
+    # "face": face_track.TrackFaces (Identitäten 07, lazy angelegt)
+    ids: dict = field(default_factory=lambda: {"lock": threading.Lock(), "plate_reads": {}, "plate_sent": set(),
                                                "plate_last": 0.0, "plate_tries": 0, "pet_done": False})
     pending: int = 0                    # outstanding identification jobs/HTTP calls
     ended: bool = False
@@ -113,6 +113,9 @@ class CameraTracker:
         self.last_ts = 0.0
         # C1: Nachlauf für liegende Personen (Settings fall_track_grace_s); wirkt nur mit pose_enabled
         self.lying_grace_s = settings.LYING_GRACE_S
+        # Identitäten 07 (Paket B): vor dem Track-Ende die endgültige Gesichtszuordnung anstoßen;
+        # (camera_id, Track) -> True, wenn eine Anfrage unterwegs ist (dann wartet das Ende wie bei pending)
+        self.on_track_ending = None
 
     # ------------------------------------------------------------------ config
     def configure(self, cfg: dict):
@@ -271,6 +274,15 @@ class CameraTracker:
                     continue
                 if not force and tr.pending > 0 and idle < settings.TRACK_END_S + 6.0:
                     continue
+                if self.on_track_ending is not None and not tr.ids.get("end_hooked"):
+                    tr.ids["end_hooked"] = True
+                    try:
+                        waiting = self.on_track_ending(self.camera_id, tr)
+                    except Exception:  # noqa: BLE001
+                        log.exception("track end hook failed")
+                        waiting = False
+                    if waiting and not force and tr.pending > 0 and idle < settings.TRACK_END_S + 6.0:
+                        continue
                 tr.ended = True
                 if tr.crop_dirty:
                     self._write_crop(tr, now)
@@ -300,6 +312,18 @@ class CameraTracker:
                 if new != tr.attributes:
                     tr.attributes = new
                     tr.dirty_reason.add("attributes")
+
+    def clear_face_identity(self, tid: int):
+        """Identitäten 07: endgültige Zuordnung ergab none/ambiguous → vorläufige Gesichts-Identität entfernen
+        (eine per ReID übernommene Identität bleibt)."""
+        with self.lock:
+            tr = self.tracks.get(tid)
+            if tr is None or tr.identity is None or tr.attributes.get("identity_source") == "reid":
+                return
+            if (tr.identity.get("kind") or "face") != "face":
+                return
+            tr.identity = None
+            tr.dirty_reason.add("identity")
 
     # ------------------------------------------------------------------ ReID (C2)
     def set_reid(self, tid: int, presence_key: str, identity: dict | None = None):

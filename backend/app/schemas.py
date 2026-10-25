@@ -631,7 +631,7 @@ class SettingsModel(BaseModel):
     face_match_margin: float = Field(0.05, ge=0, le=0.3)
     face_max_samples_named: int = Field(40, ge=20, le=100)
     face_track_faces: int = Field(5, ge=1, le=10)
-    face_fullres: bool = False
+    face_fullres: bool = True
     nightly_mode: Literal["off", "preview", "apply"] = "preview"
     nightly_time: str = "03:00"
     nightly_auto_merge_min: float = Field(0.55, ge=0.3, le=0.95)

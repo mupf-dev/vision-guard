@@ -73,8 +73,24 @@ TRACK_UPDATE_MIN_S = _float("VG_TRACK_UPDATE_MIN_S", 1.0)
 FACE_MODEL = _env("VG_FACE_MODEL", "buffalo_l")
 FACE_MIN_DET = _float("VG_FACE_MIN_DET", 0.6)
 FACE_MIN_SIZE = _int("VG_FACE_MIN_SIZE", 36)            # px (shorter side of face box)
-FACE_MAX_IDENTIFY = _int("VG_FACE_MAX_IDENTIFY", 3)     # identify calls per track
-FACE_INTERVAL_S = _float("VG_FACE_INTERVAL_S", 0.4)     # per track
+FACE_INTERVAL_S = _float("VG_FACE_INTERVAL_S", 0.4)     # je Track: Abstand der Gesichts-Jobs beim Sammeln
+# Identitäten 07 (Paket B, face_track.py): Gesichter über die ganze Track-Dauer sammeln
+FACE_INTERVAL_SLOW_S = _float("VG_FACE_INTERVAL_SLOW_S", 2.0)   # … sobald face_track_faces gute Gesichter da sind
+FACE_GOOD_Q = _float("VG_FACE_GOOD_Q", 0.5)                     # „gutes“ Gesicht fürs Verlangsamen
+FACE_MAX_JOBS_TRACK = _int("VG_FACE_MAX_JOBS_TRACK", 120)       # Gesichts-Jobs je Track höchstens
+FACE_MAX_JOBS_PER_S = _float("VG_FACE_MAX_JOBS_PER_S", 15.0)    # global (alle Kameras), Rest wird verworfen
+FACE_FREE_JOBS = _int("VG_FACE_FREE_JOBS", 3)                   # erste n Jobs je Track ohne globales Budget
+FACE_PROVISIONAL_MIN_Q = _float("VG_FACE_PROVISIONAL_MIN_Q", 0.2)   # vorläufige Zuordnung ab dieser Qualität
+FACE_FINAL_AFTER_S = _float("VG_FACE_FINAL_AFTER_S", 30.0)      # erste endgültige Zuordnung spätestens nach n s
+FACE_TRACK_OUTLIER = _float("VG_FACE_TRACK_OUTLIER", 0.3)       # Kosinus zum Track-Mittel, darunter Ausreißer
+FACE_SAMPLE_MAX_PX = _int("VG_FACE_SAMPLE_MAX_PX", 320)         # gespeicherte Gesichtsbilder höchstens so groß
+FACE_CROP_MAX_PX = _int("VG_FACE_CROP_MAX_PX", 960)             # Kopf-Ausschnitt aus dem Vollbild höchstens so groß
+# Vollbild-Leser (fullres.py) für face_fullres: zusätzlicher ffmpeg auf dem Hauptstrom, nur auf Anforderung
+FACE_FULLRES_FPS = _float("VG_FACE_FULLRES_FPS", 2.0)           # Bilder/s des Vollbild-Lesers
+FACE_FULLRES_KEEP = _int("VG_FACE_FULLRES_KEEP", 3)             # Vollbilder im RAM je Kamera
+FACE_FULLRES_MAX_DT_S = _float("VG_FACE_FULLRES_MAX_DT_S", 0.12)   # max. Zeitabstand Analysebild ↔ Vollbild
+FACE_FULLRES_WAIT_S = _float("VG_FACE_FULLRES_WAIT_S", 1.5)     # so lange auf ein passendes Vollbild warten
+FACE_FULLRES_IDLE_S = _float("VG_FACE_FULLRES_IDLE_S", 30.0)    # Leser endet so lange nach der letzten Person
 PLATE_DETECTOR = _env("VG_PLATE_DETECTOR", "yolo-v9-t-384-license-plate-end2end")
 PLATE_OCR = _env("VG_PLATE_OCR", "cct-xs-v2-global-model")
 PLATE_MIN_CONF = _float("VG_PLATE_MIN_CONF", 0.5)

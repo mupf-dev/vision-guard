@@ -205,7 +205,7 @@ DEFAULT_SETTINGS = {
     "face_match_margin": 0.05,
     "face_max_samples_named": 40,
     "face_track_faces": 5,
-    "face_fullres": False,
+    "face_fullres": True,   # Paket B: Machbarkeitstest im Rahmen (docs/plan/07-identitaeten-fortschritt.md)
     # Nachtlauf (Paket D) – Standard Probelauf (Entscheidung des Nutzers: erst Vorschau ansehen)
     "nightly_mode": "preview",
     "nightly_time": "03:00",
