@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import settings_store, state
+from .. import settings_store, state, vlm
 from ..auth import require_user
 from ..config import VERSION, config
 from ..db import get_db, vector_available, vector_version
@@ -86,9 +86,12 @@ def stats(hours: int = Query(24, ge=1, le=24 * 365), db: Session = Depends(get_d
 @router.get("/system")
 def system(db: Session = Depends(get_db)):
     cams = db.scalars(select(Camera).order_by(Camera.id)).all()
+    worker = state.worker_info()
+    # W3 (A2): Zustand des lokalen Bildmodells (Dienst vlm, aus dessen /health) – Platz wie die Worker-Modelle
+    worker["models"] = {**(worker.get("models") or {}), "vlm": vlm.status()}
     return {
         "cameras": [{"id": c.id, "name": c.name, "status": state.status_for(c.id, c.enabled)} for c in cams],
-        "worker": state.worker_info(),
+        "worker": worker,
         "mqtt": {"connected": state.mqtt_connected},
         # W3 (K3): pgvector (B1 Zeitmaschine)
         "db": {"vector": vector_available(), "vector_version": vector_version()},
