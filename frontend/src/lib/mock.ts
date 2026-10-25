@@ -55,7 +55,8 @@ const cameras: Camera[] = [
     face_recognition: true, plate_recognition: false, pet_recognition: true,
     zones: [{ id: "z2", name: "Terrasse", color: "#22c55e", polygon: [[0.6, 0.55], [0.95, 0.55], [0.95, 0.95], [0.6, 0.95]] }],
     ...INV_OFF, room: "Garten",
-    status: { state: "online", fps: 5.0, width: 1280, height: 720, inference_ms: 12.6, last_seen: now() } },
+    status: { state: "online", fps: 5.0, width: 1280, height: 720, inference_ms: 12.6, last_seen: now(),
+      health: { state: "warn", problems: [{ type: "blur", since: ago(3700), text: "Unscharf seit 13:02" }] } } },
   { id: 3, name: "Wohnzimmer", url: "rtsp://192.168.1.40/stream1", detect_url: "rtsp://192.168.1.40/stream2", enabled: true, detect_fps: 4,
     labels: ["person", "dog", "cat"], min_score: 0.5, face_recognition: true, plate_recognition: false, pet_recognition: true,
     zones: [], ...INV_OFF, room: "Wohnzimmer", inventory_enabled: true,
@@ -156,7 +157,8 @@ function mockHealth(id: number): CameraHealth {
   const warn = id === 2;
   return { camera_id: id, enabled: true,
     current: { state: warn ? "warn" : "ok", problems: warn ? [{ type: "blur", since: ago(3700), text: "Unscharf seit 13:02" }] : [],
-      metrics: { brightness: 92, sharpness: warn ? 41 : 160, sharpness_ref: 150, diff: 3.2, inliers: 0.71, shift: 0.01, rotation: 0.2 }, ts: now() },
+      pending: [],
+      metrics: { brightness: 92, sharpness: warn ? 0.41 : 1.6, sharpness_ref: 1.5, diff: 3.2, inliers: 0.97, shift: 0.001, rotation: null, mode: "day" }, ts: now() },
     reference_urls: { day: null, night: null },
     log: warn ? [{ type: "blur", start_ts: ago(3700), end_ts: null, value: 0.27 }, { type: "dark", start_ts: ago(86400), end_ts: ago(85000), value: 18 }] : [] };
 }
@@ -530,7 +532,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   }
   if (path === "/inventory/changes") return json(mockChanges(p));
   if ((m = path.match(/^\/cameras\/(\d+)\/health(\/reference)?$/))) {
-    if (m[2]) return json({ request_id: "mock" }, 202);
+    if (m[2]) return json({ request_id: "mock", ok: true, error: null, path: `health/cam${m[1]}_day.jpg` }, 202);
     return json(mockHealth(Number(m[1])));
   }
   return json({ detail: `Mock: ${method} ${path} nicht implementiert` }, 404);

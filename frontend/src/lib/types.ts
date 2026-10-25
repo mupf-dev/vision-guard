@@ -504,10 +504,17 @@ export interface CameraHealthLogEntry {
   value: number | null;
 }
 
+/** Antwort auf POST /cameras/{id}/health/reference (wartet bis 8 s; ok null = Worker hat noch nicht geantwortet) */
+export interface HealthReferenceResult { request_id: string; ok?: boolean | null; error?: string | null; path?: string | null }
+
 export interface CameraHealth {
   camera_id: number;
   enabled: boolean;
-  current: (CameraHealthStatus & { metrics: Record<string, number | null>; ts: string | null }) | null;
+  current: (CameraHealthStatus & {
+    /** Befunde, die noch unter der Warnschwelle `health_alert_after_s` liegen */
+    pending?: { type: HealthProblemType; since: string; text: string }[];
+    metrics: Record<string, number | string | null>; ts: string | null;
+  }) | null;
   reference_urls: { day: string | null; night: string | null };
   log: CameraHealthLogEntry[];
 }

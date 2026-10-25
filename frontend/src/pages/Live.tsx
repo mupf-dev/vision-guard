@@ -14,6 +14,7 @@ import { Empty, LabelIcon, Loading } from "../components/ui";
 import { EventDetailDialog, FeedItem } from "../components/EventBits";
 import { labelColor, labelName } from "../lib/labels";
 import { fmtAgo } from "../lib/format";
+import { HealthBadge, HealthBanner } from "../components/HealthBadge";
 
 function useStatus(cam: Camera): CameraStatus | null {
   const live = useLive((s) => s.status[cam.id]);
@@ -53,6 +54,7 @@ function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; o
         <span className="spacer" />
         <StatusBadge status={status} enabled={cam.enabled} />
       </div>
+      {cam.enabled && cam.health_enabled && <HealthBanner health={status?.health} />}
       <div className="tile-actions"><button className="btn btn-sm btn-icon" title="Fokusansicht"><Maximize2 size={14} /></button></div>
       <div className="tile-bottom">
         {counts(objects).map(([l, n]) => (
@@ -179,6 +181,7 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
         <button className="btn btn-ghost" onClick={onBack}><ArrowLeft size={16} />Alle Kameras</button>
         <h1>{cam.name}</h1>
         <StatusBadge status={status} enabled={cam.enabled} />
+        {cam.enabled && cam.health_enabled && <HealthBadge health={status?.health} />}
         {status?.state === "online" && <>
           <span className="badge outline"><Gauge size={12} />{status.fps?.toFixed(1)} fps</span>
           <span className="badge outline"><Timer size={12} />{status.inference_ms?.toFixed(1)} ms</span>
