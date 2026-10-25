@@ -43,6 +43,13 @@ def run_once() -> dict:
         except Exception as e:  # noqa: BLE001
             s.rollback()
             log.warning("Aufräumen der Identitäten fehlgeschlagen: %s", e)
+        try:   # Prüfung 07: Bildordner ohne Identität (Absturz zwischen Commit und Löschen der alten Kopien)
+            from .identity import sweep_orphan_dirs
+            n = sweep_orphan_dirs()
+            if n:
+                log.info("Aufräumen: %d verwaiste Identitäts-Bildordner entfernt", n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Aufräumen verwaister Identitäts-Bildordner fehlgeschlagen: %s", e)
 
     removed_files = 0
     limit = time.time() - media_days * 86400

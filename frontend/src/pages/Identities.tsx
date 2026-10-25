@@ -225,7 +225,7 @@ function IdCard({ i, onClick, delay, selecting, selected, onSelect }: {
         <Img src={i.cover_url} fallback={<div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--line-2)" }}><KindIcon kind={i.kind} size={56} /></div>} />
         {!i.name && <span className="badge warn">unbenannt</span>}
         {i.learning_locked && (
-          <span className="badge outline" title="Lernen gesperrt" style={{ position: "absolute", top: 8, right: 8, left: "auto", zIndex: 1, background: "rgba(10,15,23,.7)" }}><Lock size={12} /></span>
+          <span className="badge outline lock-badge" title="Lernen gesperrt"><Lock size={12} /></span>
         )}
         {i.suggestion && (
           <span className="badge accent" title={`Ähnlichkeit ${fmtScore(i.suggestion.score)}`} style={{ position: "absolute", top: 36, left: 8, zIndex: 1 }}>ähnelt {i.suggestion.display_name}</span>

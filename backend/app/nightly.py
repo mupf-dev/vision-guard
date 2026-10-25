@@ -16,9 +16,12 @@ Entscheidungen (Paket D, dokumentiert in docs/plan/07-identitaeten-fortschritt.m
 - Score Fragment → Kandidat wie ID.F: Mittel der besten 3 Bild-Ähnlichkeiten des Kandidaten zum **Mittel** der
   Fragment-Bilder (entspricht der endgültigen Track-Zuordnung).
 - Bündel per Union-Find über sichere Kanten. Ein Bündel mit mehr als einer „festen“ Identität (benannt oder mit
-  Lernsperre) wird nicht automatisch zusammengeführt (→ Rückfragen). Gegen Ketten-Drift muss jede Quelle auch
+  Lernsperre) wird nicht automatisch zusammengeführt (→ Rückfragen). Hat das Ziel eine Lernsperre, wird ebenfalls
+  nur gefragt (Prüfung 07: der Nachtlauf schreibt nie Bilder in eine gesperrte Galerie; „Ja“ ist eine Nutzeraktion). Gegen Ketten-Drift muss jede Quelle auch
   direkt zum Ziel mindestens `nightly_review_min` erreichen, sonst Rückfrage statt Merge.
-- Kuratieren und Aufräumen lassen Identitäten mit Lernsperre unangetastet; manuelle Bilder werden nie negativ
+- Kuratieren, Schwellen und Aufräumen lassen Identitäten mit Lernsperre unangetastet (Prüfung 07: Schwellen haben
+  keinen Rücksetzweg); eine Schwelle sinkt nie unter `face_match_threshold`, außer die Person hat zu allen anderen
+  Identitäten mindestens `face_match_margin` Abstand unter der neuen Schwelle; manuelle Bilder werden nie negativ
   markiert oder entfernt; höchstens 20 % der Bilder einer Person werden in einem Lauf negativ markiert.
 - Hinweis (Notification) bei geplanten Läufen und beim Anwenden; ein von Hand gestarteter Probelauf erzeugt keinen
   Hinweis (der Nutzer sieht den Bericht ohnehin in der Oberfläche).
@@ -300,6 +303,12 @@ def _run(rid: int, mode: str, trigger: str, apply_from: Optional[int], idx: Opti
                 # Eine angewandte Vorschau bleibt gesperrt (Teile können schon angewandt sein) – ein neuer Probelauf
                 # zeigt den aktuellen Stand.
                 r.status, r.finished_at, r.error = "error", utcnow(), f"{type(e).__name__}: {e}"[:500]
+                if r.actions:   # Zwischenstand (_checkpoint): zeigen, was bis zum Abbruch angewandt wurde
+                    try:
+                        r.summary = _summary(r.actions)
+                        r.text = _text(mode, r.summary, r.actions) + " (abgebrochen)"
+                    except Exception:  # noqa: BLE001
+                        log.exception("Nachtlauf %s: Zusammenfassung des Zwischenstands fehlgeschlagen", rid)
                 s.commit()
                 out = summary_json(r)
         hub.broadcast({"type": "nightly", "action": "finished", "report": out})
@@ -485,6 +494,9 @@ def _plan_merges(s: Session, faces: dict[int, _Face], st: dict[str, Any],
             if (m, target) in blocked:
                 continue
             _, sc, second = safe.get(m, best.get(m, (target, direct, None)))
+            if tf.ident.learning_locked:   # Prüfung 07: nie automatisch in eine gesperrte Galerie → Rückfrage
+                review_cands[m] = (target, sc, second)
+                continue
             merges.append({
                 "type": "merge", **_ident_ref(sf, covers, "src"), **_ident_ref(tf, covers, "into"),
                 "into_named": _named(tf), "score": round(float(sc), 4),
@@ -557,11 +569,23 @@ def _person_threshold(f: _Face) -> Optional[float]:
     return round(min(max(thr, THRESHOLD_RANGE[0]), THRESHOLD_RANGE[1]), 2)
 
 
+def _foreign_max(faces: dict[int, _Face], f: _Face) -> float:
+    """Höchster Score eines einzelnen Bildes von `f` gegen irgendeine andere Identität (Top-3 wie ID.F)."""
+    others = [(i, x.vecs) for i, x in faces.items()
+              if i != f.ident.id and x.vecs is not None and f.vecs is not None and x.vecs.shape[1] == f.vecs.shape[1]]
+    if f.vecs is None or not others:
+        return 0.0
+    mat = np.concatenate([v for _, v in others])
+    ids = np.concatenate([np.full(v.shape[0], i, dtype=np.int64) for i, v in others])
+    return max((max(face_match.top_k_scores(mat, ids, v).values(), default=0.0) for v in f.vecs), default=0.0)
+
+
 def _plan_rest(s: Session, faces: dict[int, _Face], st: dict[str, Any], skip: set[int],
                covers: dict[int, str]) -> list[dict[str, Any]]:
     """Schritte 2–4 für alle Identitäten außer `skip` (Quellen geplanter Merges)."""
     acts: list[dict[str, Any]] = []
     glob = float(st.get("face_match_threshold", 0.30))
+    margin = float(st.get("face_match_margin", 0.05))
     for f in sorted(faces.values(), key=lambda x: x.ident.id):
         if f.ident.id in skip:
             continue
@@ -569,8 +593,12 @@ def _plan_rest(s: Session, faces: dict[int, _Face], st: dict[str, Any], skip: se
             a = _plan_curate(f, st)
             if a:
                 acts.append({**a, "cover_url": media_url(covers.get(f.ident.id))})
-        if st.get("nightly_thresholds", True) and _named(f):
+        if st.get("nightly_thresholds", True) and _named(f) and not f.ident.learning_locked:
             new = _person_threshold(f)
+            # Prüfung 07: nie großzügiger als global, solange Fremde nicht klar (≥ margin) unter der neuen Schwelle
+            # bleiben – die eigene Streuung allein sagt nichts über Verwechslungen.
+            if new is not None and new < glob and _foreign_max(faces, f) + margin >= new:
+                new = glob
             old = f.ident.match_threshold
             if new is not None and abs(new - (old if old is not None else glob)) >= 0.01:
                 acts.append({"type": "threshold", "identity_id": f.ident.id, "display_name": f.ident.display_name,
@@ -629,7 +657,7 @@ def _run_apply(rid: int) -> list[dict[str, Any]]:
         rest = _plan_rest(s, faces, st, set(), covers)
         s.rollback()
     rest = [{**a, "idx": len(actions) + i, "applied": False, "skipped_reason": None} for i, a in enumerate(rest)]
-    _apply_actions(rid, rest, st)
+    _apply_actions(rid, rest, st, done=actions)
     return actions + rest
 
 
@@ -646,19 +674,38 @@ def _apply_preview(rid: int, src_id: int, idx: Optional[list[int]]) -> list[dict
     return planned
 
 
-def _apply_actions(rid: int, actions: list[dict[str, Any]], st: dict[str, Any]) -> None:
-    """Wendet Aktionen an; jede wird neu geprüft (sonst `skipped_reason`). Ändert `actions` in place."""
+def _checkpoint(rid: int, actions: list[dict[str, Any]]) -> None:
+    """Zwischenstand der Aktionen im Bericht speichern (Prüfung 07): bricht ein Anwenden-Lauf ab (Fehler, Neustart),
+    bleibt nachvollziehbar, was schon angewandt wurde."""
+    try:
+        with SessionLocal() as s:
+            r = s.get(NightlyReport, rid)
+            if r is not None:
+                r.actions = [dict(a) for a in actions]
+                s.commit()
+    except Exception:  # noqa: BLE001 – Protokoll ist Beiwerk, der Lauf geht weiter
+        log.exception("Nachtlauf %s: Zwischenstand nicht gespeichert", rid)
+
+
+def _apply_actions(rid: int, actions: list[dict[str, Any]], st: dict[str, Any],
+                   done: list[dict[str, Any]] = ()) -> None:
+    """Wendet Aktionen an; jede wird neu geprüft (sonst `skipped_reason`). Ändert `actions` in place.
+    Nach jeder Aktion bzw. jedem Bündel wird `done + actions` als Zwischenstand gespeichert."""
+    def save() -> None:
+        _checkpoint(rid, list(done) + actions)
+
     by_type: dict[str, list[dict[str, Any]]] = {}
     for a in actions:
         by_type.setdefault(a.get("type", ""), []).append(a)
-    _apply_merges(rid, by_type.get("merge", []), st)
-    _apply_reviews(by_type.get("review", []))
-    _apply_curate(by_type.get("curate", []), st)
-    _apply_thresholds(by_type.get("threshold", []))
+    _apply_merges(rid, by_type.get("merge", []), st, save)
+    _apply_reviews(by_type.get("review", []), save)
+    _apply_curate(by_type.get("curate", []), st, save)
+    _apply_thresholds(by_type.get("threshold", []), save)
     _apply_cleanup(by_type.get("cleanup", []), st)
+    save()
 
 
-def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
+def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any], save) -> None:
     from .identity_bulk import BulkError, bulk_merge
     if not acts:
         return
@@ -672,6 +719,7 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any]) -> N
         blocked = _blocked(s)
         s.expunge_all()   # nur gelesen; Objekte losgelöst weiter nutzen (rollback würde sie verfallen lassen)
     for into_id, group in groups.items():
+        save()
         dst = faces.get(into_id)
         ok: list[dict[str, Any]] = []
         for a in group:
@@ -679,6 +727,8 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any]) -> N
             sf = faces.get(sid)
             if dst is None:
                 a["skipped_reason"] = "Ziel existiert nicht mehr"
+            elif dst.ident.learning_locked:
+                a["skipped_reason"] = "Ziel hat Lernsperre (nur per Rückfrage)"
             elif sf is None:
                 a["skipped_reason"] = "Quelle existiert nicht mehr"
             elif sf.ident.name:
@@ -710,7 +760,7 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any]) -> N
             try:
                 _, srcs, merge_ids = bulk_merge(s, [int(a["src_id"]) for a in passing], into_id, actor="nightly",
                                                 score={int(a["src_id"]): float(a["score"]) for a in passing},
-                                                report_id=rid)
+                                                report_id=rid, guard=_merge_guard(into_id))
             except BulkError as e:
                 for a in passing:
                     a["skipped_reason"] = e.detail
@@ -725,9 +775,29 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any]) -> N
             a["applied"], a["merge_id"] = True, mids.get(int(a["src_id"]))
 
 
-def _apply_reviews(acts: list[dict[str, Any]]) -> None:
+def _merge_guard(into_id: int):
+    """Prüfung unter Zeilensperre (in `bulk_merge`) – zwischen Prüfung und Ausführung kann der Nutzer eine Quelle
+    benennen/sperren, das Ziel sperren oder ein Paar mit „Nein“ beantworten (Prüfung 07, TOCTOU)."""
+    from .identity_bulk import BulkError
+
+    def guard(s: Session, found: dict[int, Identity]) -> None:
+        if found[into_id].learning_locked:
+            raise BulkError(409, "Ziel inzwischen gesperrt")
+        blocked = _blocked(s)
+        for sid, ident in found.items():
+            if sid == into_id:
+                continue
+            if ident.name or ident.learning_locked:
+                raise BulkError(409, f"Quelle {sid} inzwischen benannt oder gesperrt")
+            if (sid, into_id) in blocked:
+                raise BulkError(409, f"Paar {sid}/{into_id} wurde mit „Nein“ beantwortet")
+    return guard
+
+
+def _apply_reviews(acts: list[dict[str, Any]], save) -> None:
     from . import review
     for a in acts:
+        save()
         with SessionLocal() as s:
             src, dst = s.get(Identity, int(a["src_id"])), s.get(Identity, int(a["into_id"]))
             covers = ident_svc._covers(s, [int(a["src_id"]), int(a["into_id"])])
@@ -756,9 +826,10 @@ def _apply_reviews(acts: list[dict[str, Any]]) -> None:
             a["applied"], a["review_id"] = True, r["id"]
 
 
-def _apply_curate(acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
+def _apply_curate(acts: list[dict[str, Any]], st: dict[str, Any], save) -> None:
     from .serializers import identity_json
     for a in acts:
+        save()
         iid = int(a["identity_id"])
         to_remove: list[str] = []
         with ident_svc._lock, SessionLocal() as s:
@@ -790,18 +861,21 @@ def _apply_curate(acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
                 a["removed_sample_ids"] = [x.id for x in rem]
                 a["applied"] = True
                 out = identity_json(s, ident)
-            except BaseException:
+            except Exception as e:  # noqa: BLE001 – eine Identität darf die übrigen nicht verhindern
                 s.rollback()
-                raise
+                log.exception("Nachtlauf: Kuratieren von %s fehlgeschlagen", iid)
+                a["applied"], a["skipped_reason"] = False, f"Fehler: {e}"[:200]
+                continue
         for p in to_remove:
             ident_svc._remove_media(p)
         ident_svc.invalidate("face")
         hub.broadcast({"type": "identity", "identity": out})
 
 
-def _apply_thresholds(acts: list[dict[str, Any]]) -> None:
+def _apply_thresholds(acts: list[dict[str, Any]], save) -> None:
     from .serializers import identity_json
     for a in acts:
+        save()
         with ident_svc._lock, SessionLocal() as s:
             ident = s.get(Identity, int(a["identity_id"]))
             if ident is None or ident.kind != "face":
@@ -809,6 +883,9 @@ def _apply_thresholds(acts: list[dict[str, Any]]) -> None:
                 continue
             if not ident.name:
                 a["skipped_reason"] = "Nicht mehr benannt"
+                continue
+            if ident.learning_locked:
+                a["skipped_reason"] = "Lernsperre aktiv"
                 continue
             new = min(max(float(a["new"]), THRESHOLD_RANGE[0]), THRESHOLD_RANGE[1])
             a["old"] = ident.match_threshold
@@ -820,16 +897,19 @@ def _apply_thresholds(acts: list[dict[str, Any]]) -> None:
 
 
 def _apply_cleanup(acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
+    """Aufräumen: Die Bedingungen werden in `bulk_delete` unter Zeilensperre neu geprüft (Prüfung 07, TOCTOU);
+    inzwischen gelöschte oder nicht mehr passende Identitäten werden einzeln übersprungen."""
     from .identity_bulk import BulkError, bulk_delete
     if not acts:
         return
     days = max(1, int(st.get("nightly_cleanup_days", 3) or 1))
     cutoff = utcnow() - timedelta(days=days)
-    ok: list[dict[str, Any]] = []
-    with SessionLocal() as s:
-        for a in acts:
-            iid = int(a["identity_id"])
-            ident = s.get(Identity, iid)
+    by_id = {int(a["identity_id"]): a for a in acts}
+
+    def select_fn(s: Session, found: dict[int, Identity]) -> list[int]:
+        ok: list[int] = []
+        for iid, a in by_id.items():
+            ident = found.get(iid)
             if ident is None or ident.kind != "face":
                 a["skipped_reason"] = "Identität existiert nicht mehr"
                 continue
@@ -839,19 +919,23 @@ def _apply_cleanup(acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
             if not _cleanable(ident, int(n), int(ev), cutoff):
                 a["skipped_reason"] = "Inzwischen benannt, gesperrt, gesehen oder mit Ereignissen"
                 continue
-            ok.append(a)
-        s.rollback()
-    if not ok:
-        return
+            ok.append(iid)
+        return ok
+
     with SessionLocal() as s:
         try:
-            bulk_delete(s, [int(a["identity_id"]) for a in ok])
+            gone = bulk_delete(s, list(by_id), select_fn=select_fn)
         except BulkError as e:
-            for a in ok:
-                a["skipped_reason"] = e.detail
+            for a in acts:
+                a["skipped_reason"] = a.get("skipped_reason") or e.detail
             return
-    for a in ok:
-        a["applied"] = True
+        except Exception as e:  # noqa: BLE001 – wie bei den Merges: Lauf läuft weiter, Aktionen als übersprungen
+            log.exception("Nachtlauf: Aufräumen fehlgeschlagen")
+            for a in acts:
+                a["skipped_reason"] = a.get("skipped_reason") or f"Fehler: {e}"[:200]
+            return
+    for iid in gone:
+        by_id[iid]["applied"] = True
 
 
 # ---------------------------------------------------------------- Bericht

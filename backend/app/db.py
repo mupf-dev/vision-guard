@@ -86,6 +86,8 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("identity_samples", "source_res", "varchar(8) NULL"),
     ("identity_samples", "camera_id", "integer NULL"),
     ("cameras", "face_fullres", "boolean NOT NULL DEFAULT true"),
+    # Prüfung 07: Zustand des Ziels vor der Zusammenführung (Zurücksetzen stellt Name/Notizen/Zeiten wieder her)
+    ("identity_merges", "dst_before", "jsonb NULL"),
 ]
 
 

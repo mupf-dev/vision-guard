@@ -116,7 +116,10 @@ export function BulkMergeDialog({ selected, all, onClose, onDone }: {
   const sumSamples = sources.reduce((n, i) => n + i.sample_count, 0);
   const sumEvents = sources.reduce((n, i) => n + i.event_count, 0);
   const namedSources = sources.filter((i) => !!i.name);
-  const limit = target?.kind === "face" && (target.name || namedSources.length) ? 40 : 20;
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  // Bildgrenze wie im Backend (`face_match.sample_limit`): benannte Gesichter `face_max_samples_named`
+  const limit = target?.kind === "face" && (target.name || namedSources.length)
+    ? (settings.data?.face_max_samples_named ?? 20) : 20;
   const samplesAfter = (target?.sample_count ?? 0) + sumSamples;
 
   const otherOptions = useMemo(() => all

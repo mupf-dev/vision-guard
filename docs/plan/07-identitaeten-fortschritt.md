@@ -326,3 +326,46 @@ an den Nutzer. Die Einzelbild-Quote sinkt erst durch neue Aufnahmen (Track-Konso
 nach einigen Tagen Betrieb wiederholen (Schwellen `face_new_min_quality`/`face_sample_min_quality`); `nightly_mode`
 erst nach Freigabe auf `apply` stellen.
 
+
+## Prüfung (Daten-Robustheit, Bedienung/Erkennung) – Umsetzung der Funde (2026-10-25)
+
+Vertrag: CONTRACT.md ID.K. Backup vor der Schemaänderung: `~/vision-guard-backups/vg-pruefung07-20261025-111031.sql.gz`
+(chmod 600); Zeilen vorher/nachher identisch (identities 76, identity_samples 327, identity_merges 0, events 626,
+nightly_reports 2; höchste Identity-ID 135). Neue Spalte `identity_merges.dst_before` (additiv).
+
+Behoben (Stichprobe je Fund an Test-Identitäten `PR07-Test-*` im Backend-Container, danach entfernt, Zähler
+`counter_face` zurückgesetzt):
+- **Hoch – Nachtlauf in gesperrte Galerie:** Ziel mit Lernsperre → Rückfrage statt Merge (`nightly._plan_merges`),
+  ältere Vorschau → „Ziel hat Lernsperre (nur per Rückfrage)“. Beleg: Plan {L, F} → 0 Merges, Rückfrage F→L.
+  Echter Probelauf (nur gerechnet, nichts gespeichert): vorher 2 Merges 63→15/64→19, jetzt 0 Merges, 5 Rückfragen,
+  2 Kuratieren, 0 Schwellen. Entscheidung: lieber fragen als Bilder ungeprüft in die Galerie der Nutzer-Personen;
+  „Ja“ ist eine Nutzeraktion (CONTRACT D).
+- **Hoch – Fragmente blockieren Zuordnung:** `identity._identify_face` + `face_match.pair_score`. Beleg: A (benannt)
+  0,838 vs. B (Fragment) 0,833, Paar 0,852 → vorher `ambiguous`, jetzt `match` an A (+ Rückfrage).
+- **Dateien bei Absturz:** Kopieren vor dem Commit, alte nach dem Commit löschen (`identity.stage_sample_files`, auch
+  Einzel-Merge und Zurücksetzen); `sweep_orphan_dirs` in der Aufbewahrung. Beleg: simulierter Commit-Fehler → Pfade
+  und Dateien unverändert, keine Kopien; Merge/Zurücksetzen → alle Dateien am neuen Ort.
+- **Protokoll bei Abbruch:** `_checkpoint` nach jedem Bündel/jeder Aktion; Fehlerbericht behält den Zwischenstand.
+  Beleg: Testbericht mit 2 Aktionen gespeichert inkl. `skipped_reason`.
+- **TOCTOU:** `bulk_merge(guard=…)`, `bulk_delete(select_fn=…)` prüfen unter Zeilensperre. Beleg: Quelle benannt → 409.
+- **Aufräumen alles-oder-nichts:** einzeln übersprungen, `except Exception`. Beleg: [gelöscht, benannt→übersprungen,
+  unbekannt→übersprungen].
+- **Zurücksetzen unvollständig:** `dst_before`. Beleg: Merge benannt→unbenannt, Zurücksetzen → Name `None`, Notizen
+  „B-Notiz“, `first_seen`/`last_seen` wie vorher.
+- **Schwelle unter global (B2) / ohne Rücksetzweg (D8):** nie bei Lernsperre; nie unter global ohne Fremdabstand.
+  Beleg: Fremde weit (0,06) → 0,34 vorgeschlagen; Fragment nah (0,41) → kein Vorschlag.
+- **Bericht wählt alles vor (B3):** nur `merge` vorgewählt, Zahlen deutsch, „erkennt großzügiger/strenger“.
+- Niedrig, mit erledigt: Bilder erst nach Commit löschen (`_learn_face`, Einzel-Merge); Track-Cache nach Sammel-
+  Merge/-Löschen (Beleg: Eintrag zeigt auf Ziel); Bildgrenze im Sammel-Dialog aus Settings; Schloss-Symbol mit Klasse
+  `lock-badge` links vom Häkchen; Handy-Auswahlmodus 2 Spalten, Meldungen oberhalb der Leiste (Screenshot
+  `scratchpad/ident/p7-mobil-auswahl.png`, kein Überlauf, keine JS-Fehler).
+
+Teilweise / nicht behoben:
+- **B4 Vollbild-Ausbeute:** nur Kennzahlen `perf.face.by_source` (jobs/faces je Quelle, live sichtbar). Versatzmessung
+  und automatischer Rückfall je Kamera nicht umgesetzt: ein fairer Vergleich braucht beide Quellen gleichzeitig für
+  dieselben Tracks (A/B-Messung) – erst mit den neuen Zählern über einige Stunden auswerten. Kein Lasttest (nur
+  Zähler, keine Rechenlast; Worker-fps danach 9,8).
+- **B8 Qualität je Quelle:** nur vermerkt – bei der Nachmessung `quality`/`face_size` getrennt nach `source_res`
+  auswerten; `cam_3` (2880 px) liefert im Vollbild 1,5× größere Gesichter, `face_new_min_size` greift dort lockerer.
+- D8 Rücksetz-Endpunkt für Schwellen nicht gebaut (durch Auslassen gesperrter Identitäten und die Untergrenze
+  entschärft; alter Wert steht im Bericht).

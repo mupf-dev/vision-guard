@@ -1,11 +1,13 @@
 """Identitäten 07 (Paket A): Sammel-Löschen, Sammel-Zusammenführen, Verlauf und Zurücksetzen – CONTRACT ID.B/ID.C.
 
-- `bulk_delete(s, ids)` → gelöschte IDs. Eine Transaktion unter `identity._lock`; Art-Hooks (item/pet) wie beim
+- `bulk_delete(s, ids, *, select_fn=None)` → gelöschte IDs. Mit `select_fn(s, gesperrte Zeilen)` (Nachtlauf) wird
+  unter Zeilensperre neu entschieden, welche IDs gelöscht werden; inzwischen fehlende IDs werden dann übersprungen. Eine Transaktion unter `identity._lock`; Art-Hooks (item/pet) wie beim
   Einzel-Löschen; Bilder nach dem Commit löschen; eine gebündelte WS-Nachricht
   `{"type":"identities","action":"deleted","ids":[…],"items":[{"id","kind"}]}`.
-- `bulk_merge(s, ids, into_id, *, actor="bulk", score=None, report_id=None)` → `(Ziel, gemergte IDs, merge_ids)`.
-  Immer vollständig; Zeilen `FOR UPDATE` in ID-Reihenfolge; kumulatives Limit manueller Bilder
-  (`face_match.sample_limit`); Dateien nach dem Commit verschieben (Fehler → alten Pfad zurückschreiben);
+- `bulk_merge(s, ids, into_id, *, actor="bulk", score=None, report_id=None, guard=None)` → `(Ziel, gemergte IDs,
+  merge_ids)`. Immer vollständig; Zeilen `FOR UPDATE` in ID-Reihenfolge; `guard(s, gesperrte Zeilen)` prüft unter
+  Sperre erneut (Nachtlauf, wirft `BulkError`); kumulatives Limit manueller Bilder (`face_match.sample_limit`);
+  Dateien vor dem Commit kopieren, alte nach dem Commit löschen (`identity.stage_sample_files`);
   je Quelle ein `IdentityMerge`; WS `{"type":"identities","action":"merged","ids":[…],"into_id":N,"kind":…}` + Ziel.
   Wird auch vom Nachtlauf (`actor="nightly"`, `score` je Quelle, `report_id`) genutzt.
 - `log_merge(s, src, dst, *, actor, score=None, report_id=None, sample_ids, event_ids)` → IdentityMerge
@@ -15,15 +17,17 @@
 
 Grenzen beim Zurücksetzen (bewusst, siehe docs/plan/07-identitaeten-fortschritt.md): Bilder, die nach dem Merge
 beim Kürzen der Galerie entfernt wurden, sind weg; Haustier-Tagebuch-Besuche und Gegenstands-Zuordnungen bleiben
-beim Ziel (sie sind nicht je Quelle protokolliert); ein vom Ziel übernommener Name bleibt.
+beim Ziel (sie sind nicht je Quelle protokolliert). Name, Notizen und Zeiten des Ziels werden aus `dst_before`
+wiederhergestellt, soweit sie seit dem Merge unverändert sind (Altdaten ohne `dst_before`: nur „früher: …“ entfernen).
 """
 from __future__ import annotations
 
 import logging
 import os
 import shutil
+from datetime import datetime
 from types import SimpleNamespace
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
@@ -49,13 +53,13 @@ class BulkError(ValueError):
         self.detail = detail
 
 
-def _lock_rows(s: Session, ids: list[int]) -> dict[int, Identity]:
+def _lock_rows(s: Session, ids: list[int], missing_ok: bool = False) -> dict[int, Identity]:
     """Sperrt die Zeilen in ID-Reihenfolge (verhindert Verklemmungen) und meldet unbekannte IDs als 404."""
     rows = s.scalars(select(Identity).where(Identity.id.in_(ids)).order_by(Identity.id)
                      .with_for_update()).all()
     found = {r.id: r for r in rows}
     missing = [i for i in ids if i not in found]
-    if missing:
+    if missing and not missing_ok:
         raise BulkError(404, "Identität(en) nicht gefunden: " + ", ".join(str(i) for i in missing))
     return found
 
@@ -66,33 +70,6 @@ def _remove_files(paths: list[str]) -> None:
             os.remove(media_path(rel))
         except (OSError, ValueError):
             pass
-
-
-def _move_files(s: Session, moves: list[tuple[int, str, str]]) -> set[str]:
-    """Verschiebt Bilddateien nach dem Commit. moves = [(sample_id, alter Pfad, neuer Pfad)].
-
-    Schlägt ein Verschieben fehl, liegt die Datei noch am alten Ort → alten Pfad zurückschreiben.
-    Rückgabe: Quellordner (`identities/<id>`), in denen noch Dateien liegen können.
-    """
-    failed: list[tuple[int, str]] = []
-    keep_dirs: set[str] = set()
-    for sid, old, new in moves:
-        try:
-            src_abs = media_path(old)
-            if not os.path.exists(src_abs):
-                continue   # Datei fehlte schon vorher – Pfad bleibt neu (wie beim Einzel-Merge)
-            dst_abs = media_path(new)
-            os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
-            shutil.move(src_abs, dst_abs)
-        except Exception as e:  # noqa: BLE001
-            log.warning("Bilddatei nicht verschoben (Sample %s): %s", sid, e)
-            failed.append((sid, old))
-            keep_dirs.add(os.path.dirname(old))
-    if failed:
-        for sid, old in failed:
-            s.execute(update(IdentitySample).where(IdentitySample.id == sid).values(image_path=old))
-        s.commit()
-    return keep_dirs
 
 
 def _drop_dir(identity_id: int, keep_dirs: set[str]) -> None:
@@ -109,13 +86,21 @@ def _drop_dir(identity_id: int, keep_dirs: set[str]) -> None:
 # ---------------------------------------------------------------- Löschen
 
 
-def bulk_delete(s: Session, ids: list[int]) -> list[int]:
+SelectFn = Callable[[Session, dict[int, Identity]], list[int]]
+
+
+def bulk_delete(s: Session, ids: list[int], *, select_fn: Optional[SelectFn] = None) -> list[int]:
     uniq = sorted(set(int(i) for i in ids))
     if not uniq:
         raise BulkError(422, "Keine Identitäten ausgewählt")
     with ident_svc._lock:
         try:
-            found = _lock_rows(s, uniq)
+            found = _lock_rows(s, uniq, missing_ok=select_fn is not None)
+            if select_fn is not None:   # unter Sperre neu entscheiden (Nachtlauf: Aufräumen)
+                uniq = sorted(set(select_fn(s, found)) & set(found))
+                if not uniq:
+                    s.rollback()
+                    return []
             kinds = {iid: found[iid].kind for iid in uniq}
             item_ids = [i for i in uniq if kinds[i] == "item"]
             if item_ids:   # Zuordnungen der Gegenstände lösen
@@ -140,6 +125,7 @@ def bulk_delete(s: Session, ids: list[int]) -> list[int]:
             ident_svc.delete_identity_files(iid)
         _remove_files(stray)
         ident_svc.invalidate()
+    ident_svc.forget_final_identities(uniq)
     if item_ids:
         from . import item_identity
         item_identity.changed()
@@ -161,6 +147,9 @@ def log_merge(s: Session, src: Identity, dst: Identity, *, actor: str, score: Op
         src_match_threshold=src.match_threshold, into_id=dst.id,
         score=None if score is None else float(score), sample_ids=[int(x) for x in sample_ids],
         event_ids=[str(x) for x in event_ids], nightly_report_id=report_id,
+        dst_before={"name": dst.name, "notes": dst.notes or "",
+                    "first_seen": dst.first_seen.isoformat() if dst.first_seen else None,
+                    "last_seen": dst.last_seen.isoformat() if dst.last_seen else None},
     )
     s.add(m)
     s.flush()
@@ -186,21 +175,27 @@ def _merge_fields(src: Identity, dst: Identity) -> None:
 
 def bulk_merge(s: Session, ids: list[int], into_id: int, *, actor: str = "bulk",
                score: Optional[Union[float, dict[int, float]]] = None,
-               report_id: Optional[int] = None) -> tuple[Identity, list[int], list[int]]:
+               report_id: Optional[int] = None,
+               guard: Optional[Callable[[Session, dict[int, Identity]], None]] = None
+               ) -> tuple[Identity, list[int], list[int]]:
     """Führt alle `ids` vollständig in `into_id` zusammen – alles oder nichts.
 
     `score`: eine Zahl für alle Quellen oder `{src_id: score}` (Nachtlauf).
+    `guard(s, found)`: zusätzliche Prüfung unter Zeilensperre (wirft `BulkError` → nichts wird geändert).
     """
     into_id = int(into_id)
     srcs = sorted(set(int(i) for i in ids) - {into_id})
     if not srcs:
         raise BulkError(422, "Keine Quellen ausgewählt")
+    copied: list[str] = []
     with ident_svc._lock:
         try:
             found = _lock_rows(s, sorted(set(srcs) | {into_id}))
             dst = found[into_id]
             if any(found[i].kind != dst.kind for i in srcs):
                 raise BulkError(422, "Nur Identitäten gleicher Art können zusammengeführt werden")
+            if guard is not None:
+                guard(s, found)
             kind = dst.kind
 
             # Kumulatives Limit der manuellen Bilder (Ziel + alle Quellen); Name kann durch den Merge neu kommen
@@ -247,15 +242,16 @@ def bulk_merge(s: Session, ids: list[int], into_id: int, *, actor: str = "bulk",
             to_remove: list[str] = []
             pruned = set(ident_svc.prune_samples(s, into_id, sample_limit(dst, settings), defer_remove=to_remove))
             s.flush()
-            # Neue Pfade der verbliebenen Bilder setzen, Verschieben erst nach dem Commit
-            moves: list[tuple[int, str, str]] = []
+            # Neue Pfade der verbliebenen Bilder setzen; Dateien vor dem Commit kopieren, alte danach löschen
+            moves: list[tuple[IdentitySample, str, str]] = []
             for smp in samples:
                 if smp.id in pruned or not smp.image_path:
                     continue
                 new = f"identities/{into_id}/{os.path.basename(smp.image_path)}"
                 if new != smp.image_path:
-                    moves.append((smp.id, smp.image_path, new))
+                    moves.append((smp, smp.image_path, new))
                     smp.image_path = new
+            copied, old_files, keep_dirs = ident_svc.stage_sample_files(moves)
             s.flush()
             for sid in srcs:
                 s.expire(found[sid])   # Sample-Liste nicht kaskadierend löschen (sie gehören jetzt dem Ziel)
@@ -263,12 +259,13 @@ def bulk_merge(s: Session, ids: list[int], into_id: int, *, actor: str = "bulk",
             s.commit()
         except BaseException:
             s.rollback()
+            _remove_files(copied)
             raise
-        keep_dirs = _move_files(s, moves)
-        _remove_files(to_remove)
+        _remove_files(old_files + to_remove)
         for sid in srcs:
             _drop_dir(sid, keep_dirs)
         ident_svc.invalidate()
+    ident_svc.forget_final_identities(srcs, into=ident_svc._ident_ref(dst))
     if kind == "item":
         from . import item_identity
         item_identity.changed()
@@ -315,7 +312,36 @@ def list_merges(s: Session, identity_id: Optional[int] = None, actor: Optional[s
     return {"items": [merge_json(m, present, set(present)) for m in rows], "total": total}
 
 
+def _parse_ts(v: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(v) if v else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _restore_target(m: IdentityMerge, dst: Identity) -> None:
+    """Name/Notizen/Zeiten des Ziels zurücksetzen, soweit sie noch dem Stand direkt nach dem Merge entsprechen."""
+    # „früher: <Quellname>“ aus den Notizen des Ziels wieder entfernen
+    if m.src_name and dst.notes:
+        line = f"früher: {m.src_name}"
+        dst.notes = "\n".join(x for x in dst.notes.split("\n") if x.strip() != line).strip()
+    before = m.dst_before
+    if not isinstance(before, dict):
+        return   # Altdaten (vor der Prüfung 07) – nur die Zeile oben
+    if m.src_name and dst.name == m.src_name and before.get("name") != m.src_name:
+        dst.name = before.get("name")   # Name kam von der Quelle
+    src_notes = (m.src_notes or "").strip()
+    if src_notes and dst.notes and src_notes not in (before.get("notes") or "") and src_notes in dst.notes:
+        dst.notes = "\n".join(x for x in dst.notes.replace(src_notes, "", 1).split("\n") if x.strip()).strip()
+    first, last = _parse_ts(before.get("first_seen")), _parse_ts(before.get("last_seen"))
+    if first and m.src_first_seen and dst.first_seen == m.src_first_seen and first > m.src_first_seen:
+        dst.first_seen = first
+    if last and m.src_last_seen and dst.last_seen == m.src_last_seen and last < m.src_last_seen:
+        dst.last_seen = last
+
+
 def undo_merge(s: Session, merge_id: int) -> tuple[Identity, Identity]:
+    copied: list[str] = []
     with ident_svc._lock:
         try:
             m = s.get(IdentityMerge, merge_id, with_for_update=True)
@@ -334,7 +360,7 @@ def undo_merge(s: Session, merge_id: int) -> tuple[Identity, Identity]:
                            match_threshold=m.src_match_threshold)
             s.add(src)
             s.flush()
-            moves: list[tuple[int, str, str]] = []
+            moves: list[tuple[IdentitySample, str, str]] = []
             sample_ids = [int(x) for x in (m.sample_ids or [])]
             if sample_ids:
                 for smp in s.scalars(select(IdentitySample).where(IdentitySample.id.in_(sample_ids),
@@ -343,23 +369,21 @@ def undo_merge(s: Session, merge_id: int) -> tuple[Identity, Identity]:
                     if smp.image_path:
                         new = f"identities/{src.id}/{os.path.basename(smp.image_path)}"
                         if new != smp.image_path:
-                            moves.append((smp.id, smp.image_path, new))
+                            moves.append((smp, smp.image_path, new))
                             smp.image_path = new
             event_ids = [str(x) for x in (m.event_ids or [])]
             if event_ids:
                 s.execute(update(Event).where(Event.id.in_(event_ids), Event.identity_id == dst.id)
                           .values(identity_id=src.id))
-            # „früher: <Quellname>“ aus den Notizen des Ziels wieder entfernen
-            if m.src_name and dst.notes:
-                line = f"früher: {m.src_name}"
-                dst.notes = "\n".join(x for x in dst.notes.split("\n") if x.strip() != line).strip()
+            _restore_target(m, dst)
+            copied, old_files, _ = ident_svc.stage_sample_files(moves)   # Zielordner bleibt bestehen
             m.undone_at = utcnow()
             s.commit()
         except BaseException:
             s.rollback()
+            _remove_files(copied)
             raise
-        keep_dirs = _move_files(s, moves)
-        del keep_dirs   # Zielordner bleibt bestehen
+        _remove_files(old_files)
         ident_svc.invalidate()
     if src.kind == "item":
         from . import item_identity

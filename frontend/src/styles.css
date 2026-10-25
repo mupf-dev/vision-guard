@@ -801,7 +801,8 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 }
 .id-card:hover .sel-check, .id-card:focus-visible .sel-check, .id-card.selecting .sel-check { opacity: 1; }
 .id-card.selected .sel-check { background: var(--accent); border-color: var(--accent); }
-.id-card.selecting .cover .badge[title="Lernen gesperrt"] { right: 40px !important; }
+/* Schloss immer links neben dem Auswahl-Häkchen (das auf Touch-Geräten und beim Überfahren sichtbar ist) */
+.id-card .cover .lock-badge { position: absolute; top: 8px; right: 40px; left: auto; z-index: 1; background: rgba(10,15,23,.7); }
 .id-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset, 0 12px 30px -16px rgba(45,212,191,.45); }
 .id-card.selecting:not(.selected) .cover img { opacity: .82; }
 @media (hover: none), (pointer: coarse) { .id-card .sel-check { opacity: 1; } }
@@ -813,6 +814,11 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 }
 .sel-bar .sel-count { font-size: 13.5px; margin-right: 4px; }
 @media (max-width: 640px) { .sel-bar .spacer { display: none; } .sel-bar { bottom: 8px; } }
+/* Prüfung 07: Auswahlmodus am Handy – kompakte Karten in 2 Spalten, Meldungen oberhalb der Aktionsleiste */
+@media (max-width: 640px) {
+  .id-grid:has(.id-card.selecting) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  body:has(.sel-bar) .toasts { bottom: 180px; }
+}
 .merge-preview {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
   border: 1px solid rgba(45,212,191,.35); background: var(--accent-soft); font-size: 14px;

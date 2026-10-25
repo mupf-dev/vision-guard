@@ -287,6 +287,8 @@ class IdentityMerge(Base):
     event_ids: Mapped[list] = mapped_column(JSONB, default=list)
     nightly_report_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Prüfung 07: {name, notes, first_seen, last_seen} des Ziels vor dem Merge (None bei Altdaten)
+    dst_before: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
 
 class NightlyReport(Base):

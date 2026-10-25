@@ -154,7 +154,17 @@ function Face({ src, name, named }: { src?: string | null; name?: string; named?
   );
 }
 
-function ActionLine({ a }: { a: NightlyAction }) {
+const fmtNum = (v: number) => v.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function thresholdText(a: NightlyAction, glob?: number): string {
+  const old = a.old ?? glob;
+  const oldTxt = old != null ? fmtNum(old) : "global";
+  if (a.new == null) return `Schwelle ${oldTxt}`;
+  const hint = old == null ? "" : a.new < old ? " (erkennt großzügiger)" : a.new > old ? " (erkennt strenger)" : "";
+  return `Schwelle ${oldTxt}${a.old == null ? " (global)" : ""} → ${fmtNum(a.new)}${hint}`;
+}
+
+function ActionLine({ a, glob }: { a: NightlyAction; glob?: number }) {
   if (a.type === "merge" || a.type === "review") {
     return (
       <div className="nl-pair">
@@ -162,8 +172,8 @@ function ActionLine({ a }: { a: NightlyAction }) {
         <ArrowRight size={16} className="muted" />
         <Face src={a.into_cover_url} name={a.into_display_name} named={a.into_named} />
         <span className="muted nl-meta">
-          {a.score != null && `Ähnlichkeit ${a.score.toFixed(2)}`}
-          {a.second_score != null && ` · Zweitbester ${a.second_score.toFixed(2)}`}
+          {a.score != null && `Ähnlichkeit ${fmtNum(a.score)}`}
+          {a.second_score != null && ` · Zweitbester ${fmtNum(a.second_score)}`}
           {a.samples != null && ` · ${a.samples} Bild${a.samples === 1 ? "" : "er"}`}
           {a.events != null && ` · ${a.events} Ereignis${a.events === 1 ? "" : "se"}`}
         </span>
@@ -177,7 +187,7 @@ function ActionLine({ a }: { a: NightlyAction }) {
       <Face src={a.cover_url} name={a.display_name} named={a.type === "threshold"} />
       <span className="muted nl-meta">
         {a.type === "curate" && [neg ? `${neg} Ausreißer als Negativbeispiel` : "", rem ? `${rem} ähnliche Bilder entfernen` : ""].filter(Boolean).join(" · ")}
-        {a.type === "threshold" && `Schwelle ${a.old != null ? a.old.toFixed(2) : "global"} → ${a.new?.toFixed(2)}`}
+        {a.type === "threshold" && thresholdText(a, glob)}
         {a.type === "cleanup" && "Einzelbild ohne Ereignisse – löschen"}
       </span>
     </div>
@@ -192,7 +202,9 @@ export function NightlyReportDialog({ id, onClose }: { id: number; onClose: () =
   const r: NightlyReport | undefined = q.data;
   const applicable = !!r && r.mode === "preview" && r.status === "done" && !r.applied_at;
   const [sel, setSel] = useState<Set<number> | null>(null);
-  const selected = useMemo(() => sel ?? new Set((r?.actions ?? []).map((a) => a.idx)), [sel, r]);
+  // Vorauswahl nur die sicheren Zusammenführungen; Rückfragen, Kuratieren, Schwellen und Aufräumen bewusst ankreuzen
+  const selected = useMemo(() => sel ?? new Set((r?.actions ?? []).filter((a) => a.type === "merge").map((a) => a.idx)), [sel, r]);
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [confirm, setConfirm] = useState(false);
   const apply = useMutation({
     mutationFn: () => api.nightlyApply(id, selected.size === r!.actions.length ? null : [...selected]),
@@ -225,7 +237,7 @@ export function NightlyReportDialog({ id, onClose }: { id: number; onClose: () =
                   <label key={a.idx} className={`nl-action${a.skipped_reason ? " skipped" : ""}`}>
                     {applicable && <input type="checkbox" checked={selected.has(a.idx)} onChange={() => toggle(a.idx)} />}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <ActionLine a={a} />
+                      <ActionLine a={a} glob={settings.data?.face_match_threshold} />
                       {a.skipped_reason && <div className="hint">übersprungen: {a.skipped_reason}</div>}
                     </div>
                     {r.mode === "apply" && !a.skipped_reason && <span className="badge ok">erledigt</span>}

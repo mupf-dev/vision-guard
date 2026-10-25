@@ -110,6 +110,66 @@ def _remove_media(rel: Optional[str]) -> None:
         pass
 
 
+def stage_sample_files(moves: list[tuple[IdentitySample, str, str]]) -> tuple[list[str], list[str], set[str]]:
+    """Bilddateien beim Umhängen von Samples **vor** dem Commit an den neuen Ort kopieren (Prüfung 07).
+
+    moves = [(Sample, alter Pfad, neuer Pfad)]; `image_path` des Samples steht schon auf dem neuen Pfad. Fehlt die
+    Quelldatei, bleibt der neue Pfad (wie bisher). Schlägt das Kopieren fehl, bekommt das Sample den alten Pfad
+    zurück. Rückgabe: (neue Kopien – bei Rollback löschen, alte Dateien – nach dem Commit löschen, Ordner, in denen
+    noch referenzierte Dateien liegen). So zeigt die DB nach Commit oder Absturz nie auf eine fehlende Datei;
+    schlimmstenfalls bleibt eine alte Kopie liegen (Ordner gelöschter Identitäten räumt `sweep_orphan_dirs` weg).
+    """
+    copied: list[str] = []
+    old_files: list[str] = []
+    keep_dirs: set[str] = set()
+    for smp, old, new in moves:
+        try:
+            src_abs = media_path(old)
+            if not os.path.exists(src_abs):
+                continue
+            dst_abs = media_path(new)
+            os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
+            shutil.copy2(src_abs, dst_abs)
+            copied.append(new)
+            old_files.append(old)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Bilddatei nicht kopiert (Sample %s): %s", smp.id, e)
+            smp.image_path = old
+            keep_dirs.add(os.path.dirname(old))
+    return copied, old_files, keep_dirs
+
+
+def sweep_orphan_dirs(min_age_s: float = 3600.0) -> int:
+    """Ordner `identities/<id>` ohne Identität (z. B. nach Absturz zwischen Commit und Aufräumen) entfernen.
+    Nur Ordner, die seit `min_age_s` unverändert sind (eine gerade angelegte Identität ist evtl. noch nicht
+    committet). Rückgabe: Anzahl entfernter Ordner."""
+    from .db import SessionLocal
+    try:
+        base = media_path("identities")
+        names = [n for n in os.listdir(base) if n.isdigit()]
+    except (OSError, ValueError):
+        return 0
+    if not names:
+        return 0
+    with SessionLocal() as s:
+        have = set(s.scalars(select(Identity.id).where(Identity.id.in_([int(n) for n in names]))).all())
+    now, gone = _time.time(), 0
+    for n in names:
+        p = os.path.join(base, n)
+        try:
+            if int(n) in have or now - os.path.getmtime(p) < min_age_s:
+                continue
+        except OSError:
+            continue
+        with _lock:   # gegen gleichzeitiges Anlegen/Zurücksetzen (gleiche ID) absichern
+            with SessionLocal() as s:
+                if s.get(Identity, int(n)) is not None:
+                    continue
+            shutil.rmtree(p, ignore_errors=True)
+            gone += 1
+    return gone
+
+
 def _add_sample(s: Session, ident: Identity, emb: Optional[list[float]], plate_text: Optional[str],
                 crop_path: Optional[str], quality: float) -> bool:
     """Fügt ein Sample hinzu; behält max. MAX_SAMPLES mit bester Qualität. True wenn hinzugefügt.
@@ -269,7 +329,9 @@ def identify(s: Session, req: Any) -> dict[str, Any]:
 # CONTRACT ID.F. Ablauf je Anfrage (nur kind="face"):
 #   1. Abgleich: Score je Identität = Mittel der besten 3 Bild-Ähnlichkeiten (face_match.top_k_scores),
 #      Schwelle je Person (match_threshold ?? face_match_threshold), Mindestabstand face_match_margin zum
-#      Zweitbesten – sonst "ambiguous" (keine Zuordnung, nichts gelernt, Rückfrage identity_match).
+#      Zweitbesten – sonst "ambiguous" (keine Zuordnung, nichts gelernt, Rückfrage identity_match). Ausnahme:
+#      Bester und Zweitbester sind untereinander ≥ nightly_auto_merge_min ähnlich (Fragmente einer Person, nicht
+#      beide benannt) → Zuordnung (benannte bevorzugt) und Rückfrage.
 #   2. Phase: provisional = nur bestehende, nie lernen; final = maßgeblich für das Event (auch beendet, ≤ 10 min),
 #      ersetzt bzw. entfernt die Identität und gewinnt gegen spätere Track-Meldungen; single = Altverhalten.
 #   3. Neu anlegen nur über face_new_min_quality/face_new_min_size (unbekannte Größe = nicht prüfbar → nur Qualität)
@@ -312,6 +374,19 @@ def _remember_final(camera_id: Optional[int], track_id: Optional[int], ident: Op
         if len(_final_tracks) > 2000:
             for k in [k for k, v in _final_tracks.items() if now - v[0] > FINAL_TTL_S]:
                 _final_tracks.pop(k, None)
+
+
+def forget_final_identities(ids: list[int], into: Optional[dict[str, Any]] = None) -> None:
+    """Nach Sammel-Zusammenführen/-Löschen (Prüfung 07): endgültige Track-Zuordnungen auf entfernte Identitäten
+    auf das Ziel umschreiben (`into`) bzw. auf „ohne Identität“ setzen, damit Regeln/Live-Anzeige nicht bis zu
+    FINAL_TTL_S eine gelöschte Identität weitertragen."""
+    gone = {int(i) for i in ids}
+    if not gone:
+        return
+    with _final_lock:
+        for k, (ts, ref) in list(_final_tracks.items()):
+            if ref is not None and ref.get("id") in gone:
+                _final_tracks[k] = (ts, into)
 
 
 def _ident_ref(ident: Identity) -> dict[str, Any]:
@@ -362,8 +437,10 @@ def _prune_face(s: Session, ident: Identity, extra_keep: Optional[set[int]] = No
     return gone
 
 
-def _learn_face(s: Session, ident: Identity, cands: list[dict[str, Any]], camera_id: Optional[int]) -> bool:
-    """Kandidaten in die Galerie übernehmen, soweit die Vielfalts-Auswahl sie behält. True = mind. 1 neu."""
+def _learn_face(s: Session, ident: Identity, cands: list[dict[str, Any]], camera_id: Optional[int],
+                defer_remove: list[str]) -> bool:
+    """Kandidaten in die Galerie übernehmen, soweit die Vielfalts-Auswahl sie behält. True = mind. 1 neu.
+    Dateien verdrängter Bilder landen in `defer_remove` (Löschen erst nach dem Commit)."""
     from types import SimpleNamespace
 
     from .face_match import sample_limit, select_gallery
@@ -391,7 +468,8 @@ def _learn_face(s: Session, ident: Identity, cands: list[dict[str, Any]], camera
                              reverse=True)[limit:]
         for smp in existing:
             if (smp.id not in keep and not smp.manual) or smp in manual_over:
-                _remove_media(smp.image_path)
+                if smp.image_path:
+                    defer_remove.append(smp.image_path)
                 s.delete(smp)
     return added
 
@@ -449,7 +527,7 @@ def _ask_ambiguous(s: Session, a_id: Optional[int], b_id: Optional[int], score: 
 
 
 def _identify_face(s: Session, req: Any, settings: dict[str, Any]) -> dict[str, Any]:
-    from .face_match import decide, is_poor, mean_embedding, threshold_for, top_k_scores
+    from .face_match import decide, is_poor, mean_embedding, pair_score, threshold_for, top_k_scores
     phase = getattr(req, "phase", None) or "single"
     empty = {"identity_id": None, "display_name": None, "name": None, "score": 0.0, "is_new": False,
              "decision": "none", "second_score": None, "threshold": None, "learned": False, "phase": phase}
@@ -485,6 +563,7 @@ def _identify_face(s: Session, req: Any, settings: dict[str, Any]) -> dict[str, 
     is_new = learned = False
     ev: Optional[Event] = None
     ask: Optional[tuple[int, int, float]] = None
+    to_remove: list[str] = []
     with _lock:
         mat, ids = _matrix(s, "face")
         scores = top_k_scores(mat, ids, vec)
@@ -496,14 +575,24 @@ def _identify_face(s: Session, req: Any, settings: dict[str, Any]) -> dict[str, 
                 thr_map[iid] = threshold_for(rows[iid], settings)
         best_id, score, second, decision = decide(scores, thr_map or {0: float(settings["face_match_threshold"])},
                                                   margin)
+        if decision == "ambiguous" and len(ranked) > 1:
+            ask = (ranked[0], ranked[1], score)
+            # Prüfung (07): Ist der Zweitbeste nur ein weiteres Fragment derselben Person (untereinander
+            # ≥ nightly_auto_merge_min ähnlich, nicht beide benannt, Paar nicht mit „Nein“ beantwortet), ist er keine
+            # Konkurrenz – sonst blockieren sich die Fragmente einer Person gegenseitig. Zuordnung an die benannte
+            # (sofern über ihrer Schwelle), sonst an den Besten; die Rückfrage „dieselbe Person?“ bleibt.
+            a, b = rows.get(ranked[0]), rows.get(ranked[1])
+            if a is not None and b is not None and not (a.name and b.name) \
+                    and pair_score(mat, ids, a.id, b.id) >= float(settings.get("nightly_auto_merge_min", 0.55)) \
+                    and not {(a.id, b.id), (b.id, a.id)} & _blocked_pairs(s):
+                pick = b if (b.name and not a.name and scores[b.id] >= thr_map.get(b.id, 1.0)) else a
+                best_id, score, decision = pick.id, scores[pick.id], "match"
         thr = thr_map.get(best_id) if best_id is not None else float(settings["face_match_threshold"])
         if thr is None:
             thr = float(settings["face_match_threshold"])
         ident: Optional[Identity] = rows.get(best_id) if decision == "match" else None
         if decision == "match" and ident is None:   # Cache veraltet (Identität eben gelöscht)
             decision = "none"
-        if decision == "ambiguous" and len(ranked) > 1:
-            ask = (ranked[0], ranked[1], score)
 
         # Lernkandidaten: Qualität, kein Profil/unscharf, passend zum Track-Mittel
         def learnable(c: dict[str, Any]) -> bool:
@@ -532,7 +621,7 @@ def _identify_face(s: Session, req: Any, settings: dict[str, Any]) -> dict[str, 
                     tm = mat[ids == ident.id] if mat.shape[0] and mat.shape[1] == vec.shape[0] else None
                     if tm is not None and tm.shape[0]:
                         learn = [c for c in learn if float(np.sort(tm @ c["vec"])[-3:].mean()) >= thr - margin]
-                learned = _learn_face(s, ident, learn, req.camera_id)
+                learned = _learn_face(s, ident, learn, req.camera_id, to_remove)
             if is_new and not learned:   # Galerie hat nichts übernommen (sollte nicht vorkommen) → verwerfen
                 s.delete(ident)
                 s.flush()
@@ -545,6 +634,8 @@ def _identify_face(s: Session, req: Any, settings: dict[str, Any]) -> dict[str, 
             if not has_final:            # vorläufig/single überschreiben keine endgültige Zuordnung
                 ev = _link_event(s, req.camera_id, req.track_id, ident.id)
         s.commit()
+        for p in to_remove:
+            _remove_media(p)
         if learned:
             invalidate("face")
         ref = _ident_ref(ident) if ident is not None else None
@@ -577,19 +668,6 @@ def delete_identity_files(identity_id: int) -> None:
 
 class MergeError(ValueError):
     """Ungültige Merge-Anfrage (→ HTTP 422)."""
-
-
-def _move_sample_file(smp: IdentitySample, dst_id: int) -> None:
-    if not smp.image_path:
-        return
-    try:
-        new_rel = f"identities/{dst_id}/{os.path.basename(smp.image_path)}"
-        dst_abs = media_path(new_rel)
-        os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
-        shutil.move(media_path(smp.image_path), dst_abs)
-        smp.image_path = new_rel
-    except Exception as e:  # noqa: BLE001
-        log.warning("Sample-Datei nicht verschoben: %s", e)
 
 
 def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[int]] = None,
@@ -630,8 +708,13 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
             ev_ids = list(s.scalars(select(Event.id).where(Event.identity_id == src.id)).all())
             log_merge(s, src, dst, actor=actor, sample_ids=[smp.id for smp in moving], event_ids=ev_ids)
 
+        moves: list[tuple[IdentitySample, str, str]] = []
         for smp in moving:
-            _move_sample_file(smp, dst.id)
+            if smp.image_path:
+                new_rel = f"identities/{dst.id}/{os.path.basename(smp.image_path)}"
+                if new_rel != smp.image_path:
+                    moves.append((smp, smp.image_path, new_rel))
+                    smp.image_path = new_rel
             smp.identity_id = dst.id
             if mark_manual:
                 smp.manual = True
@@ -650,15 +733,37 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
             if src.last_seen and (not dst.last_seen or src.last_seen > dst.last_seen):
                 dst.last_seen = src.last_seen
         s.flush()
-        prune_samples(s, dst.id, sample_limit(dst, settings_store.get()))   # Name kann neu sein
+        to_remove: list[str] = []
+        pruned = set(prune_samples(s, dst.id, sample_limit(dst, settings_store.get()),   # Name kann neu sein
+                                   defer_remove=to_remove))
+        # Dateien erst kopieren (gekürzte Bilder nicht), alte nach dem Commit löschen – Prüfung 07
+        to_remove += [old for smp, old, _ in moves if smp.id in pruned]   # gekürzt: Datei liegt noch am alten Ort
+        moves = [m for m in moves if m[0].id not in pruned]
+        copied, old_files, keep_dirs = stage_sample_files(moves)
         src_id = src.id
         if full:
             s.expire(src)
             s.delete(src)
-        s.commit()
+        try:
+            s.commit()
+        except BaseException:
+            s.rollback()
+            for p in copied:
+                _remove_media(p)
+            raise
+        for p in old_files + to_remove:
+            _remove_media(p)
         if full:
-            delete_identity_files(src_id)
+            if f"identities/{src_id}" in keep_dirs:
+                try:
+                    os.rmdir(media_path(f"identities/{src_id}"))
+                except (OSError, ValueError):
+                    pass
+            else:
+                delete_identity_files(src_id)
         invalidate()
+    if full:
+        forget_final_identities([src_id], into=_ident_ref(dst))
     return dst, full
 
 

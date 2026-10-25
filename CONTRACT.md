@@ -2142,3 +2142,33 @@ Ergänzungen der Integration (Pakete A–D, additiv):
 - `face_fullres` (Setting) ist nach dem Lasttest der Integration auch in der bestehenden Installation eingeschaltet
   (16 Kameras unverändert ≈ 61 Bilder/s; `cam_3` mit Vollbild-Leser ohne messbaren Einbruch, siehe
   `docs/plan/07-identitaeten-fortschritt.md`). `nightly_mode` bleibt `preview`.
+
+### ID.K Ergänzungen der Prüfung (Daten-Robustheit, Bedienung/Erkennung; additiv, verbindlich)
+
+- **Zuordnung (ID.F):** `ambiguous` gilt nicht, wenn Bester und Zweitbester untereinander
+  ≥ `nightly_auto_merge_min` ähnlich sind (`face_match.pair_score`: max. Top-3-Score des Mittels der einen gegen die
+  Bilder der anderen), nicht beide benannt sind und das Paar nicht mit „Nein“ beantwortet wurde. Dann
+  `decision:"match"` an die benannte (sofern deren `score ≥` ihrer Schwelle), sonst an den Besten; die Rückfrage
+  `identity_match` (`reason:"ambiguous"`) wird trotzdem gestellt.
+- **Nachtlauf (ID.H):** Hat das Ziel eines Bündels eine Lernsperre, wird **nicht** automatisch zusammengeführt, sondern
+  eine Rückfrage gestellt (Anwenden einer älteren Vorschau: `skipped_reason` „Ziel hat Lernsperre (nur per
+  Rückfrage)“). Merges und Aufräumen werden in `bulk_merge(guard=…)`/`bulk_delete(select_fn=…)` **unter
+  Zeilensperre** erneut geprüft (Quelle unbenannt/ungesperrt, Ziel ungesperrt, kein „Nein“; Aufräumen: wie
+  `_cleanable`); einzelne inzwischen gelöschte/geänderte Identitäten werden beim Aufräumen übersprungen statt alle.
+  Schwellen je Person: nie bei Lernsperre; nie unter `face_match_threshold`, außer der höchste Score eines Bildes der
+  Person gegen alle anderen Identitäten + `face_match_margin` liegt unter der neuen Schwelle. Beim Anwenden werden
+  die Aktionen nach jedem Bündel bzw. jeder Aktion in `actions` des Berichts gespeichert; bricht der Lauf ab, bleibt
+  der Zwischenstand (Bericht `status:"error"`, `text` mit „(abgebrochen)“).
+- **Bericht-Oberfläche:** vorausgewählt sind nur `merge`-Aktionen; Zahlen deutsch formatiert, Schwellen mit Hinweis
+  „erkennt großzügiger/strenger“.
+- **Zurücksetzen (ID.C):** neue Spalte `identity_merges.dst_before jsonb NULL` = `{name, notes, first_seen,
+  last_seen}` des Ziels direkt vor dem Merge. Beim Zurücksetzen werden ein von der Quelle übernommener Name, die
+  angehängten Quell-Notizen und von der Quelle übernommene `first_seen`/`last_seen` wiederhergestellt, sofern diese
+  Felder seitdem unverändert sind (Altdaten ohne `dst_before`: nur „früher: …“ entfernen).
+- **Bilddateien:** Beim Zusammenführen/Zurücksetzen werden Bilder vor dem Commit an den neuen Ort **kopiert** und die
+  alten erst nach dem Commit gelöscht (nie ein DB-Pfad auf eine fehlende Datei); gelernte/gekürzte Bilder werden erst
+  nach dem Commit gelöscht. Die tägliche Aufbewahrung entfernt Ordner `identities/<id>` ohne Identität (älter als 1 h).
+- Nach Sammel-Zusammenführen/-Löschen werden endgültige Track-Zuordnungen (Cache, ID.F) auf das Ziel umgeschrieben
+  bzw. auf „ohne Identität“ gesetzt.
+- `vg/internal/system` `perf.face` zusätzlich `by_source: {main|detect: {jobs_per_min, faces_per_min}}` (Ausbeute
+  Vollbild-Ausschnitt vs. Analysebild, letzte 60 s).

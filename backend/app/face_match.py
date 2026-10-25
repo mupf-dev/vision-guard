@@ -16,6 +16,7 @@ Gemeinsame Bausteine für `identity.identify` (Paket C) und den Nachtlauf (`nigh
 - `is_poor(sample)` → Profil (|Gier| > 40°, |Nicken| > 30°) oder unscharf (Laplace-Varianz < 25). Solche Bilder
   speichert `identity` nie als neues Beispiel; fehlende Werte (Altdaten, alte Worker) gelten als brauchbar.
 - `mean_embedding(vectors)` → L2-normiertes Mittel (Track-Mittel, falls der Worker kein `embedding` schickt).
+- `pair_score(mat, ids, a, b)` → Ähnlichkeit zweier Identitäten (für „Zweitbester ist dieselbe Person“, Prüfung).
 
 Alle Funktionen sind rein (keine DB), damit Nachtlauf und Tests sie direkt nutzen können.
 """
@@ -232,3 +233,19 @@ def mean_embedding(vectors: Iterable[Any]) -> Optional[np.ndarray]:
     if float(np.linalg.norm(m)) == 0.0:
         return None
     return _norm(m)
+
+
+def pair_score(mat: np.ndarray, ids: np.ndarray, a: int, b: int) -> float:
+    """Ähnlichkeit zweier Identitäten wie im Nachtlauf (`same()`): max(Mittel(a) gegen Bilder von b, umgekehrt),
+    je als Top-k-Score. 0.0, wenn eine der beiden keine Bilder in `mat` hat."""
+    if mat is None or mat.ndim != 2 or not mat.shape[0]:
+        return 0.0
+    ids = np.asarray(ids)
+    va, vb = mat[ids == a], mat[ids == b]
+    if not va.shape[0] or not vb.shape[0]:
+        return 0.0
+    out = 0.0
+    for q, m, t in ((mean_embedding(list(va)), vb, b), (mean_embedding(list(vb)), va, a)):
+        if q is not None:
+            out = max(out, top_k_scores(m, np.full(m.shape[0], t), q).get(int(t), 0.0))
+    return float(out)

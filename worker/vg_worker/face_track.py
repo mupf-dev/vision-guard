@@ -100,6 +100,8 @@ class FaceCollector:
         self.r_dropped = _Rate()
         self.fullres = None              # fullres.FullResManager (von der Pipeline gesetzt)
         self.counts: Counter = Counter()
+        # Prüfung 07: Ausbeute je Bildquelle (main = Vollbild-Ausschnitt, detect = Analysebild) für perf.face
+        self.r_src: dict[str, tuple[_Rate, _Rate]] = {"main": (_Rate(), _Rate()), "detect": (_Rate(), _Rate())}
 
     # ------------------------------------------------------------------ Einstellungen
     def set_settings(self, s: dict | None):
@@ -176,6 +178,7 @@ class FaceCollector:
                                             "source_res": src, "track_first_seen": tr.first_seen})
         if self.idf.submit("face", job):
             self.counts[f"jobs_{src}"] += 1
+            self.r_src[src][0].add()
         else:
             self.r_dropped.add()
             self.counts["drop_queue"] += 1
@@ -186,6 +189,7 @@ class FaceCollector:
         st: TrackFaces = job.extra["faces"]
         self.r_faces.add()
         self.counts[f"faces_{job.extra.get('source_res') or 'detect'}"] += 1
+        self.r_src.get(job.extra.get("source_res") or "detect", self.r_src["detect"])[1].add()
         meta = {"face_size": int(round(res["size"])), "yaw": res.get("yaw"), "pitch": res.get("pitch"),
                 "sharpness": res.get("sharpness"), "day_night": res.get("day_night"),
                 "source_res": job.extra.get("source_res") or "detect"}
@@ -342,4 +346,6 @@ class FaceCollector:
         n, ms = self.fullres.perf() if self.fullres is not None else (0, 0.0)
         return {"faces_per_min": self.r_faces.per_min(), "provisional_per_min": self.r_prov.per_min(),
                 "final_per_min": self.r_final.per_min(), "fullres_per_min": n, "fullres_ms": ms,
-                "dropped": self.r_dropped.per_min()}
+                "dropped": self.r_dropped.per_min(),
+                "by_source": {k: {"jobs_per_min": j.per_min(), "faces_per_min": f.per_min()}
+                              for k, (j, f) in self.r_src.items()}}
