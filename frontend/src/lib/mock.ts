@@ -175,7 +175,7 @@ let settings: Settings = {
   reid_ttl_min: 60, reid_match_threshold: 0.7, reid_assign_identity: true,
   // Identitäten 07 (CONTRACT ID.E)
   face_new_min_quality: 0.35, face_new_min_size: 80, face_sample_min_quality: 0.3, face_match_margin: 0.05,
-  face_max_samples_named: 40, face_track_faces: 5, face_fullres: false,
+  face_max_samples_named: 40, face_track_faces: 5, face_fullres: true,
   nightly_mode: "preview", nightly_time: "03:00", nightly_auto_merge_min: 0.55, nightly_auto_merge_margin: 0.08,
   nightly_review_min: 0.4, nightly_review_max_per_day: 5, nightly_curate: true, nightly_thresholds: true,
   nightly_cleanup_days: 3,

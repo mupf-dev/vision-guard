@@ -1939,8 +1939,8 @@ Beide Endpunkte stehen im Router `routers/identities.py` **vor** den Routen `/{i
   "face_match_margin": 0.05,       // 0..0.3 Mindestabstand bester ↔ zweitbester Kandidat, sonst "ambiguous"
   "face_max_samples_named": 40,    // 20..100 Galeriegröße benannter Personen (unbenannte: 20)
   "face_track_faces": 5,           // 1..10  beste K Gesichter je Track für die endgültige Zuordnung
-  "face_fullres": false,           // Gesichter aus voller Auflösung schneiden (Paket B setzt den Standard nach dem
-                                   // Machbarkeitstest; je Kamera zusätzlich `cameras.face_fullres`)
+  "face_fullres": true,            // Gesichter aus voller Auflösung schneiden (Standard nach dem Machbarkeitstest
+                                   // von Paket B: an; je Kamera zusätzlich `cameras.face_fullres`)
   // Nachtlauf (Paket D)
   "nightly_mode": "preview",       // "off" | "preview" (Probelauf: nur Bericht) | "apply"
   "nightly_time": "03:00",         // HH:MM Ortszeit; ein Lauf je lokalem Tag, Nachholen bis 6 h
@@ -1997,6 +1997,20 @@ Bedeutung (nur `kind:"face"`; `pet`/`plate`/`item` unverändert):
 - Der Worker liest `face_fullres` je Kamera aus `/api/internal/cameras` und `face_track_faces` aus
   `/api/internal/settings` (bei jedem `vg/internal/config`). Ein Wechsel von `face_fullres` darf ffmpeg des
   Analysestroms nicht neu starten (zusätzlicher Hauptstrom-Leser nur auf Anforderung bzw. gedrosselt).
+- Umsetzung (Paket B, `worker/vg_worker/fullres.py`, `face_track.py`, `face_quality.py`):
+  - Vollbild-Leser: je Kamera mit wirksamem `face_fullres` ein zusätzlicher ffmpeg auf `main_rtsp` (volle Auflösung,
+    `VG_FACE_FULLRES_FPS` = 2 Bilder/s), gestartet erst, wenn ein Personen-Track ein Gesicht braucht, beendet 30 s
+    nach der letzten Person. Ist der Hauptstrom nicht größer als das Analysebild (≤ 1,15×), läuft keiner.
+    Ausschnitte nur aus einem zeitgleichen Vollbild (≤ 0,12 s Abstand), sonst – nach höchstens 1,5 s Warten – aus
+    dem Analysebild (`source_res:"detect"`).
+  - `face_size` = kürzere Gesichtsseite in Pixeln **des Bildes, aus dem geschnitten wurde** (`main`: volle
+    Auflösung, `detect`: Analysebild) – also die tatsächlich vorhandene Bildinformation, nie hochgerechnet.
+  - `quality` (neue Skala ab Paket B) = Erkennungs-Konfidenz × min(1, face_size/112) × cos²(yaw)·cos(pitch) ×
+    (0,5 + 0,5·min(1, sharpness/60)). Profile und unscharfe Bilder bekommen niedrige Werte.
+  - `perf.face.dropped` = verworfene Gesichts-Jobs (Warteschlange voll oder globales Budget
+    `VG_FACE_MAX_JOBS_PER_S` = 15/s erschöpft; die ersten 3 Jobs je Track zählen nicht); `faces_per_min` = gefundene Gesichter.
+  - Antwort `none`/`ambiguous` auf `final` entfernt eine vorläufige Gesichts-Identität auch vom Worker-Track
+    (Overlay); eine per ReID übernommene Identität bleibt.
 
 ### ID.H Nachtlauf (Paket D) – REST, Ablauf, WS
 
