@@ -500,3 +500,44 @@ Test-API-Key (1 Tag) angelegt und widerrufen (danach 401). Testdaten entfernt: D
 - Füllstand/Referenz-Sensoren nur synthetisch geprüft; Worker-Neustart während laufender Lease nicht nachgestellt.
 - Sicherheitshinweis aus A2: Die Kamera-URL von `cam_3` mit Passwort stand in einem Sitzungsprotokoll (keine Datei,
   kein Commit) – Passwortwechsel erwägen.
+
+## Welle 4 – C2 Person über mehrere Kameras (Zweig `w4/c2-reid`, 2026-10-25, nachts, autonom)
+
+Für Welle 4 gab es keinen Kickoff; CONTRACT.md „Nachträge: Welle 4 – C2“, die Spalte `cameras.reid_enabled` und die
+Settings `reid_ttl_min`/`reid_match_threshold`/`reid_assign_identity` hat C2 minimal und additiv selbst angelegt.
+
+- **Machbarkeit (fehlte in W0, messungen.md §11):** OSNet x0_25 (MSMT17) als fertiges ONNX von Hugging Face, kein
+  `torchreid`-Export, keine neue Abhängigkeit. Market-1501: Rank-1 60,5 %, Haushalt-Simulation (4 Personen) bei 0,70:
+  74 % richtig, 2,3 % falsch, Fremder 7 %; bei 0,80 je ≤ 0,7 %. DINOv2 (Tiermodell) unbrauchbar (Rank-1 9 %).
+  **Go mit Einschränkungen**: ReID ist ein Hinweis, Gesicht hat Vorrang, je Kamera standardmäßig aus.
+- **Umgesetzt:** Worker `reid.py` (CPU, ≈ 7–8 ms je Ausschnitt, 0 MB VRAM, max. 5 Embeddings je Track alle 3 s,
+  lazy, Lease-fest), Backend `reid.py` (RAM-Galerie, Track-Hook, Abgleich ohne gleichzeitig aktiven Track,
+  Verfall, Abschalten je Kamera verwirft deren Embeddings), `POST /api/internal/reid`, `GET/DELETE /api/presence`,
+  `/presence/status`, WS `presence`, MCP `who_is_where` aus `/presence` (inkl. „zuletzt gesehen“), Seite
+  „Anwesenheit“, Kamera-Schalter, Einstellungs-Karte (mit „Jetzt leeren“), Ereignis-Detail „über Wiedererkennung“,
+  `selftest --reid`, Machbarkeitstest `reidtest`.
+- **Geprüft (Testprojekt `vg-c2`, Port 18092, Worker nur unter `flock`):** zwei „Kameras“ aus
+  `face-demographics-walking.mp4` – A mit Gesichtserkennung, B ohne, gespiegelt, farblich verschoben, 31 s später.
+  - Nach dem Einschwingen (6 min, 39 B-Tracks): **29 richtig benannt, 0 falsch, 8 anonym** (eine Person aus einer
+    Dreiergruppe wird auf B nie verknüpft); `presence_key` von A und B gleich, Events auf B mit
+    `identity_source:"reid"`.
+  - Eine frühere Fassung gab einen Namen falsch weiter (eine knappe Fehlverknüpfung benannte den ganzen Eintrag) →
+    Regeln „Gesicht als Anker“ (Tracks mit eigener Identität nicht per ReID verknüpfen; knappe Verknüpfung beim
+    Gesicht herauslösen statt benennen); danach 0 falsch.
+  - REST: PUT ohne `reid_enabled` lässt es unverändert; Settings-Grenzen 422; `/api/internal/reid` über nginx 403,
+    Null-Embedding 422; Lese-Key: `GET /presence` 200, `DELETE /presence` 403 (Key danach widerrufen).
+  - MCP mit Lese-Key: `who_is_where` → „gerade sichtbar“ + „zuletzt gesehen“, Quelle/Score, signierte Bilder.
+  - **Datenschutz:** DB hat nur `cameras.reid_enabled`, Event-Attribute nur `presence_key`/`identity_source`, keine
+    Zahlenlisten; Medien nur `.jpg`; Logs ohne Embeddings. ReID an B aus → Embeddings von B binnen Sekunden weg
+    (73 → 36). Verfall: mit `reid_ttl_min` 5 und gestopptem Worker war die Galerie nach ≈ 5 min leer
+    (`entries 0, embeddings 0, expired 12`).
+  - Lasttest 16 Kameras (`selftest --replicate 8`, 60 s, unter `flock`): ohne ReID 62,8 fps / VRAM-Spitze
+    4679 MiB, mit `--reid` 63,9 fps / 4603 MiB (ReID auf der CPU, 86 Embeddings/min, 20 ms je Lauf) – kein Rückgang.
+  - `corepack pnpm build` grün; Screenshots (Anwesenheit Desktop/390 px, Einstellungen, Kamera-Dialog) ohne JS-Fehler.
+- **Entscheidungen:** CPU statt GPU (CUDA bringt bei Batch 1 nichts, eigener Prozess +0,4 GB); Schwelle 0,70,
+  Namen erst ab 0,80; Anwesenheit umfasst auch Hunde/Katzen (wie bisher `who_is_where`), Quelle dort `pet`
+  (additiv zu `face|reid|none`); `presence_key` alter Events ist nach Verfall nur eine Kennung.
+- **Offen:** keine echten Aufnahmen derselben Person in zwei Räumen (nachts nicht möglich) – Schwelle im Betrieb
+  prüfen (`/presence/status`: `linked`/`new`). Deckenkameras/Kleidungswechsel ungetestet. Der Worker übernimmt
+  einen geänderten `presence_key` erst beim nächsten Embedding des Tracks (Event-Attribut kann kurz veralten).
+  Gruppen nebeneinander werden oft übersprungen (Überdeckung). Im Haupt-Stack ist ReID an keiner Kamera aktiv.
