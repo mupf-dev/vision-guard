@@ -142,6 +142,9 @@ def delete_identity(iid: int, db: Session = Depends(get_db)):
         from sqlalchemy import update
         db.execute(update(InventoryItem).where(InventoryItem.identity_id == iid)
                    .values(identity_id=None, identity_score=None))
+    if kind == "pet":   # W2 (C3): Tagebuch-Besuche bleiben als „unbekanntes Tier“
+        from ..pet_diary import on_identity_deleted
+        on_identity_deleted(db, iid)
     db.delete(i)
     db.commit()
     ident_svc.delete_identity_files(iid)

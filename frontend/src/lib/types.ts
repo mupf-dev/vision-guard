@@ -713,16 +713,28 @@ export interface PetVisit {
   thumb_url: string | null;
 }
 
+/** ok = im Normalbereich, low/high = weniger/mehr als normal (bis jetzt hochgerechnet), gap = ungewöhnlich lange
+ *  Pause, unknown = noch kein Normalwert (mind. 7 Tage Daten). */
+export type PetStatus = "ok" | "low" | "high" | "gap" | "unknown";
+
 export interface PetPurposeStats {
   today: number;
   normal: [number, number] | null;
   last_ts: string | null;
   daily: { day: string; count: number }[];
+  // C3 (additiv): Median der Tageszahl, Normalbereich bis zur aktuellen Uhrzeit, Pausen in Sekunden
+  median?: number | null;
+  expected_now?: [number, number] | null;
+  status?: PetStatus;
+  gap_s?: number | null;
+  usual_gap_s?: number | null;
 }
 
 export interface PetSummary {
   identity: IdentityRef | null;
   label: string;
+  /** C3 (additiv): Anzeigename (Name/„Tier #N“, ohne Identität „Katze (unbekannt)“) */
+  name?: string;
   purposes: Partial<Record<ZonePurpose, PetPurposeStats>>;
 }
 

@@ -58,7 +58,7 @@ const cameras: Camera[] = [
   { id: 2, name: "Garten", url: "rtsp://testcam:8554/cam2", detect_url: null, enabled: true, detect_fps: 5,
     labels: ["person", "dog", "cat", "bird"], min_score: 0.55,
     face_recognition: true, plate_recognition: false, pet_recognition: true,
-    zones: [{ id: "z2", name: "Terrasse", color: "#22c55e", polygon: [[0.6, 0.55], [0.95, 0.55], [0.95, 0.95], [0.6, 0.95]] }],
+    zones: [{ id: "z2", name: "Terrasse", color: "#22c55e", purpose: "water", polygon: [[0.6, 0.55], [0.95, 0.55], [0.95, 0.95], [0.6, 0.95]] }],
     ...INV_OFF, room: "Garten",
     status: { state: "online", fps: 5.0, width: 1280, height: 720, inference_ms: 12.6, last_seen: now(),
       health: { state: "warn", problems: [{ type: "blur", since: ago(3700), text: "Unscharf seit 13:02" }] } } },
@@ -153,13 +153,32 @@ let reviews: ReviewRequest[] = [
     crop_url: faceSvg(12), snapshot_url: null, data: {}, created_at: ago(3600), answered_at: null, answer_source: null,
     expires_at: new Date(Date.now() + 45 * 3600e3).toISOString(), correct_label: null },
 ];
+// C3: Haustier-Tagebuch – Bello (Hund, benannt) mit 14 Tagen Verlauf, eine unbekannte Katze ohne Normalwert
+const dayStr = (back: number) => { const d = new Date(Date.now() - back * 86400e3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const daily = (counts: number[]) => counts.map((count, i) => ({ day: dayStr(counts.length - 1 - i), count }));
 const petVisits: PetVisit[] = [
-  { id: 1, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
+  { id: 4, identity: null, label: "cat", camera_id: 2, camera_name: "Garten", zone_id: "z2", zone_name: "Terrasse", purpose: "water",
+    event_id: null, start_ts: ago(1200), end_ts: null, duration_s: null, thumb_url: null },
+  { id: 3, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
     zone_id: "z2", zone_name: "Terrasse", purpose: "water", event_id: null, start_ts: ago(5400), end_ts: ago(5380), duration_s: 20, thumb_url: faceSvg(30, "pet") },
+  { id: 2, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
+    zone_id: "z2", zone_name: "Terrasse", purpose: "food", event_id: null, start_ts: ago(30000), end_ts: ago(29900), duration_s: 100, thumb_url: faceSvg(30, "pet") },
+  { id: 1, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
+    zone_id: "z2", zone_name: "Terrasse", purpose: "food", event_id: null, start_ts: ago(86400 + 4000), end_ts: ago(86400 + 3950), duration_s: 50, thumb_url: faceSvg(30, "pet") },
 ];
 const petSummary: PetSummary[] = [
-  { identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog",
-    purposes: { water: { today: 1, normal: [2, 5], last_ts: ago(5400), daily: [{ day: new Date().toISOString().slice(0, 10), count: 1 }] } } },
+  { identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", name: "Bello",
+    purposes: {
+      food: { today: 1, normal: [3, 5], median: 4, expected_now: [2, 3], status: "low", last_ts: ago(29900), gap_s: 29900, usual_gap_s: 21000,
+        daily: daily([4, 3, 5, 4, 4, 3, 5, 4, 3, 4, 5, 4, 4, 1]) },
+      water: { today: 3, normal: [4, 7], median: 5, expected_now: [2, 4], status: "ok", last_ts: ago(5380), gap_s: 5380, usual_gap_s: 18000,
+        daily: daily([5, 6, 4, 7, 5, 5, 6, 4, 5, 6, 5, 7, 5, 3]) },
+      litter: { today: 0, normal: null, median: null, expected_now: null, status: "unknown", last_ts: null, gap_s: null, usual_gap_s: null,
+        daily: daily([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]) },
+    } },
+  { identity: null, label: "cat", name: "Katze (unbekannt)",
+    purposes: { water: { today: 1, normal: null, median: null, expected_now: null, status: "unknown", last_ts: ago(1200), gap_s: 1200,
+      usual_gap_s: null, daily: daily([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]) } } },
 ];
 let reports: Report[] = [
   { id: 1, kind: "daily", period_start: ago(86400 + 3600 * 3), period_end: ago(3600 * 3), created_at: ago(3600 * 3),
@@ -657,8 +676,16 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     events = events.map((e) => (e.id === m![1] ? { ...e, acknowledged_at: e.acknowledged_at ?? now() } : e));
     return json(events.find((e) => e.id === m![1]));
   }
-  if (path === "/pets/visits") return json({ items: petVisits, total: petVisits.length });
-  if (path === "/pets/summary") return json(petSummary);
+  if (path === "/pets/visits") {
+    const iid = p.get("identity_id"), purpose = p.get("purpose"), label = p.get("label");
+    const items = petVisits.filter((v) => (iid === null || (iid === "0" ? v.identity === null : v.identity?.id === Number(iid)))
+      && (!purpose || purpose.split(",").includes(v.purpose)) && (!label || v.label === label));
+    return json({ items: items.slice(0, Number(p.get("limit") ?? 100)), total: items.length });
+  }
+  if (path === "/pets/summary") {
+    const days = Math.max(1, Number(p.get("days") ?? 14));
+    return json(petSummary.map((s) => ({ ...s, purposes: Object.fromEntries(Object.entries(s.purposes).map(([k, v]) => [k, { ...v, daily: v!.daily.slice(-days) }])) })));
+  }
   if (path === "/reports") return json({ items: reports, total: reports.length });
   if (path === "/reports/preview" || path === "/reports/generate") return json({ detail: "Tagesbericht ist noch nicht umgesetzt" }, 501);
   if ((m = path.match(/^\/reports\/(\d+)$/))) {
