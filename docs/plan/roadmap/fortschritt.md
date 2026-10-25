@@ -442,3 +442,61 @@ Gewichte liegen bisher nur im Test-Volume `vg-w0_models`; der erste Start im Hau
   nach dem Merge `history_enabled` einschalten. Gewichte (≈ 1,4 GB) lädt der Worker beim ersten Start nach
   `/models/history` (oder vorab aus `vg-w0_models` kopieren). Deutsche Anfragen mit seltenen Wörtern bleiben
   schwächer (Wörterbuch erweitern oder optional LLM-Übersetzung über `llm_client`).
+
+## Welle 3 – Integration (2026-10-25, nachts, autonom)
+
+**Ergebnis:** Alle drei Fach-Zweige sind per `--no-ff` im Arbeitszweig (`w3/a2-vlm`, `w3/a3-c4-sensoren`,
+`w3/b1-zeitmaschine`). Der Haupt-Stack läuft mit Frag die Kamera (Profil `vlm` aktiv), Sensoren/Vorräten und
+Zeitmaschine. Kein Feature musste zurückgenommen werden; eine Korrektur (VLM-Fenster für Sensoren, s. u.).
+
+- **Konflikte:** `frontend/src/lib/mock.ts` (Ask-Routen A2 + Sensor-Routen A3 zusammengeführt), `mcp/selftest.py`
+  (erwartete Tools aller drei), `AGENTS.md`, `worker/README.md`, `fortschritt.md` (beide Seiten erhalten).
+  Worker-Gerüst (Frame-Tap, Lease, Embed) stammte aus K3, daher keine Code-Konflikte im Worker.
+- **Modellgewichte** aus dem Test-Volume `vg-w0_models` in `vision-guard_models` kopiert (Moondream 2 INT4,
+  SmolVLM-500M → `hf/hub/`, SigLIP 2 → `history/`), kein Download nötig.
+- **Build:** `corepack pnpm build` grün; `docker compose up -d --build` (backend, worker, frontend, mcp) und
+  `docker compose --profile vlm up -d --build vlm` fehlerfrei; Logs ohne Fehler/Tracebacks.
+
+### Gefundener Fehler und Korrektur
+
+Ein einziger `vlm`-Sensor (Straßenkamera, `vlm_max_age_s` 120) hielt das Bildmodell ~70 % der Zeit geladen: jede
+Frage verlängert die GPU-Lease, Inventar und Zeitmaschine waren entsprechend lange pausiert, die Gegenstände von
+`cam_3` wurden „Stand unklar“. Korrektur in `backend/app/sensors.py`: periodische `vlm`-Sensor-Fragen nur in einem
+gemeinsamen 60-s-Fenster, höchstens alle `VG_SENSOR_VLM_GAP_S` (Standard 900 s); „Jetzt prüfen“ und `verify_vlm`
+ausgenommen. Danach im 16-min-Lauf nur noch eine Lease (≈ 2 min). Zusätzlich `GET /api/system.sensors` mit den
+Zählern (offener Punkt von A3). CONTRACT W3.F um „Ergänzungen der Integration“ erweitert.
+
+### Messwerte (Haupt-Stack, `cam_3` mit Inventar, zeitweise 2 Demo-Kameras)
+
+| Prüfung | Ergebnis |
+|---|---|
+| VRAM Dauerlast (Inventar + Zeitmaschine auf 3 Kameras) | 2,92–3,06 GB (≤ 4,5 ✓) |
+| VRAM-Spitze während VLM-Lease | 5,20 GB (≤ 5,6 ✓) |
+| `cam_3` während VLM-Leases (≈ 60 Proben) | 4,58–5,09 fps (≥ 4,5 ✓) |
+| `cam_3` gesamt (≈ 160 Proben über 30 min) | Ø ≈ 5,0 fps; eine Einzelprobe 4,36 fps ohne Lease (Ausreißer) |
+| Frag die Kamera über Backend, kalt (Lease + Laden) | 10,9 s |
+| … warm | 1,8–3,3 s (9 Fragen), Ja/Nein an Demo-Kameras plausibel |
+| Lasttest 16 Kameras (`--replicate 8`, 60 s, unter `flock`, Haupt-Stack parallel) | 61,2 fps gesamt (W2: 62,3; −1,8 %), Batch 43 ms, VRAM ganze GPU max. 4,46 GB; `cam_3` dabei 4,78–5,01 fps |
+| Zeitmaschine | „Auto auf der Straße“/„Fahrrad“ → cam2-Demo vorn, „Flur mit Holzboden“ → cam1-Demo, „Sofa“ → `cam_3` |
+| Sensoren | Helligkeit `on`; `vlm`-Sensor (echtes Moondream) liefert `off`/`on`; Vorrat `inventory_count` an `cam_3` (Kissen): `low` → Einkaufsliste + Hinweis `source:sensor`, Schwelle gesenkt → `ok`, Eintrag erledigt |
+| MCP-Selbsttest (alle W3-Tools erwartet) | OK |
+
+Test-API-Key (1 Tag) angelegt und widerrufen (danach 401). Testdaten entfernt: Demo-Kameras 4/5 samt Zeitmaschine,
+617 Events, 7 unbenannte Test-Gesichter, Sensoren, Einkaufseintrag, Hinweise, Frag-Verlauf. Images `vg-a3-*` gelöscht.
+
+### Entscheidungen
+
+- Profil `vlm` bleibt im Haupt-Stack an (stabil, Grenzen eingehalten). Damit es nach `docker compose down` wieder
+  startet, muss `COMPOSE_PROFILES=vlm` in `.env` stehen (nicht geändert – Nutzerentscheidung).
+- `history_enabled` an `cam_3` (Intervall 30 s, ohne Kacheln) bleibt **an**, damit die offene Dedupe-Messung
+  tagsüber Daten bekommt. Abschalten: Kamera-Dialog → Zeitmaschine, Verlauf löschen in den Einstellungen.
+- Sensor-Fragen landen mit `source:"sensor"` im Frag-Verlauf (mit Standbild, Aufbewahrung 7 Tage) – belassen.
+
+### Offen
+
+- Kaltstart von „Frag die Kamera“ dauert ~11 s (Ziel < 5 s nur warm erfüllt); keine Fragen an echte `cam_3`-Bilder.
+- Während einer VLM-Lease sind Inventar und Zeitmaschine pausiert; Gegenstände werden in der Zeit „Stand unklar“.
+- `vlm`-Sensoren reagieren durch das Fenster erst nach bis zu 15 min; für schnellere Sensoren braucht es D3.
+- Füllstand/Referenz-Sensoren nur synthetisch geprüft; Worker-Neustart während laufender Lease nicht nachgestellt.
+- Sicherheitshinweis aus A2: Die Kamera-URL von `cam_3` mit Passwort stand in einem Sitzungsprotokoll (keine Datei,
+  kein Commit) – Passwortwechsel erwägen.

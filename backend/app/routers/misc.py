@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import settings_store, state, vlm
+from .. import sensors, settings_store, state, vlm
 from ..auth import require_user
 from ..config import VERSION, config
 from ..db import get_db, vector_available, vector_version
@@ -95,5 +95,7 @@ def system(db: Session = Depends(get_db)):
         "mqtt": {"connected": state.mqtt_connected},
         # W3 (K3): pgvector (B1 Zeitmaschine)
         "db": {"vector": vector_available(), "vector_version": vector_version()},
+        # W3 Integration: Zähler der virtuellen Sensoren (Bildmodell-Aufrufe, übersprungene/zurückgestellte Fragen)
+        "sensors": sensors.stats(),
         "version": VERSION,
     }

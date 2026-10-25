@@ -32,6 +32,7 @@ Wechsel nach/aus `unknown` starten keine Regeln (Worker-Neustart soll keine „F
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import defaultdict
@@ -64,6 +65,11 @@ SNAPSHOT_MIN_GAP_S = 60.0   # Standbild je Sensor höchstens so oft
 HISTORY_SAMPLE_S = 900.0    # Verlauf: zusätzlich zu Wechseln höchstens alle 15 min ein Messwert
 FLUSH_S = 30.0              # value/last_eval gedrosselt in die DB
 SHOPPING_DONE_KEEP_D = 30   # erledigte Einkaufseinträge
+# Integration W3: Jede Sensor-Frage leiht die GPU (YOLOE/Zeitmaschine pausieren) und verlängert die Lease. Damit
+# vlm-Sensoren das Bildmodell nicht dauerhaft geladen halten, fragen sie nur in einem gemeinsamen Fenster
+# (VLM_WINDOW_S lang, höchstens alle VLM_SENSOR_GAP_S). "Jetzt prüfen" (force) und verify_vlm sind ausgenommen.
+VLM_SENSOR_GAP_S = max(60.0, float(os.environ.get("VG_SENSOR_VLM_GAP_S", "900")))
+VLM_WINDOW_S = 60.0
 
 _lock = threading.RLock()
 _cfg: dict[int, dict[str, Any]] = {}      # sensor_id → Konfiguration + bestätigter Zustand (Abbild der DB)
@@ -71,7 +77,19 @@ _mem: dict[int, dict[str, Any]] = {}      # sensor_id → Laufzeit (Kandidat, le
 _slugs: dict[int, str] = {}               # sensor_id → externer Slug
 _loaded = False
 _last = {"stale": 0.0, "flush": 0.0, "orphans": 0.0}
-_stats = {"vlm_calls": 0, "vlm_skipped": 0, "commits": 0}
+_stats = {"vlm_calls": 0, "vlm_skipped": 0, "vlm_gated": 0, "commits": 0}
+_vlm_gate = {"open_until": 0.0, "next_open": 0.0}
+
+
+def _vlm_gate_allows(now: float) -> bool:
+    """Gemeinsames Fenster für periodische vlm-Sensor-Fragen (siehe VLM_SENSOR_GAP_S)."""
+    if now < _vlm_gate["open_until"]:
+        return True
+    if now >= _vlm_gate["next_open"]:
+        _vlm_gate["open_until"] = now + VLM_WINDOW_S
+        _vlm_gate["next_open"] = now + VLM_SENSOR_GAP_S
+        return True
+    return False
 # DB, Standbild, MQTT, Regeln nie im Track-Thread; ein Thread → Reihenfolge der Wechsel bleibt erhalten
 _effects = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vg-sensor-fx")
 # Bildmodell (blockiert bis ~20 s): eigener Pool, damit Wechsel anderer Sensoren nicht warten
@@ -994,6 +1012,10 @@ def tick() -> None:
                     or now - last >= c["vlm_max_age_s"])
             if occluded_recent or not need:
                 _stats["vlm_skipped"] += 1
+                continue
+            if not _vlm_gate_allows(now):
+                _stats["vlm_gated"] += 1
+                m["next_due"] = max(m["next_due"], _vlm_gate["next_open"])
                 continue
             m["vlm_busy"] = True
             due_vlm.append(sid)

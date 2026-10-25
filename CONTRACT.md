@@ -1428,6 +1428,14 @@ Detektion, Gesicht/Kennzeichen/Tier, DINOv2-Embedding und Pose bleiben geladen.
   - Standbild beim bestätigten Wechsel über go2rtc (`sensors/YYYY-MM-DD/sensor{id}_{unix}.jpg`, höchstens 1×/min
     je Sensor); es ist der Snapshot von Sensor-Regeln (Aktion `snapshot`).
   - Sensoren gelöschter Kameras entfernt das Backend selbst (Prüfung jede Minute).
+- Ergänzungen der Integration (Welle 3, additiv):
+  - Periodische Fragen von `vlm`-Sensoren laufen nur in einem gemeinsamen Fenster von 60 s, das sich höchstens alle
+    `VG_SENSOR_VLM_GAP_S` Sekunden öffnet (Backend-Env, Standard 900, min. 60). Grund: Jede Frage leiht die GPU
+    (Inventar und Zeitmaschine pausieren) und verlängert die Lease; ein einzelner Sensor mit kurzem `vlm_max_age_s`
+    hielt das Bildmodell im Test sonst ~70 % der Zeit geladen. „Jetzt prüfen“ (`evaluate`) und `verify_vlm` sind
+    ausgenommen.
+  - `GET /api/system` liefert zusätzlich `sensors: {vlm_calls, vlm_skipped, vlm_gated, commits, sensors}` (Zähler
+    seit Backend-Start).
 
 ### W3.G Zeitmaschine (B1)
 
