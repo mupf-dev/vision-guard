@@ -140,16 +140,41 @@ let notifications: VGNotification[] = [
 ];
 
 function mockChanges(p: URLSearchParams): InventoryChanges {
-  const snap = (it: InventoryItem, bbox: [number, number, number, number]) => ({
-    ts: it.last_seen, state: it.state, camera_id: it.camera_id, bbox, zones: it.zones, zone_names: it.zone_names, crop_url: it.crop_url });
-  const changes: InventoryChange[] = inventory.slice(0, 3).map((it, i) => {
-    const type = (["appeared", "disappeared", "moved"] as const)[i];
-    return { type, at: ago(600 * (i + 1)), item: it, before: type === "appeared" ? null : snap(it, it.bbox),
-      after: type === "disappeared" ? null : snap(it, it.bbox),
-      text: `${it.name_de}: ${{ appeared: "neu aufgetaucht", disappeared: "verschwunden", moved: "vermutlich verschoben" }[type]} (${it.room ?? it.camera_name})` };
-  });
-  return { since: p.get("since") ?? "today", until: now(), summary: `Seit ${p.get("since") ?? "heute"}: 1 neu, 1 weg, 1 verschoben.`,
-    counts: { appeared: 1, disappeared: 1, moved: 1, uncertain: 0, transient: 0 }, changes };
+  // Wie das Backend (B2): neu / weg / verschoben, optional „zwischendurch da“, Hinweis bei unklarem Stand
+  const byLabel = (l: string) => inventory.find((i) => i.label === l) ?? inventory[0];
+  const snap = (it: InventoryItem, bbox: [number, number, number, number], tsAgo: number, state: InventoryItem["state"] = "present") => ({
+    ts: ago(tsAgo), state, camera_id: it.camera_id, bbox, zones: it.zones, zone_names: it.zone_names,
+    crop_url: state === "present" ? it.crop_url : null });
+  const place = (it: InventoryItem) => it.room ?? it.camera_name;
+  const book = byLabel("book"), keys = byLabel("keys"), remote = byLabel("remote"), lamp = byLabel("lamp");
+  const changes: InventoryChange[] = [
+    { type: "disappeared", at: ago(7200), item: keys, before: snap(keys, keys.bbox, 7300), after: snap(keys, keys.bbox, 7200, "missing"),
+      text: `${keys.name_de}: verschwunden (${place(keys)})` },
+    { type: "appeared", at: ago(1500), item: book, before: null, after: snap(book, book.bbox, 300),
+      text: `${book.name_de}: neu aufgetaucht (${place(book)}), vermutlich auf dem Tisch` },
+    { type: "moved", at: ago(2400), item: remote, before: snap(remote, [0.12, 0.6, 0.19, 0.645], 5400), after: snap(remote, remote.bbox, 600),
+      text: `${remote.name_de}: vermutlich vom Sofa zum Tisch verschoben (${place(remote)})` },
+  ];
+  if (p.get("include_transient") === "true" || p.get("include_transient") === "1")
+    changes.push({ type: "transient", at: ago(3000), item: lamp, before: null, after: snap(lamp, lamp.bbox, 2950),
+      text: `${lamp.name_de}: zwischendurch da, inzwischen wieder weg (${place(lamp)})` });
+  if (p.get("since") === "yesterday")   // Beispiel für „Stand unklar“ (Kamera lieferte zeitweise keine Analyse)
+    changes.push({ type: "uncertain", at: ago(900), item: { ...lamp, state: "stale", visible: false },
+      before: snap(lamp, lamp.bbox, 1000), after: snap(lamp, lamp.bbox, 900, "stale"),
+      text: `${lamp.name_de}: Stand unklar – Kamera ${lamp.camera_name} liefert seit ${fmtHm(ago(900))} keine Gegenstandsanalyse` });
+  const counts = { appeared: 0, disappeared: 0, moved: 0, uncertain: 0, transient: 0 };
+  for (const c of changes) counts[c.type] += 1;
+  const sinceLabel: Record<string, string> = { morning: "06:00", today: "00:00", yesterday: "gestern 00:00", "3h": fmtHm(ago(10800)) };
+  const parts = [`1 neu (${book.name_de} (${place(book)}))`, `1 weg (${keys.name_de} (${place(keys)}))`, `1 verschoben (${remote.name_de}: Sofa → Tisch)`];
+  if (counts.transient) parts.push(`1 zwischendurch da (${lamp.name_de})`);
+  const since = p.get("since") ?? "morning";
+  return { since: sinceLabel[since] ? since : since, until: now(),
+    summary: `Seit ${sinceLabel[since] ?? since}: ${parts.join(", ")}.`, counts, changes };
+}
+
+function fmtHm(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function mockHealth(id: number): CameraHealth {
