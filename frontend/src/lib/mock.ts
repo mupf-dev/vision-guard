@@ -2,6 +2,7 @@
  * Mock-Modus (VITE_MOCK=1): simuliert Backend-REST und /api/ws im Browser,
  * damit das Frontend ohne laufendes Backend entwickelt werden kann.
  */
+import type { AskResult, ShoppingItem, VirtualSensor } from "./types";
 import type {
   Camera, Identity, Rule, Sample, Settings, VGEvent, DetObject, IdentityKind,
 } from "./types";
@@ -46,6 +47,8 @@ const INV_OFF = {
   // W2
   pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {} as Record<string, number>,
   inventory_suppress: [] as Camera["inventory_suppress"],
+  // W3
+  vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
 };
 
 const cameras: Camera[] = [
@@ -139,6 +142,10 @@ let settings: Settings = {
   report_enabled: false, report_time: "21:00", report_days: [0, 1, 2, 3, 4, 5, 6], report_generator: "template",
   report_channels: { mqtt: true, webhook_url: null, mail_to: [] },
   llm_provider: "none", llm_base_url: null, llm_model: null, llm_timeout_s: 60,
+  // W3
+  vlm_enabled: true, vlm_model: "moondream2-int4", vlm_idle_unload_s: 120, vlm_need_mb: 3000, vlm_cloud_model: null,
+  retention_days_ask: 7, retention_days_sensors: 30, shopping_list_auto: true,
+  retention_days_history: 14, history_min_change: 0.05, history_model: "siglip2-b16-256",
   llm_key_configured: { openai_compat: false, anthropic: false },
 };
 
@@ -629,8 +636,9 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     return json({
       cameras: cameras.map((c) => ({ id: c.id, name: c.name, status: c.status })),
       worker: { online: true, gpu: { name: "NVIDIA GeForce RTX 4070", util: 30 + Math.round(Math.random() * 20), mem_used: 3120, mem_total: 12282, temp: 54 + Math.round(Math.random() * 5) },
-        models: { detector: "yolo11m (TensorRT FP16)", face: "buffalo_l", plate: "fast-plate-ocr", pet: "dinov2-small" } },
-      mqtt: { connected: true }, version: "1.0.0-mock",
+        models: { detector: "yolo11m (TensorRT FP16)", face: "buffalo_l", plate: "fast-plate-ocr", pet: "dinov2-small",
+          inventory: "ready", history: "off", vlm: "off" }, gpu_lease: null },
+      mqtt: { connected: true }, db: { vector: true, vector_version: "0.8.2" }, version: "1.0.0-mock",
     });
   }
   if (path === "/inventory/search") { refreshInventoryMock(); return json(searchInventory(p.get("q") ?? "")); }
@@ -749,7 +757,75 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     if (m[2]) return json({ request_id: "mock", ok: true, error: null, path: `health/cam${m[1]}_day.jpg` }, 202);
     return json(mockHealth(Number(m[1])));
   }
+  const w3 = routeW3(method, path, p, body);
+  if (w3) return w3;
   return json({ detail: `Mock: ${method} ${path} nicht implementiert` }, 404);
+}
+
+/* ---------- Welle 3 (K3): Frag die Kamera, Sensoren, Einkaufsliste, Zeitmaschine ---------- */
+const askLog: AskResult[] = [];
+const mockSensors: VirtualSensor[] = [
+  { id: 1, name: "Licht Wohnzimmer", camera_id: 1, camera_name: "Einfahrt", room: "Wohnzimmer", enabled: true, kind: "brightness",
+    region: [[0.1, 0.1], [0.3, 0.1], [0.3, 0.3], [0.1, 0.3]], params: { threshold: 0.5, invert: false }, state_set: "binary",
+    supply: false, verify_vlm: false, interval_s: 10, vlm_max_age_s: 900, change_threshold: 0.08, confirm_n: 2,
+    state: "on", value: 0.71, since: ago(3600), last_eval: ago(5), last_engine: "cheap", snapshot_url: null, state_text: "an seit 1 h" },
+  { id: 2, name: "Wasserflaschen", camera_id: 1, camera_name: "Einfahrt", room: "Küche", enabled: true, kind: "inventory_count",
+    region: [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]], params: { labels: ["bottle"], min_count: 2 }, state_set: "level",
+    supply: true, verify_vlm: false, interval_s: 600, vlm_max_age_s: 900, change_threshold: 0.08, confirm_n: 2,
+    state: "low", value: 1, since: ago(7200), last_eval: ago(60), last_engine: "cheap", snapshot_url: null, state_text: "knapp seit 2 h" },
+];
+let shopping: ShoppingItem[] = [
+  { id: 1, name: "Wasserflaschen", note: "", source: "auto", sensor_id: 2, created_at: ago(7200), done_at: null, done: false },
+  { id: 2, name: "Kaffee", note: "Bohnen", source: "manual", sensor_id: null, created_at: ago(86400), done_at: null, done: false },
+];
+
+function routeW3(method: string, path: string, p: URLSearchParams, body: any): Response | null {
+  let m: RegExpMatchArray | null;
+  if ((m = path.match(/^\/cameras\/(\d+)\/ask$/)) && method === "POST") {
+    const cam = cameras.find((c) => c.id === Number(m![1]));
+    const r: AskResult = { id: nextId++, camera_id: Number(m[1]), camera_name: cam?.name ?? "?", question: body?.question ?? "",
+      region: body?.region ?? null, answer: "Yes, there is a person near the door. (Mock)", yes_no: "yes", engine: "local",
+      model: "moondream2-int4", ms: 1012, snapshot_url: null, ts: now(), source: "ui" };
+    askLog.unshift(r);
+    return json(r);
+  }
+  if (path === "/ask") return json({ items: askLog, total: askLog.length });
+  if (path === "/sensors" && method === "GET") return json(mockSensors);
+  if ((m = path.match(/^\/sensors\/(\d+)(\/history)?$/))) {
+    const s = mockSensors.find((x) => x.id === Number(m![1]));
+    if (!s) return json({ detail: "Sensor nicht gefunden" }, 404);
+    if (m[2]) return json([{ ts: s.since, state: s.state, value: s.value, engine: "cheap", snapshot_url: null }]);
+    return json(s);
+  }
+  if (path === "/shopping-list" && method === "GET") {
+    const done = p.get("done") ?? "false";
+    const items = shopping.filter((i) => done === "all" || String(i.done) === done);
+    return json({ items, open_count: shopping.filter((i) => !i.done).length });
+  }
+  if (path === "/shopping-list" && method === "POST") {
+    const it: ShoppingItem = { id: nextId++, name: body?.name ?? "", note: body?.note ?? "", source: "manual", sensor_id: null,
+      created_at: now(), done_at: null, done: false };
+    shopping.push(it);
+    return json(it, 201);
+  }
+  if ((m = path.match(/^\/shopping-list\/(\d+)$/))) {
+    const it = shopping.find((x) => x.id === Number(m![1]));
+    if (!it) return json({ detail: "Eintrag nicht gefunden" }, 404);
+    if (method === "DELETE") { shopping = shopping.filter((x) => x !== it); return json(undefined, 204); }
+    Object.assign(it, body ?? {});
+    if (body?.done !== undefined) it.done_at = body.done ? now() : null;
+    return json(it);
+  }
+  if (path === "/history/stats") return json({ enabled: true, frames: 1234, vectors: 1234, thumb_bytes: 7_400_000, oldest: ago(86400 * 6), by_camera: { 1: 800, 2: 434 } });
+  if (path === "/history/search") {
+    const q = p.get("q") ?? "";
+    return json({ query: q, model: "ViT-B-16-SigLIP2-256", items: [
+      { camera_id: 1, camera_name: "Einfahrt", room: null, start_ts: ago(7300), end_ts: ago(6900), best_ts: ago(7100), score: 71,
+        tile_bbox: null, thumb_url: null, frames: 9 },
+    ] });
+  }
+  if (path === "/history/frames") return json({ items: [] });
+  return null;
 }
 
 /* ---------- Fake-WebSocket ---------- */

@@ -14,6 +14,10 @@ import type {
   ItemIdentityInput, LlmTestResult, PetSummary, PetVisit, Report, ReportGenerateInput, ReportList, ReviewAnswerInput,
   ReviewList, ReviewRequest, ReviewStatus, ReviewThreshold, ZonePurpose,
 } from "./types";
+import type {
+  AskInput, AskList, AskResult, HistoryFrameThumb, HistorySearch, HistoryStats, SensorHistoryEntry, SensorInput,
+  SensorKind, SensorReference, ShoppingItem, ShoppingList, VirtualSensor,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -254,6 +258,37 @@ export const api = {
   generateReport: (b: ReportGenerateInput = {}) => post<Report>("/reports/generate", b),
   // W2: LLM-Verbindung testen (gespeicherte Einstellungen)
   llmTest: () => post<LlmTestResult>("/settings/llm_test"),
+
+  // W3 A2: Frag die Kamera
+  askCamera: (cameraId: number, b: AskInput) => post<AskResult>(`/cameras/${cameraId}/ask`, b),
+  askLog: (q: { camera_id?: number; limit?: number; offset?: number } = {}) => get<AskList>("/ask", q),
+  deleteAsk: (id: number) => del(`/ask/${id}`),
+  // W3 A3+C4: Sensoren und Einkaufsliste
+  sensors: (q: { camera_id?: number; room?: string; kind?: SensorKind; supply?: boolean } = {}) =>
+    get<VirtualSensor[]>("/sensors", q),
+  sensor: (id: number) => get<VirtualSensor>(`/sensors/${id}`),
+  createSensor: (b: SensorInput) => post<VirtualSensor>("/sensors", b),
+  updateSensor: (id: number, b: SensorInput) => put<VirtualSensor>(`/sensors/${id}`, b),
+  deleteSensor: (id: number) => del(`/sensors/${id}`),
+  evaluateSensor: (id: number) => post<VirtualSensor>(`/sensors/${id}/evaluate`),
+  sensorHistory: (id: number, limit = 50) => get<SensorHistoryEntry[]>(`/sensors/${id}/history`, { limit }),
+  sensorReferences: (id: number) => get<SensorReference[]>(`/sensors/${id}/references`),
+  addSensorReference: (id: number, state: SensorReference["state"]) =>
+    post<SensorReference>(`/sensors/${id}/references`, { state }),
+  deleteSensorReference: (id: number, rid: number) => del(`/sensors/${id}/references/${rid}`),
+  shoppingList: (done: "false" | "true" | "all" = "false") => get<ShoppingList>("/shopping-list", { done }),
+  addShoppingItem: (name: string, note?: string) => post<ShoppingItem>("/shopping-list", { name, note }),
+  updateShoppingItem: (id: number, b: { done?: boolean; name?: string; note?: string }) =>
+    patch<ShoppingItem>(`/shopping-list/${id}`, b),
+  deleteShoppingItem: (id: number) => del(`/shopping-list/${id}`),
+  // W3 B1: Zeitmaschine
+  historySearch: (q: { q: string; camera_id?: number; room?: string; since?: string; until?: string; limit?: number }) =>
+    get<HistorySearch>("/history/search", q),
+  historyFrames: (camera_id: number, around: string, span_min = 10) =>
+    get<{ items: HistoryFrameThumb[] }>("/history/frames", { camera_id, around, span_min }),
+  historyStats: () => get<HistoryStats>("/history/stats"),
+  deleteHistory: (q: { camera_id?: number; before?: string } = {}) =>
+    request<{ deleted: number }>("DELETE", "/history", undefined, q),
 };
 
 /** Antwort von /identities/{id}/events darf laut Vertrag "wie /events" sein – tolerant auch für Arrays. */

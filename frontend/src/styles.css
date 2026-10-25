@@ -592,10 +592,13 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .user-btn { display: inline-flex; align-items: center; gap: 8px; }
 .user-btn .av { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--info)); color: #041014; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
 
-/* W1: mehr Hauptpunkte (Hinweise) – erst Nebentexte ausblenden, dann Beschriftungen */
-@media (max-width: 1560px) {
+/* W1/W3: viele Hauptpunkte – erst Nebentexte ausblenden, dann Beschriftungen (außer beim aktiven Punkt) */
+@media (max-width: 1900px) {
   .nav-hide-sm { display: none; }
   .navlinks a { padding: 8px 10px; gap: 6px; }
+}
+@media (max-width: 1720px) {
+  .navlinks a:not(.active) span { display: none; }
 }
 @media (max-width: 1240px) {
   .navlinks a span { display: none; }

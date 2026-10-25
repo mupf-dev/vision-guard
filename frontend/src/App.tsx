@@ -13,6 +13,9 @@ import { NotificationsPage } from "./pages/Notifications";
 import { ReviewPage } from "./pages/Review";
 import { PetsPage } from "./pages/Pets";
 import { ReportsPage } from "./pages/Reports";
+import { HistoryPage } from "./pages/History";
+import { SuppliesPage } from "./pages/Supplies";
+import { SensorsPage } from "./pages/admin/Sensors";
 import { AdminLayout } from "./pages/admin/AdminLayout";
 import { CamerasPage } from "./pages/admin/Cameras";
 import { RulesPage } from "./pages/admin/Rules";
@@ -56,11 +59,14 @@ export function App() {
           <Route path="bestaetigen" element={<ReviewPage />} />
           <Route path="tiere" element={<PetsPage />} />
           <Route path="berichte" element={<ReportsPage />} />
+          <Route path="zeitmaschine" element={<HistoryPage />} />
+          <Route path="vorraete" element={<SuppliesPage />} />
           <Route path="statistik" element={<StatsPage />} />
           <Route path="admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="kameras" replace />} />
             <Route path="kameras" element={<CamerasPage />} />
             <Route path="regeln" element={<RulesPage />} />
+            <Route path="sensoren" element={<SensorsPage />} />
             <Route path="einstellungen" element={<SettingsPage />} />
             <Route path="system" element={<SystemPage />} />
             <Route path="zugaenge" element={<TokensPage />} />

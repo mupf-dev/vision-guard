@@ -12,6 +12,9 @@ import { PersonSettingsCard } from "./PersonSettings";
 import { PetSettingsCard } from "./PetSettings";
 import { ReportSettingsCard } from "./ReportSettings";
 import { AiSettingsCard } from "./AiSettings";
+import { VlmSettingsCard } from "./VlmSettings";
+import { SensorSettingsCard } from "./SensorSettings";
+import { HistorySettingsCard } from "./HistorySettings";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -74,6 +77,9 @@ export function SettingsPage() {
         <PetSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <ReportSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <AiSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <VlmSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <SensorSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <HistorySettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <div className="card">
           <div className="card-head"><Radio size={18} color="var(--accent)" /><h3>MQTT</h3></div>
           <div className="card-body form-grid">

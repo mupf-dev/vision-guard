@@ -9,6 +9,8 @@ import { ZoneEditor } from "../../components/ZoneEditor";
 import { CameraInventoryTab } from "./CameraInventory";
 import { HeartPulse, Package, PersonStanding } from "lucide-react";
 import { CameraHealthTab } from "./CameraHealth";
+import { CameraAskSection } from "./CameraAsk";
+import { CameraHistorySection } from "./CameraHistory";
 import { HealthBadge } from "../../components/HealthBadge";
 import { StatusBadge } from "../Live";
 import { toast, useLive } from "../../lib/store";
@@ -20,6 +22,7 @@ const EMPTY: CameraInput = {
   room: null, inventory_enabled: false, inventory_interval_s: 3, inventory_labels: [], inventory_min_score: 0.35,
   inventory_tiling: false, health_enabled: true,
   pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {}, inventory_suppress: [],
+  vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
 };
 
 function strip(c: Camera): CameraInput {
@@ -124,6 +127,8 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
             </div>
           </div>
           <PersonAnalysis f={f} set={set} />
+          <CameraAskSection f={f} set={set} />
+          <CameraHistorySection f={f} set={set} />
         </div>
       ) : tab === "inventory" ? (
         <CameraInventoryTab f={f} set={set} cameraId={cam?.id} />

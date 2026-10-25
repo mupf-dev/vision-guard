@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Bell, BellOff, BellRing, History, LogOut, MonitorPlay, Settings2, ShieldCheck, Users } from "lucide-react";
-import { CircleHelp, FileText, Package, PawPrint } from "lucide-react";
+import { CircleHelp, Clock, FileText, Package, PawPrint, ShoppingCart } from "lucide-react";
 import { api } from "../lib/api";
 import { useLive, useUi } from "../lib/store";
 import { useLiveSocket } from "../lib/useLiveSocket";
@@ -54,6 +54,8 @@ export function Layout() {
     { to: "/hinweise", label: "Hinweise", icon: <BellRing size={17} /> },
     { to: "/tiere", label: "Tiere", icon: <PawPrint size={17} /> },
     { to: "/berichte", label: "Berichte", icon: <FileText size={17} /> },
+    { to: "/zeitmaschine", label: "Zeitmaschine", icon: <Clock size={17} /> },
+    { to: "/vorraete", label: "Vorräte", icon: <ShoppingCart size={17} /> },
     { to: "/statistik", label: "Statistik", icon: <BarChart3 size={17} /> },
     { to: "/admin", label: "Administration", icon: <Settings2 size={17} /> },
   ];

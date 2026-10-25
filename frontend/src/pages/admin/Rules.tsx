@@ -22,6 +22,7 @@ const EMPTY: RuleInput = {
 
 const TRIGGER_NAME: Record<RuleInput["trigger"], string> = {
   enter: "Betreten", leave: "Verlassen", dwell: "Verweilen", posture: "Haltung", gesture: "Geste", time: "Uhrzeit",
+  sensor: "Sensor",   // W3 (A3): Auswahl + Optionen im Editor ergänzt A3
 };
 
 const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactNode }> = {

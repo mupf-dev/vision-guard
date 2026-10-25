@@ -48,6 +48,12 @@ export interface Camera {
   inventory_label_min_scores: Record<string, number>;
   /** W2 D2: unterdrückte Fehlerkennungen (gleiches Label, IoU ≥ 0,5) */
   inventory_suppress: InventorySuppress[];
+  /** W3 A2: Cloud-Fallback „Frag die Kamera“ erlaubt (Bild verlässt das Haus) */
+  vlm_cloud_allowed: boolean;
+  /** W3 B1: Zeitmaschine (Bild-Embeddings + Mini-Vorschau, kein Video) */
+  history_enabled: boolean;
+  history_interval_s: number;
+  history_tiling: boolean;
   status?: CameraStatus | null;
 }
 
@@ -55,7 +61,7 @@ export type CameraInput = Omit<Camera, "id" | "status">;
 
 export type IdentityMode = "any" | "known" | "unknown" | "specific";
 /** Registry im Backend (rules.TRIGGERS); W1: time = Regel ohne Track/Event → Notification */
-export type Trigger = "enter" | "leave" | "dwell" | "time" | "posture" | "gesture";
+export type Trigger = "enter" | "leave" | "dwell" | "time" | "posture" | "gesture" | "sensor";
 
 /** trigger_options je Trigger: time → { at: "HH:MM" }; posture → PostureTriggerOptions; gesture →
  *  GestureTriggerOptions; enter/leave/dwell → {} */
@@ -213,8 +219,15 @@ export interface Gpu {
 
 export interface SystemInfo {
   cameras: { id: number; name: string; status: CameraStatus | null }[];
-  worker: { online: boolean; gpu?: Gpu | null; models?: Record<string, unknown> | null };
+  worker: {
+    online: boolean; gpu?: Gpu | null; models?: Record<string, unknown> | null;
+    /** W3 (K3): Leistungsdaten und aktive GPU-Lease */
+    perf?: Record<string, unknown> | null;
+    gpu_lease?: GpuLease | null;
+  };
   mqtt: { connected: boolean };
+  /** W3 (K3): pgvector für die Zeitmaschine */
+  db?: { vector: boolean; vector_version: string | null };
   version?: string;
 }
 
@@ -275,6 +288,21 @@ export interface Settings {
   llm_timeout_s: number;
   /** read-only: Schlüssel per Env gesetzt? */
   llm_key_configured?: Record<Exclude<LlmProvider, "none">, boolean>;
+  // W3: Frag die Kamera (A2)
+  vlm_enabled: boolean;
+  vlm_model: VlmModel;
+  vlm_idle_unload_s: number;
+  vlm_need_mb: number;
+  /** PUT mit "" setzt auf null zurück; null = Cloud aus */
+  vlm_cloud_model: string | null;
+  retention_days_ask: number;
+  // W3: Sensoren und Vorräte (A3+C4)
+  retention_days_sensors: number;
+  shopping_list_auto: boolean;
+  // W3: Zeitmaschine (B1)
+  retention_days_history: number;
+  history_min_change: number;
+  history_model: "siglip2-b16-256" | "mobileclip2-s0";
 }
 
 export interface InventoryVocabEntry {
@@ -316,7 +344,9 @@ export type WsMessage =
   | ReviewMsg
   | GestureMsg
   | PetVisitMsg
-  | ReportMsg;
+  | ReportMsg
+  | SensorMsg
+  | ShoppingListMsg;
 
 export interface IdentityDeleted {
   id: number;
@@ -856,4 +886,162 @@ export interface LlmTestResult {
   text: string | null;
   model: string | null;
   ms: number | null;
+}
+
+// ------------------------------------------------------------------ Welle 3 (K3)
+
+/** W3.C: aktive GPU-Lease des Workers (vg/internal/system.gpu_lease) */
+export interface GpuLease {
+  request_id: string;
+  holder: string;
+  since: number;
+  until: number;
+  need_mb: number;
+  free_mb: number | null;
+}
+
+export type VlmModel = "moondream2-int4" | "smolvlm-500m" | "qwen25vl-3b-nf4";
+
+// --- A2 Frag die Kamera
+export type AskEngine = "auto" | "local" | "cloud";
+export type AskYesNo = "yes" | "no" | "unknown";
+
+export interface AskInput {
+  question: string;
+  /** normiert [x1,y1,x2,y2] */
+  region?: [number, number, number, number] | null;
+  engine?: AskEngine;
+}
+
+export interface AskResult {
+  id: number;
+  camera_id: number;
+  camera_name: string;
+  question: string;
+  region: [number, number, number, number] | null;
+  answer: string;
+  yes_no: AskYesNo;
+  engine: Exclude<AskEngine, "auto">;
+  model: string;
+  ms: number;
+  snapshot_url: string | null;
+  ts: string;
+  source: "ui" | "api" | "mcp" | "sensor";
+}
+
+export type AskList = Paged<AskResult>;
+
+// --- A3+C4 Virtuelle Sensoren und Vorräte
+export type SensorKind = "brightness" | "blink" | "reference" | "inventory_count" | "fill" | "vlm";
+export type SensorStateSet = "binary" | "level";
+export type SensorState = "on" | "off" | "ok" | "low" | "out" | "unknown";
+
+export interface VirtualSensor {
+  id: number;
+  name: string;
+  camera_id: number;
+  camera_name: string;
+  room: string | null;
+  enabled: boolean;
+  kind: SensorKind;
+  /** Polygon wie Zonen (normiert) */
+  region: [number, number][];
+  /** je Art: brightness {threshold, invert}, blink {min_std, window_s}, inventory_count {labels, min_count},
+   * fill {low_below, out_below}, vlm {question}, reference {} */
+  params: Record<string, unknown>;
+  state_set: SensorStateSet;
+  supply: boolean;
+  verify_vlm: boolean;
+  interval_s: number;
+  vlm_max_age_s: number;
+  change_threshold: number;
+  confirm_n: number;
+  state: SensorState;
+  value: number | null;
+  since: string | null;
+  last_eval: string | null;
+  last_engine: "cheap" | "local" | "cloud" | null;
+  snapshot_url: string | null;
+  state_text: string;
+}
+
+export type SensorInput = Omit<VirtualSensor,
+  "id" | "camera_name" | "room" | "state" | "value" | "since" | "last_eval" | "last_engine" | "snapshot_url" | "state_text">;
+
+export interface SensorHistoryEntry {
+  ts: string;
+  state: SensorState;
+  value: number | null;
+  engine: string | null;
+  snapshot_url: string | null;
+}
+
+export interface SensorReference {
+  id: number;
+  state: "on" | "off" | "full" | "half" | "empty";
+  image_url: string;
+  created_at: string;
+}
+
+export interface SensorMsg {
+  type: "sensor";
+  sensor: VirtualSensor | { id: number; deleted: true };
+}
+
+export interface ShoppingItem {
+  id: number;
+  name: string;
+  note: string;
+  source: "auto" | "manual" | "mcp";
+  sensor_id: number | null;
+  created_at: string;
+  done_at: string | null;
+  done: boolean;
+}
+
+export interface ShoppingList {
+  items: ShoppingItem[];
+  open_count: number;
+}
+
+export interface ShoppingListMsg {
+  type: "shopping_list";
+  action: "new" | "update" | "delete";
+  item: ShoppingItem;
+}
+
+// --- B1 Zeitmaschine
+export interface HistoryEpisode {
+  camera_id: number;
+  camera_name: string;
+  room: string | null;
+  start_ts: string;
+  end_ts: string;
+  best_ts: string;
+  /** 0..100 */
+  score: number;
+  tile_bbox: [number, number, number, number] | null;
+  thumb_url: string | null;
+  frames: number;
+}
+
+export interface HistorySearch {
+  query: string;
+  model: string;
+  items: HistoryEpisode[];
+}
+
+export interface HistoryFrameThumb {
+  ts: string;
+  last_ts: string;
+  thumb_url: string | null;
+}
+
+export interface HistoryStats {
+  enabled: boolean;
+  frames: number;
+  vectors: number;
+  thumb_bytes: number;
+  oldest: string | null;
+  by_camera: Record<string, number>;
 }

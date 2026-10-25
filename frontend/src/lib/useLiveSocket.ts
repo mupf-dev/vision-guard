@@ -94,6 +94,12 @@ function handle(msg: WsMessage, qc: QueryClient) {
     case "pet_visit":
       qc.invalidateQueries({ queryKey: ["pets"] });
       break;
+    case "sensor":           // W3 (A3)
+      qc.invalidateQueries({ queryKey: ["sensors"] });
+      break;
+    case "shopping_list":    // W3 (C4)
+      qc.invalidateQueries({ queryKey: ["shopping"] });
+      break;
     case "report":
       qc.invalidateQueries({ queryKey: ["reports"] });
       break;
