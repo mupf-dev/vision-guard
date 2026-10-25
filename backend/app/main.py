@@ -43,6 +43,8 @@ from . import vlm
 from .routers import ask as ask_router
 from .routers import history as history_router
 from .routers import sensors as sensors_router
+from . import nightly as identity_nightly            # Identitäten 07 (Paket D)
+from .routers import nightly as nightly_router
 # Welle 4: Person über mehrere Kameras (C2)
 from . import reid as presence_reid
 from .routers import presence as presence_router
@@ -102,7 +104,9 @@ W2_TICKS = (("review", review.tick), ("review_effects", review_effects.tick), ("
             # W3
             ("sensors", virtual_sensors.tick), ("history", time_machine.tick),
             # W4
-            ("reid", presence_reid.tick))
+            ("reid", presence_reid.tick),
+            # Identitäten 07 (Paket D): Nachtlauf
+            ("nightly", identity_nightly.tick))
 IO_TICKS = (("vlm", vlm.tick),)   # HTTP mit Zeitlimit – eigener Takt
 
 
@@ -207,6 +211,7 @@ for r in (ask_router.router, sensors_router.router, history_router.router):
     app.include_router(r)
 app.include_router(presence_router.router)   # W4 (C2)
 app.include_router(ptz_router.router)        # PTZ
+app.include_router(nightly_router.router)    # Identitäten 07 (Paket D)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):

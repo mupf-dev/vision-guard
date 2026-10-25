@@ -9,7 +9,9 @@ from .. import identity as ident_svc
 from ..auth import require_user
 from ..db import get_db
 from ..models import Identity, IdentitySample, InventoryItem, utcnow
-from ..schemas import IdentityCreateIn, IdentityPatch, MergeIn, SampleFromInventoryIn, iso, media_url
+from .. import identity_bulk
+from ..schemas import (BulkDeleteIn, BulkMergeIn, IdentityCreateIn, IdentityPatch, MergeIn, SampleFromInventoryIn,
+                       iso, media_url)
 from ..serializers import identities_json, identity_json
 from ..util import safe_remove
 from ..ws import hub
@@ -62,6 +64,43 @@ def create_identity(body: IdentityCreateIn, db: Session = Depends(get_db)):
     data = identity_json(db, i)
     hub.broadcast({"type": "identity", "identity": data})
     return data
+
+
+# ---------------------------------------------------------------- Identitäten 07 (Paket A, CONTRACT ID.B/ID.C)
+# Diese Routen müssen VOR den Routen mit `/{iid}` stehen (sonst passt z. B. GET /merges auf GET /{iid} → 422).
+
+
+def _bulk_call(fn, *args, **kw):
+    try:
+        return fn(*args, **kw)
+    except identity_bulk.BulkError as e:
+        raise HTTPException(e.status, e.detail) from None
+    except NotImplementedError:
+        raise HTTPException(501, "Noch nicht umgesetzt") from None
+
+
+@router.post("/bulk-delete")
+def bulk_delete(body: BulkDeleteIn, db: Session = Depends(get_db)):
+    return {"deleted": _bulk_call(identity_bulk.bulk_delete, db, body.ids)}
+
+
+@router.post("/bulk-merge")
+def bulk_merge(body: BulkMergeIn, db: Session = Depends(get_db)):
+    target, merged, merge_ids = _bulk_call(identity_bulk.bulk_merge, db, body.ids, body.into_id, actor="bulk")
+    return {"target": identity_json(db, target), "merged": merged, "merge_ids": merge_ids}
+
+
+@router.get("/merges")
+def list_merges(db: Session = Depends(get_db), identity_id: Optional[int] = None, actor: Optional[str] = None,
+                undone: Optional[bool] = None, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    return _bulk_call(identity_bulk.list_merges, db, identity_id=identity_id, actor=actor, undone=undone,
+                      limit=limit, offset=offset)
+
+
+@router.post("/merges/{merge_id}/undo")
+def undo_merge(merge_id: int, db: Session = Depends(get_db)):
+    restored, target = _bulk_call(identity_bulk.undo_merge, db, merge_id)
+    return {"restored": identity_json(db, restored), "target": identity_json(db, target)}
 
 
 def _parse_bbox(v: Optional[str]) -> Optional[list[float]]:
@@ -198,7 +237,10 @@ def list_samples(iid: int, db: Session = Depends(get_db)):
                       .order_by(IdentitySample.quality.desc(), IdentitySample.id.desc())).all()
     return [{"id": s.id, "image_url": media_url(s.image_path), "created_at": iso(s.created_at),
              "quality": s.quality, "manual": bool(s.manual),
-             "negative": bool(s.negative), "source": s.source or "auto"} for s in rows]
+             "negative": bool(s.negative), "source": s.source or "auto",
+             # Identitäten 07 (ID.D): Bildmerkmale, bei Altdaten null
+             "face_size": s.face_size, "yaw": s.yaw, "pitch": s.pitch, "sharpness": s.sharpness,
+             "day_night": s.day_night, "source_res": s.source_res, "camera_id": s.camera_id} for s in rows]
 
 
 @router.delete("/{iid}/samples/{sid}", status_code=204)

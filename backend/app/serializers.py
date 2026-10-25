@@ -44,6 +44,7 @@ def camera_json(c: Camera) -> dict[str, Any]:
         # W4 (C2)
         "reid_enabled": bool(c.reid_enabled),
         # PTZ (ONVIF)
+        "face_fullres": True if c.face_fullres is None else bool(c.face_fullres),
         "ptz_enabled": bool(c.ptz_enabled),
         "ptz": ptz.public_config(c.ptz),
         "ptz_state": ptz.manager.state(c.id) if c.ptz_enabled else None,
@@ -104,6 +105,7 @@ def identity_json(s: Session, i: Identity) -> dict[str, Any]:
         "event_count": event_count,
         "learning_locked": bool(i.learning_locked),
         "item_label": i.item_label,
+        "match_threshold": i.match_threshold,
     }
 
 
@@ -133,6 +135,7 @@ def identities_json(s: Session, items: list[Identity]) -> list[dict[str, Any]]:
             "cover_url": media_url(covers.get(i.id)), "first_seen": iso(i.first_seen),
             "last_seen": iso(i.last_seen), "event_count": ec.get(i.id, 0),
             "learning_locked": bool(i.learning_locked), "item_label": i.item_label,
+            "match_threshold": i.match_threshold,
         })
     return out
 

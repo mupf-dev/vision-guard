@@ -1817,3 +1817,253 @@ werden aber beim Ausführen geprüft („Position … gibt es auf der Kamera nic
 |---|---|---|
 | `ptz_status` | `camera_id?`, `camera_name?` | `{cameras:[{id, name, state, presets:[{token,name}], home_preset}]}` (nur PTZ-Kameras) |
 | `ptz_move_to` | `camera_id?`/`camera_name?`, `preset: str` (Name oder Token; „home“/„Grundposition“), `hold_s?` | PtzState; danach Bild per `get_camera_snapshot` |
+
+## Nachträge: Identitäten – Mehrfachauswahl, Gesichtsqualität, Nachtlauf
+
+Verbindlich wie der Rest; wo dieser Abschnitt älteren Aussagen widerspricht (insbesondere Abschnitt D und
+`/api/internal/identify`), gilt dieser Abschnitt. Plan: `docs/plan/07-identitaeten-mehrfachauswahl-und-training.md`
+(Pakete A–E). Fortschritt/Messungen: `docs/plan/07-identitaeten-fortschritt.md`.
+
+Entscheidungen des Nutzers (bindend):
+1. Der Nachtlauf darf sichere Fälle automatisch zusammenführen – **nur unbenannte** Fragmente (in eine unbenannte
+   oder benannte Identität), **nie zwei benannte**.
+2. Gesichter aus voller Auflösung schneiden ist erlaubt, wenn der Machbarkeitstest im Rahmen bleibt
+   (16-Kamera-Lasttest nicht spürbar schlechter, CPU vertretbar); sonst Standard aus, je Kamera abschaltbar.
+3. Vorhandene Fragmente werden erst nach einer gesehenen Vorschau aufgeräumt: `nightly_mode` ist standardmäßig
+   **`"preview"`** (Probelauf: nur Bericht, ändert nichts).
+
+### ID.A Datenbank (additiv, `ADDITIVE_COLUMNS` + Modell mit identischem Default)
+
+| Tabelle | Spalte | Typ / Default | Bedeutung |
+|---|---|---|---|
+| `identities` | `match_threshold` | double precision NULL | Schwelle je Person (Nachtlauf, 0,25..0,45); `null` = `face_match_threshold` bzw. `pet_match_threshold` |
+| `identity_samples` | `face_size` | integer NULL | kürzere Seite des Gesichts in px **in der Quellauflösung** |
+| `identity_samples` | `yaw` | double precision NULL | Kopfdrehung links/rechts in Grad (aus 5 Gesichtspunkten, ±90) |
+| `identity_samples` | `pitch` | double precision NULL | Nicken in Grad (±90) |
+| `identity_samples` | `sharpness` | double precision NULL | Laplace-Varianz des ausgerichteten 112×112-Gesichts (roh, größer = schärfer) |
+| `identity_samples` | `day_night` | varchar(8) NULL | `"day"` \| `"night"` (IR/Graubild) |
+| `identity_samples` | `source_res` | varchar(8) NULL | `"main"` (volle Auflösung) \| `"detect"` (Analysebild) |
+| `identity_samples` | `camera_id` | integer NULL | Kamera, von der das Bild stammt |
+| `cameras` | `face_fullres` | boolean NOT NULL DEFAULT true | Gesichter dieser Kamera aus voller Auflösung schneiden (wirksam nur, wenn auch Setting `face_fullres` an ist) |
+
+`identity_samples.source` (varchar 16) kennt zusätzlich den Wert `"nightly"` (vom Nachtlauf eingefügt/markiert).
+Alle neuen Sample-Spalten sind bei Altdaten `null`; Code muss damit umgehen.
+
+Neue Tabellen (über `create_all`):
+
+- **`identity_merges`** (Modell `IdentityMerge`) – Verlauf **jeder vollständigen** Zusammenführung (einzeln, Sammel,
+  Nachtlauf, Rückfrage „Ja“) zum Zurücksetzen: `id` serial, `ts` timestamptz, `kind` varchar(8), `actor` varchar(16)
+  (`user|bulk|nightly|review`), `src_id` int (gelöschte Quelle), `src_name` varchar(200) NULL, `src_auto_number` int,
+  `src_notes` text, `src_first_seen`/`src_last_seen` timestamptz, `src_learning_locked` bool,
+  `src_match_threshold` double NULL, `into_id` int (Index), `score` double NULL, `sample_ids` jsonb (`[]`),
+  `event_ids` jsonb (`[]`), `nightly_report_id` int NULL, `undone_at` timestamptz NULL.
+  Teil-Merges (Bildauswahl) werden **nicht** protokolliert (Quelle bleibt bestehen).
+- **`nightly_reports`** (Modell `NightlyReport`): `id` serial, `period_key` varchar(32) NULL unique
+  (`"nightly:YYYY-MM-DD"` nur bei `trigger="schedule"`), `mode` varchar(8) (`preview|apply`), `trigger` varchar(8)
+  (`schedule|manual|apply`), `status` varchar(8) (`running|done|error`), `started_at`, `finished_at` timestamptz NULL,
+  `summary` jsonb, `actions` jsonb, `text` text, `error` text NULL, `applied_report_id` int NULL
+  (bei `trigger="apply"`: die angewandte Vorschau), `applied_at` timestamptz NULL (bei einer Vorschau: wann angewandt).
+
+### ID.B REST – Mehrfachauswahl (Paket A, Scope `write`)
+
+Beide Endpunkte stehen im Router `routers/identities.py` **vor** den Routen `/{iid}`.
+
+- `POST /api/identities/bulk-delete {ids: int[1..500]}` → `{deleted: int[]}`
+  - Doppelte IDs werden entfernt. Unbekannte ID → **404** „Identität(en) nicht gefunden: 5, 7“, **nichts** wird
+    gelöscht. Arten dürfen gemischt sein.
+  - **Eine** Transaktion unter `identity._lock`; Ereignisse bleiben (Identität `null`, FK `SET NULL`).
+    Art-Hooks wie beim Einzel-Löschen: `item` → `inventory_items.identity_id/identity_score = null` und
+    `item_identity.changed()`; `pet` → `pet_diary.on_identity_deleted`. Bilder (`identities/<id>/`) werden **nach**
+    dem Commit gelöscht; danach `identity.invalidate()`.
+  - WS (gebündelt, genau eine Nachricht): `{"type":"identities","action":"deleted","ids":[…],
+    "items":[{"id":12,"kind":"face"}]}`.
+- `POST /api/identities/bulk-merge {ids: int[1..500], into_id: int}` → `{target: Identity, merged: int[],
+  merge_ids: int[]}` (`merge_ids` = Einträge in `identity_merges`)
+  - `into_id` darf in `ids` stehen (wird dort ignoriert); bleibt keine Quelle → **422** „Keine Quellen ausgewählt“.
+    Unbekannte ID (Quelle oder Ziel) → **404**; gemischte Arten → **422** „Nur Identitäten gleicher Art …“.
+  - Immer **vollständiges** Zusammenführen jeder Quelle (alle Bilder und Ereignisse, Name/Notizen/first/last_seen wie
+    beim klassischen Merge; Ziel-Name bleibt, Quellnamen gehen in die Notizen „früher: Anna“, wenn das Ziel einen
+    anderen Namen hat). Art-Hooks wie beim Einzel-Merge (`pet_diary.on_identity_merged`, `inventory_items` umhängen,
+    `item_identity.changed()`).
+  - **Eine** Transaktion unter `identity._lock`, Zeilen per `SELECT … FOR UPDATE` in ID-Reihenfolge gesperrt.
+    Bildlimit kumulativ: manuelle Bilder des Ziels + manuelle der Quellen > `sample_limit(Ziel)` → **422**
+    „max. N Bilder – erst alte löschen“, nichts geändert. Danach `prune_samples(Ziel)`.
+  - Dateien: neue Pfade `identities/<into_id>/<datei>` werden in der Transaktion gesetzt, verschoben wird **nach**
+    dem Commit; schlägt ein Verschieben fehl, wird der alte Pfad für dieses Bild zurückgeschrieben (Datei liegt noch
+    dort), Log-Warnung. Leere Quellordner werden danach entfernt.
+  - Je Quelle ein Eintrag in `identity_merges` (`actor:"bulk"`).
+  - WS: `{"type":"identities","action":"merged","ids":[Quellen],"into_id":N,"kind":"face"}` und danach
+    `{"type":"identity","identity":<Ziel>}`. Das Frontend lädt bei `identities` **einmal** (entprellt ≥ 300 ms) neu.
+- Der Einzel-Merge `POST /identities/{id}/merge` (vollständig) schreibt ebenfalls einen `identity_merges`-Eintrag
+  (`actor:"user"`), die Rückfrage „Ja“ (`identity_match`) mit `actor:"review"`.
+
+### ID.C REST – Zusammenführungs-Verlauf und Zurücksetzen (Paket A)
+
+```jsonc
+// IdentityMerge
+{ "id": 7, "ts": "...", "kind": "face", "actor": "user|bulk|nightly|review",
+  "src_id": 41, "src_display_name": "Person #41", "into_id": 12, "into_display_name": "Anna" | null,  // null = Ziel gelöscht
+  "score": 0.61 | null, "sample_count": 3, "event_count": 2, "nightly_report_id": 4 | null,
+  "undone_at": null, "undoable": true }
+```
+- `GET /api/identities/merges?identity_id=&actor=&undone=&limit=50&offset=0` → `{items: IdentityMerge[], total}`,
+  neueste zuerst; `identity_id` filtert auf `src_id` **oder** `into_id`. (Route vor `/{iid}` registrieren.)
+- `POST /api/identities/merges/{merge_id}/undo` (Scope `write`) → `{restored: Identity, target: Identity}`:
+  legt die Quelle mit **derselben ID** und denselben Feldern (`auto_number`, Name, Notizen, Zeiten, Lernsperre,
+  `match_threshold`) wieder an, hängt die noch beim Ziel liegenden Bilder aus `sample_ids` (Dateien nach dem Commit
+  zurück nach `identities/<src_id>/`) und die noch dem Ziel zugeordneten Ereignisse aus `event_ids` zurück und setzt
+  `undone_at`. Fehler: unbekannt → 404; schon zurückgesetzt → **409**; Ziel existiert nicht mehr (gelöscht oder
+  selbst weiter zusammengeführt) → **409** „Ziel existiert nicht mehr – zuerst die spätere Zusammenführung
+  zurücksetzen“. `undoable` = nicht zurückgesetzt und Ziel existiert. WS: `identity` für beide.
+
+### ID.D Felder in REST-Antworten
+
+- **Identity** zusätzlich: `"match_threshold": 0.33 | null`.
+- **Sample** (`GET /identities/{id}/samples`) zusätzlich: `face_size`, `yaw`, `pitch`, `sharpness`, `day_night`,
+  `source_res`, `camera_id` (je `null` bei Altdaten); `source` zusätzlich `"nightly"`.
+- **Camera** zusätzlich `"face_fullres": true` (PUT nur, wenn im Body – wie `room`/`inventory_*`).
+  `GET /api/internal/cameras` liefert `face_fullres` **wirksam** (= Kamera-Feld **und** Setting `face_fullres`
+  **und** `face_recognition`).
+- **Bildlimit je Identität** `sample_limit(ident)`: benannte `face` → `face_max_samples_named` (Standard 40), sonst
+  `MAX_SAMPLES` (20). Gilt für automatisches Lernen, `prune_samples`, Merge-Limit (manuelle Bilder) und Galerie.
+
+### ID.E Settings (zusätzlich, `GET/PUT /settings`, `GET /api/internal/settings`)
+
+```jsonc
+{ ...,
+  // Gesichtsqualität und Zuordnung (Pakete B/C)
+  "face_new_min_quality": 0.35,    // 0..1   neue Identität nur ab dieser Qualität …
+  "face_new_min_size": 80,         // 0..1000 … und Gesichtsgröße (px, Quellauflösung); schwächere Bilder dürfen nur
+                                   //         bestehenden Personen zugeordnet werden, sonst bleibt der Track ohne Identität
+  "face_sample_min_quality": 0.30, // 0..1   darunter nie als Beispielbild speichern (auch nicht bei Treffer)
+  "face_match_margin": 0.05,       // 0..0.3 Mindestabstand bester ↔ zweitbester Kandidat, sonst "ambiguous"
+  "face_max_samples_named": 40,    // 20..100 Galeriegröße benannter Personen (unbenannte: 20)
+  "face_track_faces": 5,           // 1..10  beste K Gesichter je Track für die endgültige Zuordnung
+  "face_fullres": false,           // Gesichter aus voller Auflösung schneiden (Paket B setzt den Standard nach dem
+                                   // Machbarkeitstest; je Kamera zusätzlich `cameras.face_fullres`)
+  // Nachtlauf (Paket D)
+  "nightly_mode": "preview",       // "off" | "preview" (Probelauf: nur Bericht) | "apply"
+  "nightly_time": "03:00",         // HH:MM Ortszeit; ein Lauf je lokalem Tag, Nachholen bis 6 h
+  "nightly_auto_merge_min": 0.55,  // 0.3..0.95 sicherer Fall: score ≥ Wert …
+  "nightly_auto_merge_margin": 0.08, // 0..0.5 … und score − zweitbester ≥ Wert
+  "nightly_review_min": 0.40,      // 0.2..0.95 unsicher (≥ Wert, aber nicht sicher) → Rückfrage identity_match
+  "nightly_review_max_per_day": 5, // 0..50 Rückfragen je Lauf (zusätzlich die globalen review_*-Grenzen)
+  "nightly_curate": true,          // Galerie kuratieren (Ausreißer → negative, Vielfalt)
+  "nightly_thresholds": true,      // Schwelle je Person lernen (identities.match_threshold)
+  "nightly_cleanup_days": 3 }      // 0..365 Einzelbild-Fragmente ohne Ereignisse nach N Tagen löschen (0 = aus)
+```
+`nightly_mode` ist **nur mit Anmeldung im Browser** änderbar (`SESSION_ONLY_SETTINGS`; API-Key → 403).
+`face_match_threshold` bleibt die globale Schwelle (diese Installation: 0,30).
+
+### ID.F `POST /api/internal/identify` – Track-Konsolidierung (Pakete B/C)
+
+`IdentifyIn` zusätzlich (alle optional, abwärtskompatibel):
+```jsonc
+{ ..., "phase": "single|provisional|final",   // Default "single" (bisheriges Verhalten, Plates/Pets/alte Worker)
+  "face_size": 96, "yaw": 12.5, "pitch": -4.0, "sharpness": 85.2, "day_night": "day", "source_res": "main",
+  "n_faces": 4,                                // nur final: Zahl der gemittelten Gesichter
+  "samples": [ { "embedding": [..512..], "crop_path": "crops/…jpg", "quality": 0.62, "face_size": 96,
+                 "yaw": 8.0, "pitch": -2.0, "sharpness": 90.1, "day_night": "day", "source_res": "main" } ] }
+                                               // nur final: ≤ face_track_faces Einzelbilder (Galerie-Kandidaten)
+```
+`IdentifyOut` zusätzlich: `"decision": "match|new|none|ambiguous"`, `"second_score": float|null`,
+`"threshold": float|null` (angewandte Schwelle), `"learned": bool`, `"phase"` (Echo).
+
+Bedeutung (nur `kind:"face"`; `pet`/`plate`/`item` unverändert):
+- **Abgleich (alle Phasen):** Score je Identität = **Mittel der besten 3** Bild-Ähnlichkeiten (bei < 3 Bildern das
+  Mittel der vorhandenen); Schwelle = `identities.match_threshold` ?? `face_match_threshold`. Treffer, wenn
+  `score ≥ Schwelle` **und** `score − second_score ≥ face_match_margin` (sonst `decision:"ambiguous"`, keine
+  Zuordnung, nichts gelernt). Negative Bilder zählen nie.
+- `provisional` (Worker: erstes brauchbares Gesicht, früh fürs Live-Bild): nur Zuordnung zu **bestehenden**
+  Identitäten, legt **nie** eine neue an, lernt **nie**. Verknüpft das aktive Event.
+- `final` (Worker: am Track-Ende, bzw. spätestens nach 30 s Track-Dauer und dann am Ende erneut):
+  `embedding` = L2-normiertes Mittel der besten `face_track_faces` Gesichter. **Maßgeblich** für das Event: setzt
+  bzw. ersetzt die Identität des Events (Kamera+Track, neuestes Event der letzten 10 min, auch wenn schon beendet)
+  oder entfernt sie bei `none`/`ambiguous`. Kein Treffer → neue Identität **nur**, wenn
+  `max(samples.quality) ≥ face_new_min_quality` und `max(samples.face_size) ≥ face_new_min_size`, sonst `none`.
+  Lernen: aus `samples` nur Bilder mit `quality ≥ face_sample_min_quality`, nicht bei Lernsperre, Auswahl der
+  Galerie nach Vielfalt (`face_match.select_gallery`, k-Center, Tag/Nacht getrennt, manuelle bleiben).
+- `single` (Altverhalten): wie bisher, aber neue Identität ebenfalls nur über den Qualitätsgrenzen.
+- Neue Sample-Spalten werden aus den Feldern übernommen; `camera_id` aus dem Request.
+
+### ID.G MQTT Worker ↔ Backend (Paket B)
+
+- `Obj.identity` (in `vg/internal/detections/{id}` und `track`) zusätzlich optional `"phase": "provisional|final"`.
+  Event-JSON und WS bleiben unverändert (das Event zeigt immer die zuletzt gesetzte Identität).
+- `vg/internal/track/{id}` `end` wartet wie bisher auf laufende Identifikation – inkl. `final` – höchstens 6 s.
+- `vg/internal/system` zusätzlich `perf.face: {faces_per_min, provisional_per_min, final_per_min, fullres_per_min,
+  fullres_ms, dropped}` (Werte der letzten 60 s; `fullres_ms` = mittlere CPU-Zeit je Ausschnitt aus voller Auflösung)
+  und `models.face_fullres: "off|on|error: …"`.
+- Der Worker liest `face_fullres` je Kamera aus `/api/internal/cameras` und `face_track_faces` aus
+  `/api/internal/settings` (bei jedem `vg/internal/config`). Ein Wechsel von `face_fullres` darf ffmpeg des
+  Analysestroms nicht neu starten (zusätzlicher Hauptstrom-Leser nur auf Anforderung bzw. gedrosselt).
+
+### ID.H Nachtlauf (Paket D) – REST, Ablauf, WS
+
+```jsonc
+// NightlyReportSummary
+{ "id": 4, "mode": "preview|apply", "trigger": "schedule|manual|apply", "status": "running|done|error",
+  "started_at": "...", "finished_at": "..." | null, "error": null, "applied_report_id": null, "applied_at": null,
+  "summary": { "identities": 33, "fragments": 21, "merges": 12, "reviews": 4, "curated": 2, "negatives": 5,
+               "removed_samples": 9, "thresholds": 2, "cleanup": 3 },
+  "text": "Probelauf: 12 Fragmente würden zusammengeführt, 4 Rückfragen, Galerie von Anna aktualisiert." }
+// NightlyReport = NightlyReportSummary + { "actions": NightlyAction[] }
+// NightlyAction (idx = laufende Nummer im Bericht, stabil)
+{ "idx": 0, "type": "merge|review|curate|threshold|cleanup",
+  "applied": false,              // im Probelauf immer false
+  "skipped_reason": null,        // z. B. "Quelle inzwischen benannt" beim späteren Anwenden
+  // merge/review:
+  "src_id": 41, "src_display_name": "Person #41", "src_cover_url": "/media/…",
+  "into_id": 12, "into_display_name": "Anna", "into_cover_url": "/media/…", "into_named": true,
+  "score": 0.61, "second_score": 0.38, "samples": 3, "events": 2, "review_id": null, "merge_id": null,
+  // curate: "identity_id", "display_name", "negative_sample_ids": [], "removed_sample_ids": []
+  // threshold: "identity_id", "display_name", "old": null, "new": 0.33
+  // cleanup:  "identity_id", "display_name"
+}
+```
+- `GET /api/nightly/status` → `{mode, time, running: bool, running_report_id: int|null,
+  last: NightlyReportSummary|null, next_run: iso|null}`.
+- `GET /api/nightly/reports?limit=20&offset=0` → `{items: NightlyReportSummary[], total}` (neueste zuerst).
+- `GET /api/nightly/reports/{id}` → NightlyReport (404 unbekannt).
+- `POST /api/nightly/run {mode: "preview"|"apply" = "preview"}` → **202** NightlyReportSummary (`status:"running"`,
+  `trigger:"manual"`); läuft schon einer → **409**. `mode:"apply"` nur mit Anmeldung im Browser (Bearer → 403).
+- `POST /api/nightly/reports/{id}/apply {idx?: int[] | null}` → **202** neuer Bericht (`trigger:"apply"`,
+  `mode:"apply"`, `applied_report_id = id`): wendet **genau** die geplanten Aktionen einer Vorschau an (Auswahl per
+  `idx`, `null` = alle), jede neu geprüft (Quelle/Ziel existieren, Quelle weiterhin unbenannt und ohne Lernsperre,
+  Score neu berechnet ≥ Grenze) – sonst `skipped_reason`. Nur Vorschau mit `status:"done"`, noch nicht angewandt,
+  sonst **409**; Bearer → 403. Setzt in der Vorschau `applied_at`.
+- Zeitplan (`nightly.tick`, vom Backend-Ticker): täglich ab `nightly_time` (Ortszeit), `period_key`
+  `"nightly:YYYY-MM-DD"` eindeutig, Nachholen bis 6 h; `nightly_mode:"off"` → kein Lauf. Läuft in eigenem Thread.
+- **Schritte** (nur `kind:"face"`, Score wie ID.F):
+  1. *Fragmente bündeln:* unbenannte Identitäten (ohne Lernsperre) gegen alle anderen (unbenannt und benannt).
+     **Sicher** (`score ≥ nightly_auto_merge_min` und `score − second ≥ nightly_auto_merge_margin`, Paar nicht mit
+     „Nein“ beantwortet) → Merge **Unbenannt → Ziel** (Ziel: benannt vor meisten Ereignissen vor meisten Bildern);
+     Ketten werden auf ein Ziel aufgelöst; ein Bündel mit **zwei benannten** wird nie automatisch zusammengeführt.
+     **Unsicher** (`≥ nightly_review_min`) → Rückfrage `identity_match` (`dedup_key "idm:{src}:{dst}"`,
+     `data.reason:"nightly"`), höchstens `nightly_review_max_per_day`. Merges mit `actor:"nightly"` und
+     `nightly_report_id` im Verlauf (rücksetzbar, ID.C).
+  2. *Galerie kuratieren* (`nightly_curate`, Identitäten mit ≥ 5 Bildern): Ausreißer (Ähnlichkeit zum eigenen
+     Zentroid deutlich unter dem Median) → `negative=true` (nicht löschen); Vielfalt per k-Center bis
+     `sample_limit`; überzählige **automatische** Bilder entfernen, manuelle bleiben immer.
+  3. *Schwelle je Person* (`nightly_thresholds`, benannte mit ≥ 8 Bildern): aus der Streuung der eigenen Bilder,
+     begrenzt auf 0,25..0,45 → `identities.match_threshold`.
+  4. *Aufräumen* (`nightly_cleanup_days > 0`): unbenannt, ohne Lernsperre, ≤ 1 Bild, ohne Ereignisse,
+     `last_seen` älter als N Tage → löschen.
+  5. *Bericht* in `nightly_reports`; Hinweis (Notification `source:"report"`, `level:"info"`, **ohne Push**,
+     `targets=[]`) mit `text`.
+  Im Modus `preview` werden alle Schritte nur berechnet und als Aktionen gespeichert – **keine** Änderung an
+  Identitäten, Bildern, Ereignissen, Rückfragen.
+- **WS:** `{"type":"nightly","action":"started|finished","report":NightlyReportSummary}`; beim Anwenden
+  zusätzlich die gebündelten `identities`-Nachrichten (ID.B).
+- **Python-Bausteine:** `backend/app/face_match.py` (Paket C, von D genutzt): `top_k_scores(...)`,
+  `decide(...)`, `select_gallery(...)`, `sample_limit(ident, settings)`; `backend/app/identity_bulk.py`
+  (Paket A, von D genutzt): `bulk_delete`, `bulk_merge(..., actor=, score=, report_id=)`, `undo_merge`;
+  `backend/app/nightly.py` + `backend/app/routers/nightly.py` (Paket D).
+
+### ID.I Oberfläche (Kurzfassung)
+
+`Identities.tsx`: Schalter „Auswählen“, Häkchen je Karte, Umschalt-Klick, „Alle (gefilterten) auswählen“,
+Aktionsleiste „Zusammenführen …“ / „Löschen …“ (Vorschau „7 Identitäten, 43 Bilder, 18 Ereignisse → Anna“),
+„Ähnliche auswählen“. Einstellungen: Abschnitt „Gesichtserkennung“ (face_*) und „Nachtlauf“ (Modus, Uhrzeit,
+Grenzen, „Probelauf jetzt“, letzter Bericht mit Aktionsliste und „Vorschau anwenden“). Verlauf der
+Zusammenführungen mit „Zurücksetzen“. Kamera-Dialog: Schalter „Gesichter aus voller Auflösung“.

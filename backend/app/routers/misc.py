@@ -23,7 +23,9 @@ router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(require_u
 # mit `write` könnte sonst Geheimnisse an einen eigenen Server umleiten. Für API-Keys ausgeblendet werden
 # zusätzlich Standort und Push-Ziele (Topic = Lesezugriff auf alle Pushes).
 SESSION_ONLY_SETTINGS = ("push_targets", "notify_routes", "llm_provider", "llm_base_url", "weather_location",
-                         "report_channels", "public_base_url")
+                         "report_channels", "public_base_url",
+                         # Identitäten 07: automatische Zusammenführungen nur mit Anmeldung im Browser einschalten
+                         "nightly_mode")
 HIDDEN_FOR_TOKENS = ("push_targets", "weather_location", "llm_base_url", "report_channels")
 
 

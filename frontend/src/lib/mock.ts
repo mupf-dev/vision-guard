@@ -11,6 +11,7 @@ import type { ApiToken, TokenScope } from "./types";
 import type { IdentitySuggestion } from "./types";
 import type { CameraHealth, InventoryChange, InventoryChanges, PushTarget, VGNotification } from "./types";
 import type { PtzState } from "./types";
+import type { IdentityMerge, NightlyReport, NightlyReportSummary } from "./types";
 import type { RuleAction, RuleInput } from "./types";
 import type { PetSummary, PetVisit, Report, ReportFacts, ReviewRequest } from "./types";
 
@@ -52,6 +53,8 @@ const INV_OFF = {
   vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
   // W4
   reid_enabled: false,
+  // Identitäten 07 (B)
+  face_fullres: true,
   // PTZ
   ptz_enabled: false,
   ptz: {
@@ -170,6 +173,12 @@ let settings: Settings = {
   retention_days_ask: 7, retention_days_sensors: 30, shopping_list_auto: true,
   retention_days_history: 14, history_min_change: 0.05, history_model: "siglip2-b16-256",
   reid_ttl_min: 60, reid_match_threshold: 0.7, reid_assign_identity: true,
+  // Identitäten 07 (CONTRACT ID.E)
+  face_new_min_quality: 0.35, face_new_min_size: 80, face_sample_min_quality: 0.3, face_match_margin: 0.05,
+  face_max_samples_named: 40, face_track_faces: 5, face_fullres: false,
+  nightly_mode: "preview", nightly_time: "03:00", nightly_auto_merge_min: 0.55, nightly_auto_merge_margin: 0.08,
+  nightly_review_min: 0.4, nightly_review_max_per_day: 5, nightly_curate: true, nightly_thresholds: true,
+  nightly_cleanup_days: 3,
   llm_key_configured: { openai_compat: false, anthropic: false },
 };
 
@@ -517,6 +526,22 @@ function mockKey(): { key: string; prefix: string } {
 }
 let nextId = 100;
 
+// Identitäten 07: Zusammenführungs-Verlauf und Nachtlauf (Mock, minimal – Pakete A/D erweitern)
+const merges: IdentityMerge[] = [];
+const nightlyReports: NightlyReport[] = [{
+  id: 1, mode: "preview", trigger: "schedule", status: "done", started_at: ago(6 * 3600), finished_at: ago(6 * 3600 - 4),
+  error: null, applied_report_id: null, applied_at: null,
+  summary: { identities: 4, fragments: 2, merges: 1, reviews: 1, curated: 0, negatives: 0, removed_samples: 0, thresholds: 0, cleanup: 0 },
+  text: "Probelauf: 1 Fragment würde zusammengeführt, 1 Rückfrage.",
+  actions: [
+    { idx: 0, type: "merge", applied: false, src_id: 13, src_display_name: "Person #13", src_cover_url: faceSvg(13),
+      into_id: 1, into_display_name: "Anna", into_cover_url: faceSvg(1), into_named: true, score: 0.62, second_score: 0.31, samples: 2, events: 3 },
+    { idx: 1, type: "review", applied: false, src_id: 12, src_display_name: "Person #12", src_cover_url: faceSvg(12),
+      into_id: 2, into_display_name: "Paketbote", into_cover_url: faceSvg(2), into_named: true, score: 0.46, second_score: 0.2, samples: 7, events: 23 },
+  ],
+}];
+const summaryOf = (r: NightlyReport): NightlyReportSummary => { const { actions: _a, ...rest } = r; return rest; };
+
 function filterEvents(p: URLSearchParams, base = events) {
   let list = base;
   const cam = p.get("camera_id"); if (cam) list = list.filter((e) => String(e.camera_id) === cam);
@@ -619,6 +644,67 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if ((m = path.match(/^\/events\/([^/]+)$/))) {
     if (method === "DELETE") { events = events.filter((e) => e.id !== m![1]); return json(undefined, 204); }
     return json(events.find((e) => e.id === m![1]));
+  }
+  // Identitäten 07 (CONTRACT ID.B/ID.C/ID.H)
+  if (path === "/identities/bulk-delete" && method === "POST") {
+    const ids: number[] = [...new Set<number>(body?.ids ?? [])];
+    const missing = ids.filter((x) => !identities.some((i) => i.id === x));
+    if (missing.length) return json({ detail: `Identität(en) nicht gefunden: ${missing.join(", ")}` }, 404);
+    for (const x of ids) { identities.splice(identities.findIndex((i) => i.id === x), 1); delete samples[x]; }
+    events = events.map((e) => (e.identity && ids.includes(e.identity.id) ? { ...e, identity: null } : e));
+    return json({ deleted: ids });
+  }
+  if (path === "/identities/bulk-merge" && method === "POST") {
+    const target = identities.find((i) => i.id === body?.into_id);
+    const ids: number[] = [...new Set<number>(body?.ids ?? [])].filter((x) => x !== body?.into_id);
+    if (!target) return json({ detail: "Identität nicht gefunden" }, 404);
+    if (!ids.length) return json({ detail: "Keine Quellen ausgewählt" }, 422);
+    const srcs = ids.map((x) => identities.find((i) => i.id === x));
+    if (srcs.some((x) => !x)) return json({ detail: "Identität(en) nicht gefunden" }, 404);
+    if (srcs.some((x) => x!.kind !== target.kind)) return json({ detail: "Nur Identitäten gleicher Art können zusammengeführt werden" }, 422);
+    const mergeIds: number[] = [];
+    for (const src of srcs as Identity[]) {
+      samples[target.id] = [...(samples[target.id] ?? []), ...(samples[src.id] ?? [])];
+      target.sample_count = samples[target.id].length; target.event_count += src.event_count;
+      events = events.map((e) => (e.identity?.id === src.id ? { ...e, identity: { id: target.id, kind: target.kind, display_name: target.display_name, name: target.name } } : e));
+      const mid = nextId++; mergeIds.push(mid);
+      merges.unshift({ id: mid, ts: now(), kind: src.kind, actor: "bulk", src_id: src.id, src_display_name: src.display_name, into_id: target.id,
+        into_display_name: target.display_name, score: null, sample_count: src.sample_count, event_count: src.event_count,
+        nightly_report_id: null, undone_at: null, undoable: false });
+      identities.splice(identities.indexOf(src), 1); delete samples[src.id];
+    }
+    return json({ target, merged: ids, merge_ids: mergeIds });
+  }
+  if (path === "/identities/merges") {
+    const iid = Number(p.get("identity_id") ?? 0);
+    const list = iid ? merges.filter((x) => x.src_id === iid || x.into_id === iid) : merges;
+    return json({ items: list, total: list.length });
+  }
+  if (path.match(/^\/identities\/merges\/\d+\/undo$/)) return json({ detail: "Im Mock nicht verfügbar" }, 409);
+  if (path === "/nightly/status") {
+    const last = nightlyReports[0];
+    return json({ mode: settings.nightly_mode, time: settings.nightly_time, running: false, running_report_id: null,
+      last: last ? summaryOf(last) : null, next_run: new Date(Date.now() + 12 * 3600 * 1000).toISOString() });
+  }
+  if (path === "/nightly/reports") return json({ items: nightlyReports.map(summaryOf), total: nightlyReports.length });
+  if ((m = path.match(/^\/nightly\/reports\/(\d+)$/))) {
+    const r = nightlyReports.find((x) => x.id === Number(m![1]));
+    return r ? json(r) : json({ detail: "Bericht nicht gefunden" }, 404);
+  }
+  if (path === "/nightly/run" && method === "POST") {
+    const base = nightlyReports[nightlyReports.length - 1];
+    const r: NightlyReport = { ...base, id: nextId++, trigger: "manual", mode: body?.mode ?? "preview", started_at: now(), finished_at: now() };
+    nightlyReports.unshift(r);
+    return json(summaryOf(r), 202);
+  }
+  if ((m = path.match(/^\/nightly\/reports\/(\d+)\/apply$/)) && method === "POST") {
+    const src = nightlyReports.find((x) => x.id === Number(m![1]));
+    if (!src || src.mode !== "preview" || src.applied_at) return json({ detail: "Bericht kann nicht angewandt werden" }, 409);
+    src.applied_at = now();
+    const r: NightlyReport = { ...src, id: nextId++, mode: "apply", trigger: "apply", applied_report_id: src.id, applied_at: null,
+      started_at: now(), finished_at: now(), actions: src.actions.map((a) => ({ ...a, applied: true })) };
+    nightlyReports.unshift(r);
+    return json(summaryOf(r), 202);
   }
   if (path === "/identities" && method === "POST") {   // W2 B4: Exemplar anlegen
     const i: Identity = { id: nextId++, kind: "item", name: body?.name ?? null, display_name: body?.name ?? "Gegenstand", plate_text: null,

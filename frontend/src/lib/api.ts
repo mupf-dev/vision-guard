@@ -11,6 +11,10 @@ import type {
 } from "./types";
 import type { RuleCheckResult } from "./types";
 import type {
+  BulkDeleteInput, BulkDeleteResult, BulkMergeInput, BulkMergeResult, IdentityMergeList, MergeActor, NightlyReport,
+  NightlyReportList, NightlyReportSummary, NightlyStatus, UndoMergeResult,
+} from "./types";
+import type {
   ItemIdentityInput, LlmTestResult, PetSummary, PetVisit, Report, ReportGenerateInput, ReportList, ReviewAnswerInput,
   ReviewList, ReviewRequest, ReviewStatus, ReviewThreshold, ZonePurpose,
 } from "./types";
@@ -211,6 +215,18 @@ export const api = {
   samples: (id: number) => get<Sample[]>(`/identities/${id}/samples`),
   deleteSample: (id: number, sid: number) => del(`/identities/${id}/samples/${sid}`),
   identityEvents: (id: number, q: EventQuery = {}) => get<Paged<VGEvent>>(`/identities/${id}/events`, q),
+  // Identitäten 07 (CONTRACT ID.B/ID.C/ID.H)
+  bulkDeleteIdentities: (ids: number[]) => post<BulkDeleteResult>("/identities/bulk-delete", { ids } satisfies BulkDeleteInput),
+  bulkMergeIdentities: (ids: number[], into_id: number) =>
+    post<BulkMergeResult>("/identities/bulk-merge", { ids, into_id } satisfies BulkMergeInput),
+  identityMerges: (q: { identity_id?: number; actor?: MergeActor; undone?: boolean; limit?: number; offset?: number } = {}) =>
+    get<IdentityMergeList>("/identities/merges", q),
+  undoIdentityMerge: (mergeId: number) => post<UndoMergeResult>(`/identities/merges/${mergeId}/undo`, {}),
+  nightlyStatus: () => get<NightlyStatus>("/nightly/status"),
+  nightlyReports: (q: { limit?: number; offset?: number } = {}) => get<NightlyReportList>("/nightly/reports", q),
+  nightlyReport: (id: number) => get<NightlyReport>(`/nightly/reports/${id}`),
+  nightlyRun: (mode: "preview" | "apply" = "preview") => post<NightlyReportSummary>("/nightly/run", { mode }),
+  nightlyApply: (id: number, idx: number[] | null = null) => post<NightlyReportSummary>(`/nightly/reports/${id}/apply`, { idx }),
 
   stats: (hours = 24) => get<Stats>("/stats", { hours }),
   system: () => get<SystemInfo>("/system"),

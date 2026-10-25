@@ -27,6 +27,7 @@ const EMPTY: CameraInput = {
   vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
   reid_enabled: false,
   ptz_enabled: false, ptz: PTZ_DEFAULT,
+  face_fullres: true,
 };
 
 function strip(c: Camera): CameraInput {

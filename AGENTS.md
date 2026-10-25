@@ -76,6 +76,8 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Track-Hooks für Fachmodule | `backend/app/events.py::on_track` |
 | Kamera-Gesundheit (Backend) | `backend/app/health.py`, `state.set_camera_health` |
 | Identitätsabgleich | `backend/app/identity.py` |
+| Gesichts-Abgleich/Galerie, Sammelaktionen, Nachtlauf | `backend/app/face_match.py`, `identity_bulk.py`, `nightly.py`, `routers/nightly.py` |
+| Messung Gesichts-Identitäten (nur lesend) | `scripts/face_stats.py` |
 | Datenbankmodell | `backend/app/models.py` (`create_all`, keine Migrationen – Spalten nur additiv mit Default ändern) |
 | Kamera-Ingest (ffmpeg) | `worker/vg_worker/ingest.py` |
 | YOLO-Batching | `worker/vg_worker/detector.py`, `worker/vg_worker/pipeline.py` |

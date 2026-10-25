@@ -60,6 +60,8 @@ class Camera(Base):
     # PTZ (ONVIF): Konfiguration als JSON (schemas.PtzConfig), Passwort nur hier
     ptz_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     ptz: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    # Identitäten 07 (Paket B): Gesichter aus voller Auflösung (wirksam nur mit Setting face_fullres)
+    face_fullres: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
 
 
 class Rule(Base):
@@ -102,6 +104,8 @@ class Identity(Base):
     learning_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     # Welle 2 (B4): Exemplar eines Gegenstands (kind="item") – Vokabular-Schlüssel
     item_label: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # Identitäten 07 (Paket D): Schwelle je Person (0,25..0,45), null = globale Schwelle der Art
+    match_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     samples: Mapped[list["IdentitySample"]] = relationship(
         back_populates="identity", cascade="all, delete-orphan", passive_deletes=True
@@ -134,6 +138,14 @@ class IdentitySample(Base):
     # Welle 2 (B4/D2): Negativbeispiel („das ist es NICHT“) und Herkunft auto|merge|upload|review
     negative: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     source: Mapped[str] = mapped_column(String(16), default="auto", server_default=text("'auto'"))
+    # Identitäten 07 (Paket B/C): Bildmerkmale (Altdaten: null) – CONTRACT ID.A
+    face_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)        # px in Quellauflösung
+    yaw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)              # Grad
+    pitch: Mapped[Optional[float]] = mapped_column(Float, nullable=True)            # Grad
+    sharpness: Mapped[Optional[float]] = mapped_column(Float, nullable=True)        # Laplace-Varianz (roh)
+    day_night: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)      # day|night
+    source_res: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)     # main|detect
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     identity: Mapped[Identity] = relationship(back_populates="samples")
 
@@ -252,6 +264,47 @@ class CameraHealthLog(Base):
 
 
 # ------------------------------------------------------------------ Welle 2 (K2)
+
+
+class IdentityMerge(Base):
+    """Identitäten 07 (Paket A): Verlauf vollständiger Zusammenführungen – Grundlage für „Zurücksetzen“ (ID.C)."""
+    __tablename__ = "identity_merges"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    kind: Mapped[str] = mapped_column(String(8))
+    actor: Mapped[str] = mapped_column(String(16), default="user")                # user|bulk|nightly|review
+    src_id: Mapped[int] = mapped_column(Integer, index=True)
+    src_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    src_auto_number: Mapped[int] = mapped_column(Integer, default=0)
+    src_notes: Mapped[str] = mapped_column(Text, default="")
+    src_first_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    src_last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    src_learning_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    src_match_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    into_id: Mapped[int] = mapped_column(Integer, index=True)
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sample_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    event_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    nightly_report_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class NightlyReport(Base):
+    """Identitäten 07 (Paket D): Bericht eines Nachtlaufs (Probelauf oder Anwendung) – CONTRACT ID.H."""
+    __tablename__ = "nightly_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    period_key: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, unique=True)   # nightly:YYYY-MM-DD
+    mode: Mapped[str] = mapped_column(String(8), default="preview")               # preview|apply
+    trigger: Mapped[str] = mapped_column(String(8), default="manual")             # schedule|manual|apply
+    status: Mapped[str] = mapped_column(String(8), default="running")             # running|done|error
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary: Mapped[dict] = mapped_column(JSONB, default=dict)
+    actions: Mapped[list] = mapped_column(JSONB, default=list)
+    text: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applied_report_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ReviewRequest(Base):

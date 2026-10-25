@@ -48,6 +48,7 @@ def resolve_inventory_vocab(labels: list[str] | None, camera_id: int | None = No
 def internal_cameras(db: Session = Depends(get_db)):
     out = []
     review_on = bool(settings_store.get().get("review_enabled", True))
+    face_fullres_on = bool(settings_store.get().get("face_fullres", False))
     instances = dict(db.execute(select(Identity.item_label, func.count()).where(
         Identity.kind == "item", Identity.item_label.is_not(None)).group_by(Identity.item_label)).all())
     from ..sensors import internal_sensors   # W3 (A3): aktive Worker-Sensoren je Kamera
@@ -81,6 +82,9 @@ def internal_cameras(db: Session = Depends(get_db)):
             "sensors": sensors_by_cam.get(c.id, []),
             # W4 (C2): Personen-Wiedererkennung über Kameras
             "reid_enabled": bool(c.reid_enabled),
+            # Identitäten 07 (ID.D): wirksam = Kamera-Feld UND Setting face_fullres UND face_recognition
+            "face_fullres": bool(c.face_recognition) and bool(face_fullres_on)
+                            and (True if c.face_fullres is None else bool(c.face_fullres)),
         })
     return out
 

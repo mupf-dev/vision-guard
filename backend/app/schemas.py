@@ -101,6 +101,8 @@ class CameraIn(BaseModel):
     # PTZ (ONVIF): Schwenken/Neigen, Patrouille, Verfolgung (CONTRACT „Nachträge: PTZ“)
     ptz_enabled: bool = False
     ptz: "PtzConfig" = Field(default_factory=lambda: PtzConfig())
+    # Identitäten 07 (Paket B): Gesichter aus voller Auflösung (wirksam nur mit Setting face_fullres)
+    face_fullres: bool = True
 
     @field_validator("inventory_label_min_scores")
     @classmethod
@@ -622,6 +624,31 @@ class SettingsModel(BaseModel):
     reid_ttl_min: int = Field(60, ge=5, le=720)
     reid_match_threshold: float = Field(0.70, ge=0.3, le=0.95)
     reid_assign_identity: bool = True
+    # Identitäten 07 (CONTRACT ID.E): Gesichtsqualität/Zuordnung (B/C) und Nachtlauf (D)
+    face_new_min_quality: float = Field(0.35, ge=0, le=1)
+    face_new_min_size: int = Field(80, ge=0, le=1000)
+    face_sample_min_quality: float = Field(0.30, ge=0, le=1)
+    face_match_margin: float = Field(0.05, ge=0, le=0.3)
+    face_max_samples_named: int = Field(40, ge=20, le=100)
+    face_track_faces: int = Field(5, ge=1, le=10)
+    face_fullres: bool = False
+    nightly_mode: Literal["off", "preview", "apply"] = "preview"
+    nightly_time: str = "03:00"
+    nightly_auto_merge_min: float = Field(0.55, ge=0.3, le=0.95)
+    nightly_auto_merge_margin: float = Field(0.08, ge=0, le=0.5)
+    nightly_review_min: float = Field(0.40, ge=0.2, le=0.95)
+    nightly_review_max_per_day: int = Field(5, ge=0, le=50)
+    nightly_curate: bool = True
+    nightly_thresholds: bool = True
+    nightly_cleanup_days: int = Field(3, ge=0, le=365)
+
+    @field_validator("nightly_time")
+    @classmethod
+    def _nightly_time(cls, v: str) -> str:
+        if not _TIME_RE.match(v or ""):
+            raise ValueError("nightly_time im Format HH:MM")
+        h, m = v.split(":")
+        return f"{int(h):02d}:{m}"
 
     @field_validator("vlm_cloud_model")
     @classmethod
@@ -794,6 +821,23 @@ class SettingsPatch(BaseModel):
     reid_ttl_min: Optional[int] = None
     reid_match_threshold: Optional[float] = None
     reid_assign_identity: Optional[bool] = None
+    # Identitäten 07 (CONTRACT ID.E) – nightly_mode nur mit Anmeldung im Browser
+    face_new_min_quality: Optional[float] = None
+    face_new_min_size: Optional[int] = None
+    face_sample_min_quality: Optional[float] = None
+    face_match_margin: Optional[float] = None
+    face_max_samples_named: Optional[int] = None
+    face_track_faces: Optional[int] = None
+    face_fullres: Optional[bool] = None
+    nightly_mode: Optional[str] = None
+    nightly_time: Optional[str] = None
+    nightly_auto_merge_min: Optional[float] = None
+    nightly_auto_merge_margin: Optional[float] = None
+    nightly_review_min: Optional[float] = None
+    nightly_review_max_per_day: Optional[int] = None
+    nightly_curate: Optional[bool] = None
+    nightly_thresholds: Optional[bool] = None
+    nightly_cleanup_days: Optional[int] = None
 
 
 class PushTestIn(BaseModel):
@@ -823,6 +867,27 @@ class MergeIn(BaseModel):
     into_id: int
     # None = klassischer Merge (alle Samples + Events, Quelle wird gelöscht); sonst Auswahl aus der Quelle
     sample_ids: Optional[list[int]] = Field(None, max_length=1000)
+
+
+class BulkDeleteIn(BaseModel):
+    """Identitäten 07 (Paket A): POST /identities/bulk-delete – CONTRACT ID.B."""
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkMergeIn(BaseModel):
+    """Identitäten 07 (Paket A): POST /identities/bulk-merge – immer vollständiges Zusammenführen (ID.B)."""
+    ids: list[int] = Field(min_length=1, max_length=500)
+    into_id: int
+
+
+class NightlyRunIn(BaseModel):
+    """Identitäten 07 (Paket D): POST /nightly/run – `apply` nur mit Anmeldung im Browser (ID.H)."""
+    mode: Literal["preview", "apply"] = "preview"
+
+
+class NightlyApplyIn(BaseModel):
+    """Identitäten 07 (Paket D): POST /nightly/reports/{id}/apply – Auswahl per idx, null = alle (ID.H)."""
+    idx: Optional[list[int]] = Field(None, max_length=5000)
 
 
 class IdentityCreateIn(BaseModel):
@@ -865,6 +930,32 @@ class IdentifyIn(BaseModel):
     item_id: Optional[str] = None
     # B4: kürzere Seite des Gegenstands im Kamerabild (px) – unter item_min_px keine automatische Zuordnung
     crop_px: Optional[int] = None
+    # Identitäten 07 (CONTRACT ID.F): Track-Konsolidierung und Bildmerkmale (nur kind="face" ausgewertet)
+    phase: Literal["single", "provisional", "final"] = "single"
+    face_size: Optional[int] = None
+    yaw: Optional[float] = None
+    pitch: Optional[float] = None
+    sharpness: Optional[float] = None
+    day_night: Optional[Literal["day", "night"]] = None
+    source_res: Optional[Literal["main", "detect"]] = None
+    n_faces: Optional[int] = None
+    samples: Optional[list["IdentifySampleIn"]] = Field(None, max_length=10)
+
+
+class IdentifySampleIn(BaseModel):
+    """Identitäten 07: Einzelbild eines Tracks bei phase="final" (Galerie-Kandidat)."""
+    embedding: list[float] = Field(min_length=64, max_length=2048)
+    crop_path: Optional[str] = None
+    quality: float = 0.0
+    face_size: Optional[int] = None
+    yaw: Optional[float] = None
+    pitch: Optional[float] = None
+    sharpness: Optional[float] = None
+    day_night: Optional[Literal["day", "night"]] = None
+    source_res: Optional[Literal["main", "detect"]] = None
+
+
+IdentifyIn.model_rebuild()
 
 
 class ReidIn(BaseModel):
@@ -892,6 +983,12 @@ class IdentifyOut(BaseModel):
     name: Optional[str]
     score: float
     is_new: bool
+    # Identitäten 07 (CONTRACT ID.F) – optional, alte Antworten bleiben gültig
+    decision: Optional[Literal["match", "new", "none", "ambiguous"]] = None
+    second_score: Optional[float] = None
+    threshold: Optional[float] = None
+    learned: bool = False
+    phase: Optional[str] = None
 
 
 # ---------------------------------------------------------------- Ausgabe-Helfer

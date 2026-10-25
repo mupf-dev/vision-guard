@@ -76,6 +76,16 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # PTZ (ONVIF)
     ("cameras", "ptz_enabled", "boolean NOT NULL DEFAULT false"),
     ("cameras", "ptz", "jsonb NOT NULL DEFAULT '{}'::jsonb"),
+    # Identitäten 07: Mehrfachauswahl, Gesichtsqualität, Nachtlauf (CONTRACT ID.A)
+    ("identities", "match_threshold", "double precision NULL"),
+    ("identity_samples", "face_size", "integer NULL"),
+    ("identity_samples", "yaw", "double precision NULL"),
+    ("identity_samples", "pitch", "double precision NULL"),
+    ("identity_samples", "sharpness", "double precision NULL"),
+    ("identity_samples", "day_night", "varchar(8) NULL"),
+    ("identity_samples", "source_res", "varchar(8) NULL"),
+    ("identity_samples", "camera_id", "integer NULL"),
+    ("cameras", "face_fullres", "boolean NOT NULL DEFAULT true"),
 ]
 
 

@@ -58,6 +58,8 @@ export interface Camera {
   reid_enabled: boolean;
   /** PTZ (ONVIF): Schwenken/Neigen, Patrouille, Verfolgung */
   ptz_enabled: boolean;
+  /** Identitäten 07 (B): Gesichter aus voller Auflösung (wirksam nur mit Settings.face_fullres) */
+  face_fullres: boolean;
   ptz: PtzConfig;
   /** read-only, null wenn PTZ aus */
   ptz_state?: PtzState | null;
@@ -254,6 +256,8 @@ export interface Identity {
   item_label?: string | null;
   /** nur bei GET /identities?with_suggestion=1 */
   suggestion?: IdentitySuggestion | null;
+  /** Identitäten 07 (D): Schwelle je Person; null = globale Schwelle */
+  match_threshold?: number | null;
 }
 
 export interface IdentitySuggestion {
@@ -286,7 +290,130 @@ export interface Sample {
   manual: boolean;
   /** W2 B4/D2 */
   negative?: boolean;
-  source?: "auto" | "merge" | "upload" | "review";
+  source?: "auto" | "merge" | "upload" | "review" | "nightly";
+  /** Identitäten 07 (B/C): Bildmerkmale, bei Altdaten null */
+  face_size?: number | null;
+  yaw?: number | null;
+  pitch?: number | null;
+  sharpness?: number | null;
+  day_night?: "day" | "night" | null;
+  source_res?: "main" | "detect" | null;
+  camera_id?: number | null;
+}
+
+// ---------------------------------------------------------------- Identitäten 07: Mehrfachauswahl, Verlauf, Nachtlauf
+
+export interface BulkDeleteInput { ids: number[] }
+export interface BulkDeleteResult { deleted: number[] }
+export interface BulkMergeInput { ids: number[]; into_id: number }
+export interface BulkMergeResult { target: Identity; merged: number[]; merge_ids: number[] }
+
+export type MergeActor = "user" | "bulk" | "nightly" | "review";
+
+export interface IdentityMerge {
+  id: number;
+  ts: string;
+  kind: IdentityKind;
+  actor: MergeActor;
+  src_id: number;
+  src_display_name: string;
+  into_id: number;
+  /** null = Ziel existiert nicht mehr */
+  into_display_name: string | null;
+  score: number | null;
+  sample_count: number;
+  event_count: number;
+  nightly_report_id: number | null;
+  undone_at: string | null;
+  undoable: boolean;
+}
+
+export interface IdentityMergeList { items: IdentityMerge[]; total: number }
+export interface UndoMergeResult { restored: Identity; target: Identity }
+
+export type NightlyMode = "off" | "preview" | "apply";
+
+export interface NightlySummary {
+  identities: number;
+  fragments: number;
+  merges: number;
+  reviews: number;
+  curated: number;
+  negatives: number;
+  removed_samples: number;
+  thresholds: number;
+  cleanup: number;
+}
+
+export interface NightlyReportSummary {
+  id: number;
+  mode: "preview" | "apply";
+  trigger: "schedule" | "manual" | "apply";
+  status: "running" | "done" | "error";
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+  applied_report_id: number | null;
+  applied_at: string | null;
+  summary: Partial<NightlySummary>;
+  text: string;
+}
+
+export type NightlyActionType = "merge" | "review" | "curate" | "threshold" | "cleanup";
+
+export interface NightlyAction {
+  idx: number;
+  type: NightlyActionType;
+  applied: boolean;
+  skipped_reason?: string | null;
+  // merge/review
+  src_id?: number;
+  src_display_name?: string;
+  src_cover_url?: string | null;
+  into_id?: number;
+  into_display_name?: string;
+  into_cover_url?: string | null;
+  into_named?: boolean;
+  score?: number;
+  second_score?: number | null;
+  samples?: number;
+  events?: number;
+  review_id?: number | null;
+  merge_id?: number | null;
+  // curate/threshold/cleanup
+  identity_id?: number;
+  display_name?: string;
+  negative_sample_ids?: number[];
+  removed_sample_ids?: number[];
+  old?: number | null;
+  new?: number | null;
+}
+
+export interface NightlyReport extends NightlyReportSummary { actions: NightlyAction[] }
+export interface NightlyReportList { items: NightlyReportSummary[]; total: number }
+
+export interface NightlyStatus {
+  mode: NightlyMode;
+  time: string;
+  running: boolean;
+  running_report_id: number | null;
+  last: NightlyReportSummary | null;
+  next_run: string | null;
+}
+
+export interface IdentitiesMsg {
+  type: "identities";
+  action: "merged" | "deleted";
+  ids: number[];
+  into_id?: number;
+  kind?: IdentityKind;
+  items?: { id: number; kind: IdentityKind }[];
+}
+
+export interface NightlyMsg {
+  type: "nightly";
+  action: "started" | "finished";
+  report: NightlyReportSummary;
 }
 
 export interface VGEvent {
@@ -420,6 +547,24 @@ export interface Settings {
   reid_ttl_min: number;
   reid_match_threshold: number;
   reid_assign_identity: boolean;
+  // Identitäten 07 (CONTRACT ID.E): Gesichtsqualität/Zuordnung (B/C)
+  face_new_min_quality: number;
+  face_new_min_size: number;
+  face_sample_min_quality: number;
+  face_match_margin: number;
+  face_max_samples_named: number;
+  face_track_faces: number;
+  face_fullres: boolean;
+  // Nachtlauf (D) – nightly_mode nur mit Anmeldung im Browser änderbar
+  nightly_mode: NightlyMode;
+  nightly_time: string;
+  nightly_auto_merge_min: number;
+  nightly_auto_merge_margin: number;
+  nightly_review_min: number;
+  nightly_review_max_per_day: number;
+  nightly_curate: boolean;
+  nightly_thresholds: boolean;
+  nightly_cleanup_days: number;
 }
 
 export interface InventoryVocabEntry {
@@ -465,7 +610,9 @@ export type WsMessage =
   | SensorMsg
   | ShoppingListMsg
   | PresenceMsg
-  | PtzMsg;
+  | PtzMsg
+  | IdentitiesMsg
+  | NightlyMsg;
 
 export interface IdentityDeleted {
   id: number;

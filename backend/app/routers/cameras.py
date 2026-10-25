@@ -55,7 +55,9 @@ OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "
                           # W4
                           "reid_enabled",
                           # PTZ
-                          "ptz_enabled", "ptz")
+                          "ptz_enabled", "ptz",
+                          # Identitäten 07 (Paket B)
+                          "face_fullres")
 
 
 def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:
