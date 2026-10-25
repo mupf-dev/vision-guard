@@ -216,4 +216,7 @@ DEFAULT_SETTINGS = {
     "nightly_curate": True,
     "nightly_thresholds": True,
     "nightly_cleanup_days": 3,
+    # Fernseher (DLNA)
+    "tv_targets": [],
+    "tv_stream_base_url": None,
 }

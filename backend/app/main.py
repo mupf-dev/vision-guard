@@ -45,6 +45,7 @@ from .routers import history as history_router
 from .routers import sensors as sensors_router
 from . import nightly as identity_nightly            # Identitäten 07 (Paket D)
 from .routers import nightly as nightly_router
+from .routers import tv as tv_router
 # Welle 4: Person über mehrere Kameras (C2)
 from . import reid as presence_reid
 from .routers import presence as presence_router
@@ -212,6 +213,8 @@ for r in (ask_router.router, sensors_router.router, history_router.router):
 app.include_router(presence_router.router)   # W4 (C2)
 app.include_router(ptz_router.router)        # PTZ
 app.include_router(nightly_router.router)    # Identitäten 07 (Paket D)
+app.include_router(tv_router.public_router)  # Fernseher (DLNA-Stream, signiert)
+app.include_router(tv_router.router)         # Fernseher (Verwaltung)
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):

@@ -27,6 +27,7 @@ MODULES = (
     "history",         # W3 B1: search_history
     "ptz",             # PTZ: ptz_status, ptz_move_to (write)
     "nightly",         # Identitäten 07 (D): get_nightly_report
+    "tv",              # Fernseher: show_on_tv (write)
 )
 
 

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Crosshair, Home, Move, Pause, Play, Route, ZoomIn, ZoomOut,
+  BookmarkPlus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Crosshair, Home, Move, Pause, Play, Route, X, ZoomIn, ZoomOut,
 } from "lucide-react";
+import { ConfirmDialog } from "./ui";
 import { api } from "../lib/api";
 import type { Camera, PtzState } from "../lib/types";
 import { toast, useLive } from "../lib/store";
@@ -76,6 +77,23 @@ export function PtzPad({ cam }: { cam: Camera }) {
   const gotoM = useMutation({ mutationFn: (p: string | null) => api.ptzGoto(cam.id, p), onError: fail });
   const resumeM = useMutation({ mutationFn: () => api.ptzResume(cam.id), onError: fail });
   const pauseM = useMutation({ mutationFn: (min: number) => api.ptzPause(cam.id, min), onError: fail });
+  const qc = useQueryClient();
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["ptz", cam.id] });
+    qc.invalidateQueries({ queryKey: ["cameras"] });
+  };
+  const [confirmHome, setConfirmHome] = useState(false);
+  const [naming, setNaming] = useState<string | null>(null);   // null = Eingabe zu
+  const homeM = useMutation({
+    mutationFn: () => api.ptzSetHome(cam.id),
+    onSuccess: () => { setConfirmHome(false); refresh(); toast.success("Grundposition gespeichert", "Zonen, Gegenstände und Sensoren gelten für diesen Blick."); },
+    onError: (e) => { setConfirmHome(false); fail(e); },
+  });
+  const saveM = useMutation({
+    mutationFn: (name: string) => api.ptzSavePreset(cam.id, name),
+    onSuccess: (p) => { setNaming(null); refresh(); toast.success("Position gespeichert", `„${p.name}“ – anfahrbar hier, in Regeln und in der Patrouille.`); },
+    onError: fail,
+  });
 
   const stopHold = () => {
     if (timer.current) window.clearInterval(timer.current);
@@ -144,6 +162,25 @@ export function PtzPad({ cam }: { cam: Camera }) {
           {presets.map((p) => <option key={p.token} value={p.token}>{p.name}{p.token === home ? " (Grundposition)" : ""}</option>)}
         </select>
       )}
+      {naming === null ? (
+        <>
+          <button type="button" className="btn btn-sm" disabled={!info.data?.connected || !caps?.presets}
+            onClick={() => setConfirmHome(true)} title="Aktuelle Ausrichtung als Grundposition speichern"><Home size={13} />Als Grundposition</button>
+          <button type="button" className="btn btn-sm" disabled={!info.data?.connected || !caps?.presets}
+            onClick={() => setNaming("")} title="Aktuelle Ausrichtung als weitere Position speichern"><BookmarkPlus size={13} />Position speichern</button>
+        </>
+      ) : (
+        <form style={{ display: "flex", flexDirection: "column", gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (naming.trim()) saveM.mutate(naming.trim()); }}>
+          <input className="input input-sm" autoFocus maxLength={40} placeholder="Name, z. B. Fenster" value={naming}
+            onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setNaming(null); }} />
+          <div className="row" style={{ gap: 6 }}>
+            <button type="submit" className="btn btn-sm btn-primary" style={{ flex: 1 }} disabled={!naming.trim() || saveM.isPending}>
+              {saveM.isPending ? <span className="spinner" /> : "Speichern"}
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost btn-icon" onClick={() => setNaming(null)} title="Abbrechen" aria-label="Abbrechen"><X size={14} /></button>
+          </div>
+        </form>
+      )}
       {st && ["manual", "rule", "follow"].includes(st.mode) && (
         <button type="button" className="btn btn-sm" onClick={() => resumeM.mutate()}><Play size={13} />Automatik fortsetzen</button>
       )}
@@ -151,6 +188,16 @@ export function PtzPad({ cam }: { cam: Camera }) {
         paused
           ? <button type="button" className="btn btn-sm" onClick={() => pauseM.mutate(0)}><Play size={13} />Automatik wieder an</button>
           : <button type="button" className="btn btn-sm" onClick={() => pauseM.mutate(60)} title="Patrouille und Verfolgung für 1 Stunde aussetzen"><Pause size={13} />Automatik 1 h pausieren</button>
+      )}
+      {confirmHome && (
+        <ConfirmDialog title="Grundposition setzen" confirmLabel="Als Grundposition speichern" danger={false} busy={homeM.isPending}
+          onConfirm={() => homeM.mutate()} onClose={() => setConfirmHome(false)}
+          text={<>
+            Die aktuelle Ausrichtung wird zur Grundposition{home ? " und ersetzt die bisherige" : ""}. Dorthin kehrt die Kamera nach
+            Handsteuerung, Regeln, Patrouille und Verfolgung zurück.
+            <br /><br />Zonen, Gegenstände und Sensoren sind auf das Bild der Grundposition eingezeichnet – bei einem anderen
+            Blick bitte prüfen und ggf. neu zeichnen.
+          </>} />
       )}
     </div>
   );

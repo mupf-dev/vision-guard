@@ -25,8 +25,11 @@ router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(require_u
 SESSION_ONLY_SETTINGS = ("push_targets", "notify_routes", "llm_provider", "llm_base_url", "weather_location",
                          "report_channels", "public_base_url",
                          # Identitäten 07: automatische Zusammenführungen nur mit Anmeldung im Browser einschalten
-                         "nightly_mode")
-HIDDEN_FOR_TOKENS = ("push_targets", "weather_location", "llm_base_url", "report_channels")
+                         "nightly_mode",
+                         # Fernseher: Adressen im Heimnetz, an die das Backend Livebilder schickt
+                         "tv_targets", "tv_stream_base_url")
+HIDDEN_FOR_TOKENS = ("push_targets", "weather_location", "llm_base_url", "report_channels",
+                     "tv_targets", "tv_stream_base_url")
 
 
 def _is_token(request: Request) -> bool:

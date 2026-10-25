@@ -100,6 +100,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Embedding-Dienst (geteiltes DINOv2, W2) | Worker `worker/vg_worker/embed.py`, Backend `backend/app/embed_client.py` |
 | Rückfragen „Bitte bestätigen“ (W2) | `backend/app/review.py`, `backend/app/routers/review.py`, `frontend/src/pages/Review.tsx` |
 | LLM-Client (optional, Standard aus) | `backend/app/llm_client.py`, Test-Server ohne Kosten `scripts/llm_mock.py` |
+| Fernseher (DLNA): Livebild per Regel, signierter Strom (ffmpeg) | `backend/app/tv.py`, `backend/app/routers/tv.py`, `frontend/src/pages/admin/TvSettings.tsx`, `mcp/tools/tv.py`, nginx `location /api/tv/` |
 | Track-Trigger mit Evaluator (posture/gesture) | `backend/app/rules.py` (`register_trigger(..., evaluate=…)`), `backend/app/events.py` |
 
 Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](worker/README.md),
@@ -142,6 +143,15 @@ Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](wo
   `docker run -d --rm --name vg-fakeonvif --network container:$(docker compose ps -q testcam) -v "$PWD/scripts:/app:ro" python:3.12-slim python -u /app/fake_onvif.py 8000` Auch mit
   `write` ändern/sehen sie keine Push-Ziele, LLM-Adresse, Standort, Berichtsversand oder `public_base_url`
   (`routers/misc.py::SESSION_ONLY_SETTINGS`).
+- **Fernseher (DLNA):** Der Fernseher holt den Strom selbst ab (`tv_stream_base_url`). Unter WSL2 im NAT-Modus ist
+  VisionGuard aus dem Heimnetz nicht erreichbar; nötig ist eine Windows-Portweiterleitung, die nur der Fernseher
+  nutzen darf (PowerShell als Administrator):
+  `netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=8090 connectaddress=127.0.0.1 connectport=8080`
+  und `New-NetFirewallRule -DisplayName "VisionGuard TV" -Direction Inbound -Protocol TCP -LocalPort 8090 -RemoteAddress <TV-IP> -Action Allow`.
+  Samsung (Tizen) spielt nur MPEG-TS mit SPS/PPS im Strom **und** bekannter Länge: go2rtcs TS/HLS (Reolink: SPS/PPS
+  nur im SDP), fMP4 und chunked-Antworten scheitern mit „Ein unerwarteter Fehler ist aufgetreten“. Deshalb packt das
+  Backend mit ffmpeg um (`-c:v copy`) und meldet `Content-Length` 50 GiB. Kein Bild-im-Bild (Tizen); nach `Stop`
+  kehrt der Fernseher zur vorherigen Quelle zurück. Das Backend-Image enthält dafür ffmpeg.
 - MQTT von außen (Host-Port `MQTT_PORT`) ist **nur lesend** (Listener 1884 mit ACL); schreiben können nur Dienste
   im Docker-Netz (Listener 1883). Testnachrichten daher per `docker compose exec mosquitto mosquitto_pub …`.
 - go2rtc loggt das Modul `streams` nur ab `error`, weil dessen Warnungen die Kamera-URL mit Passwort enthalten.
