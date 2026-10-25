@@ -42,7 +42,9 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
   nachgezogen). Ein abweichender Rohzustand braucht `confirm_n` Messungen in Folge; verdeckte Messungen zählen nicht.
   `inventory_count` zählt `present`-Gegenstände im Bereich (Tick je `interval_s`), `vlm` fragt `vlm.ask` (A2) nur bei
   Bildänderung, offenem Kandidaten oder nach `vlm_max_age_s`; `verify_vlm` lässt einen billigen Wechsel vom
-  Bildmodell bestätigen. Bestätigter Wechsel → `sensor_history`, Standbild (go2rtc, ≤ 1/min), WS `sensor`, MQTT
+  Bildmodell bestätigen. C4-VLM (W4, `vlm_measure.py`): `vlm` mit `params.measure` `count` (Anzahl, `min_count` ≤ 3)
+  bzw. `fill` (nur ok/leer); `inventory_count` mit `verify_vlm` lässt Wechsel vom Bildmodell nachzählen (≤ 1×/5 min).
+  Messwerkzeug: `scripts/vlm_supply_bench.py`. Bestätigter Wechsel → `sensor_history`, Standbild (go2rtc, ≤ 1/min), WS `sensor`, MQTT
   `{prefix}/sensor/{slug}` (+ `/attributes`), Regeln mit `trigger: sensor` (nur zwischen bekannten Zuständen).
   Vorräte (`supply`) → Einkaufsliste (`shopping.py`, `shopping_list_auto`) und Hinweis `source: sensor`.
   Ohne Messwerte seit `max(5 × interval_s, 120 s)` → `unknown`.

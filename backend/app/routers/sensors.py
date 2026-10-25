@@ -23,6 +23,32 @@ router = APIRouter(prefix="/api", tags=["sensors"], dependencies=[Depends(requir
 KIND_INTERVAL = {"brightness": 5.0, "blink": 5.0, "reference": 10.0, "inventory_count": 60.0, "fill": 60.0,
                  "vlm": 300.0}
 VLM_MIN_INTERVAL = 60.0
+VLM_MEASURES = ("yesno", "count", "fill")
+VLM_SUPPLY_MIN_AGE = 1800.0     # C4-VLM: Vorräte per Bildmodell höchstens alle 30 min ohne sichtbare Änderung
+
+
+def _vlm_item(p_in: dict, q: str, default: str = "") -> dict[str, Any]:
+    """C4-VLM: englischer Artikelname (`item`) für die Fragevorlage und/oder eigene Frage (`question`)."""
+    item = " ".join(str(p_in.get("item") or "").split())[:80] or default
+    if not item and not q:
+        raise HTTPException(422, "Artikel (englisch, z. B. „bottles“) oder eigene Frage an das Bildmodell angeben")
+    out: dict[str, Any] = {}
+    if item:
+        out["item"] = item
+    if q:
+        out["question"] = q
+    return out
+
+
+def _vocab_item(labels: list[str]) -> str:
+    """Vorgabe für die Zählfrage aus dem Inventar-Vokabular: erster Prompt des ersten Labels, Plural mit -s."""
+    vocab = {e.get("label"): e for e in (settings_store.get().get("inventory_vocabulary") or [])}
+    for lb in labels:
+        prompts = (vocab.get(lb) or {}).get("prompts") or []
+        if prompts:
+            p = str(prompts[0]).strip()
+            return p if p.endswith("s") else p + "s"
+    return labels[0].replace("_", " ") + "s" if labels else ""
 
 
 class SensorIn(BaseModel):
@@ -110,23 +136,41 @@ def _validate(body: SensorIn, db: Session) -> dict[str, Any]:
             raise HTTPException(422, "„Leer unter“ muss kleiner als „Knapp unter“ sein")
         params = {"low_below": low, "out_below": out}
     elif k == "vlm":
-        if not q:
-            raise HTTPException(422, "Frage an das Bildmodell fehlt")
-    if q and (k == "vlm" or k in vs.VERIFY_KINDS):
+        measure = str(p_in.get("measure") or "yesno")
+        if measure not in VLM_MEASURES:
+            raise HTTPException(422, "Messart: yesno, count oder fill")
+        if measure == "yesno":
+            if not q:
+                raise HTTPException(422, "Frage an das Bildmodell fehlt")
+        else:                                   # C4-VLM-Modus (W4): zählen bzw. Füllstand
+            params = {"measure": measure, **_vlm_item(p_in, q)}
+            if measure == "count":
+                params["min_count"] = int(_num(p_in, "min_count", 1, 1, vs.VLM_COUNT_MAX_MIN, "Mindestanzahl"))
+    if k == "inventory_count" and body.verify_vlm:
+        params.update(_vlm_item(p_in, q, default=_vocab_item(params["labels"])))
+        if params["min_count"] > vs.VLM_COUNT_MAX_MIN:
+            raise HTTPException(422, f"Bestätigung per Bildmodell nur bis Mindestanzahl {vs.VLM_COUNT_MAX_MIN} "
+                                     "(das Bildmodell zählt größere Mengen zu niedrig)")
+    elif q and (k == "vlm" or k in vs.VERIFY_KINDS):
         params["question"] = q
-    state_set = vs.default_state_set(k, body.state_set or ("level" if body.supply else None))
+    state_set = vs.default_state_set(k, body.state_set or ("level" if body.supply else None), params)
     if body.state_set and body.state_set != state_set:
         raise HTTPException(422, f"Art {vs.KIND_DE[k]} liefert nur Zustände „{'ok/knapp/leer' if state_set == 'level' else 'an/aus'}“")
     if body.supply and state_set != "level":
-        raise HTTPException(422, "Vorrat nur mit Zuständen ok/knapp/leer (Füllstand oder Gegenstände zählen)")
+        raise HTTPException(422, "Vorrat nur mit Zuständen ok/knapp/leer (Füllstand, Gegenstände zählen oder "
+                                 "Bildmodell mit Anzahl/Füllstand)")
     if body.verify_vlm:
-        if k not in vs.VERIFY_KINDS:
-            raise HTTPException(422, "Bestätigung per Bildmodell nur für Helligkeit, Blinken und Referenzbilder")
-        if not q:
+        if k not in vs.VERIFY_ALL_KINDS:
+            raise HTTPException(422, "Bestätigung per Bildmodell nur für Helligkeit, Blinken, Referenzbilder und "
+                                     "Gegenstände zählen")
+        if k in vs.VERIFY_KINDS and not q:
             raise HTTPException(422, "Für die Bestätigung per Bildmodell eine Frage angeben")
     interval = body.interval_s if body.interval_s is not None else KIND_INTERVAL[k]
     if k == "vlm" and interval < VLM_MIN_INTERVAL:
         raise HTTPException(422, "Bildmodell-Sensoren: Intervall mindestens 60 s")
+    if k == "vlm" and params.get("measure") in ("count", "fill") and body.vlm_max_age_s < VLM_SUPPLY_MIN_AGE:
+        raise HTTPException(422, "Vorräte per Bildmodell: „spätestens erneut nach“ mindestens 30 min "
+                                 "(jede Frage pausiert Gegenstandserkennung und Zeitmaschine)")
     if k == "blink" and interval < params.get("window_s", 3):
         interval = float(params["window_s"])
     return {"name": body.name, "camera_id": body.camera_id, "enabled": body.enabled, "kind": k,
@@ -174,7 +218,8 @@ def get_sensor(sensor_id: int, signed: bool = Query(False, description="snapshot
 async def update_sensor(sensor_id: int, body: SensorIn, db: Session = Depends(get_db)):
     r = _sensor_or_404(db, sensor_id)
     vals = _validate(body, db)
-    reset = (vals["kind"] != r.kind or vals["state_set"] != r.state_set or vals["camera_id"] != r.camera_id)
+    reset = (vals["kind"] != r.kind or vals["state_set"] != r.state_set or vals["camera_id"] != r.camera_id
+             or (vals["params"].get("measure") or "yesno") != ((r.params or {}).get("measure") or "yesno"))
     for k, v in vals.items():
         setattr(r, k, v)
     r.updated_at = datetime.now(timezone.utc)

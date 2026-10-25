@@ -805,6 +805,12 @@ const mockSensors: VirtualSensor[] = [
     region: [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]], params: { labels: ["bottle"], min_count: 2 }, state_set: "level",
     supply: true, verify_vlm: false, interval_s: 600, vlm_max_age_s: 900, change_threshold: 0.08, confirm_n: 2,
     state: "low", value: 1, since: ago(7200), last_eval: ago(60), last_engine: "cheap", snapshot_url: null, state_text: "knapp seit 2 h" },
+  // W4 (C4-VLM-Modus): Bildmodell zählt
+  { id: 3, name: "Eier", camera_id: 1, camera_name: "Einfahrt", room: "Küche", enabled: true, kind: "vlm",
+    region: [[0.2, 0.55], [0.45, 0.55], [0.45, 0.8], [0.2, 0.8]], params: { measure: "count", item: "eggs", min_count: 3 }, state_set: "level",
+    supply: true, verify_vlm: false, interval_s: 1800, vlm_max_age_s: 3600, change_threshold: 0.08, confirm_n: 2,
+    state: "ok", value: 6, since: ago(5400), last_eval: ago(900), last_engine: "local", snapshot_url: null, state_text: "ok seit 1 h",
+    last_answer: "6" },
 ];
 let mockRefs: { id: number; sensor_id: number; state: string; image_url: string; created_at: string }[] = [];
 let shopping: ShoppingItem[] = [

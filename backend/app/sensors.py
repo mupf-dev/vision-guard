@@ -26,6 +26,11 @@ Bestätigter Wechsel (`_commit`, eigener Thread, Reihenfolge bleibt erhalten): D
 `{prefix}/sensor/{slug}` (+ `/attributes`, retain), Regeln (`events.processor.sensor_changed`, nur zwischen
 bekannten Zuständen), Vorräte → `shopping.on_supply_state` + Hinweis (`source:"sensor"`).
 
+C4-VLM-Modus (Welle 4, CONTRACT W4.C4): `vlm`-Sensoren messen mit `params.measure` auch `count` („How many …?“ →
+Anzahl, Zustände wie `inventory_count`, `min_count` ≤ 3) und `fill` („How full …?“ → nur `ok`/`out`, weil das
+Bildmodell Zwischenstufen nicht zuverlässig trennt). `inventory_count` kann mit `verify_vlm` einen Wechsel vom
+Bildmodell nachzählen lassen (höchstens alle 5 min). Fragen bauen/Antworten lesen: `vlm_measure.py`.
+
 `unknown`: Sensor deaktiviert, Kamera aus, keine Messwerte seit `max(5 × interval_s, 120 s)`, Referenzen fehlen.
 Wechsel nach/aus `unknown` starten keine Regeln (Worker-Neustart soll keine „Fenster offen“-Meldung erzeugen).
 """
@@ -53,6 +58,13 @@ KINDS = ("brightness", "blink", "reference", "inventory_count", "fill", "vlm")
 BINARY_STATES = ("on", "off", "unknown")
 LEVEL_STATES = ("ok", "low", "out", "unknown")
 VERIFY_KINDS = ("brightness", "blink", "reference")
+# C4-VLM-Modus (W4): auch Zählsensoren lassen sich vom Bildmodell bestätigen (Frage „How many …?“)
+VERIFY_LEVEL_KINDS = ("inventory_count",)
+VERIFY_ALL_KINDS = VERIFY_KINDS + VERIFY_LEVEL_KINDS
+VERIFY_MIN_GAP_S = 300.0    # inventory_count + verify_vlm: höchstens alle 5 min eine Rückfrage (Inventar flackert)
+# Bildmodell zählt laut Messung (messungen.md §12) 0–3 Artikel sicher, darüber zu wenig → Grenze für min_count
+VLM_COUNT_MAX_MIN = 3
+VLM_FILL_OUT_BELOW = 0.15   # Bildmodell-Füllstand: nur „leer“ vs. „nicht leer“ (Zwischenstufen unzuverlässig)
 REF_STATES = {"reference": ("on", "off"), "fill": ("full", "half", "empty")}
 MAX_REFS_PER_STATE = 5
 
@@ -138,9 +150,25 @@ def region_bbox(poly: list) -> list[float]:
             round(min(1.0, max(xs)), 4), round(min(1.0, max(ys)), 4)]
 
 
-def default_state_set(kind: str, requested: Optional[str] = None) -> str:
+def vlm_measure_of(cfg: dict[str, Any]) -> str:
+    """Messart der Bildmodell-Frage: `vlm` → params.measure (yesno|count|fill); verify_vlm bei inventory_count →
+    count; sonst yesno."""
+    if cfg.get("kind") == "inventory_count":
+        return "count"
+    m = str((cfg.get("params") or {}).get("measure") or "yesno")
+    return m if m in ("yesno", "count", "fill") else "yesno"
+
+
+def default_state_set(kind: str, requested: Optional[str] = None, params: Optional[dict] = None) -> str:
     if kind == "fill":
         return "level"
+    if kind == "vlm":
+        measure = str((params or {}).get("measure") or "yesno")
+        if measure == "fill":
+            return "level"
+        if measure == "count":
+            return requested if requested in ("binary", "level") else "binary"
+        return "binary"
     if kind == "inventory_count":
         return requested if requested in ("binary", "level") else "binary"
     return "binary"
@@ -159,7 +187,15 @@ def raw_state(cfg: dict[str, Any], value: Optional[float]) -> Optional[str]:
         return "on" if on else "off"
     if kind == "blink":
         return "on" if v >= float(p.get("min_std", 0.05)) else "off"
-    if kind in ("reference", "vlm"):                 # vlm: 1 = ja, 0 = nein
+    if kind == "vlm":
+        measure = vlm_measure_of(cfg)
+        if measure == "count":                      # wie inventory_count
+            from .vlm_measure import level_state
+            return level_state("count", v, p, cfg.get("state_set") or "binary")
+        if measure == "fill":                       # eingeschränkt: nur leer / nicht leer
+            return "out" if v < VLM_FILL_OUT_BELOW else "ok"
+        return "on" if v >= 0.5 else "off"          # yesno: 1 = ja, 0 = nein
+    if kind == "reference":
         return "on" if v >= 0.5 else "off"
     if kind == "fill":
         if v < float(p.get("out_below", 0.15)):
@@ -193,6 +229,8 @@ def state_text(cfg: dict[str, Any], m: Optional[dict[str, Any]] = None) -> str:
         txt = STATE_DE.get(st, st)
         if cfg.get("since"):
             txt += " " + _since_text(cfg["since"])
+        if cfg.get("kind") == "vlm" and m.get("reason"):
+            txt += f" (letzte Prüfung: {m['reason']})"   # z. B. Antwort unklar, Bildmodell nicht verfügbar
     if m.get("occluded") and _now() - float(m.get("occluded_ts") or 0) < max(30.0, 3 * float(cfg["interval_s"])):
         txt += " (gerade verdeckt)"
     return txt
@@ -203,7 +241,7 @@ def state_text(cfg: dict[str, Any], m: Optional[dict[str, Any]] = None) -> str:
 def _row_cfg(r) -> dict[str, Any]:
     return {"id": r.id, "name": r.name, "camera_id": r.camera_id, "enabled": bool(r.enabled), "kind": r.kind,
             "region": [list(map(float, p)) for p in (r.region or [])], "params": dict(r.params or {}),
-            "state_set": r.state_set or default_state_set(r.kind), "supply": bool(r.supply),
+            "state_set": r.state_set or default_state_set(r.kind, None, r.params), "supply": bool(r.supply),
             "verify_vlm": bool(r.verify_vlm), "interval_s": float(r.interval_s or 10),
             "vlm_max_age_s": float(r.vlm_max_age_s or 900), "change_threshold": float(r.change_threshold or 0.08),
             "confirm_n": int(r.confirm_n or 2), "state": r.state or "unknown", "value": r.value,
@@ -216,6 +254,7 @@ def _new_mem(cfg: dict[str, Any]) -> dict[str, Any]:
     return {"cand": None, "count": 0, "value": cfg.get("value"), "last_rx": 0.0, "last_eval": cfg.get("last_eval"),
             "occluded": False, "occluded_ts": 0.0, "changed": False, "scores": None, "reason": None,
             "next_due": 0.0, "vlm_busy": False, "verify_block": None, "dirty": False, "last_sample": 0.0,
+            "vlm_answer": None,
             "last_snapshot": 0.0, "created": _now(),
             "prev_known": cfg.get("state") if cfg.get("state") not in (None, "unknown") else None}
 
@@ -292,7 +331,8 @@ def to_json(cfg: dict[str, Any], m: Optional[dict[str, Any]] = None) -> dict[str
             "change_threshold": cfg["change_threshold"], "confirm_n": cfg["confirm_n"], "state": cfg["state"],
             "value": None if value is None else round(float(value), 4), "since": _iso(cfg.get("since")),
             "last_eval": _iso(last_eval), "last_engine": cfg.get("last_engine"),
-            "snapshot_url": f"/media/{snap}" if snap else None, "state_text": state_text(cfg, m)}
+            "snapshot_url": f"/media/{snap}" if snap else None, "state_text": state_text(cfg, m),
+            "last_answer": m.get("vlm_answer")}
 
 
 def get_json(sensor_id: int) -> Optional[dict[str, Any]]:
@@ -441,11 +481,12 @@ def _observe(sid: int, value: Optional[float], *, engine: str, now: Optional[flo
         if not direct and m["count"] < c["confirm_n"]:
             return None
         # verify_vlm nur zwischen bekannten Zuständen (der erste Zustand nach unknown startet ohnehin keine Regel)
-        if (not direct and c["verify_vlm"] and c["kind"] in VERIFY_KINDS and c["state_set"] == "binary"
-                and c["state"] != "unknown" and (c["params"].get("question") or "").strip()):
+        if not direct and c["state"] != "unknown" and verify_enabled(c):
             blocked = m.get("verify_block")
             if blocked and blocked[0] == raw and now - blocked[1] < c["vlm_max_age_s"]:
                 return None                 # Bildmodell hat diesen Wechsel schon verneint, Bild unverändert
+            if c["kind"] in VERIFY_LEVEL_KINDS and now - float(c.get("last_vlm_ts") or 0) < VERIFY_MIN_GAP_S:
+                return None                 # Zählsensor: Rückfrage höchstens alle 5 min, Kandidat bleibt stehen
             if not m["vlm_busy"]:
                 m["vlm_busy"] = True
                 _vlm_pool.submit(_verify, sid, raw, value)
@@ -457,25 +498,71 @@ def _observe(sid: int, value: Optional[float], *, engine: str, now: Optional[flo
 
 # ------------------------------------------------------------------ Bildmodell (A2-Schnittstelle)
 
-def _ask_vlm(c: dict[str, Any], question: str) -> tuple[Optional[str], str, Optional[str], Optional[str]]:
-    """→ (state on|off|None, engine, snapshot_path, Fehlertext). Nutzt ausschließlich `vlm.ask` (A2)."""
+def verify_enabled(c: dict[str, Any]) -> bool:
+    """verify_vlm wirksam? Binäre billige Arten brauchen eine Frage; Zählsensoren (C4-VLM) eine Frage oder einen
+    Artikelnamen (`params.item`, englisch)."""
+    if not c.get("verify_vlm"):
+        return False
+    p = c.get("params") or {}
+    if c["kind"] in VERIFY_KINDS:
+        return c.get("state_set") == "binary" and bool(str(p.get("question") or "").strip())
+    if c["kind"] in VERIFY_LEVEL_KINDS:
+        return bool(vlm_question(c))
+    return False
+
+
+def vlm_question(c: dict[str, Any]) -> str:
+    """Frage an das Bildmodell: eigene Frage oder Vorlage aus `params.item` (count/fill, vlm_measure.py)."""
+    from .vlm_measure import build_question
+    p = c.get("params") or {}
+    measure = vlm_measure_of(c)
+    if measure == "yesno":
+        return str(p.get("question") or "").strip()
+    return build_question(measure, str(p.get("item") or ""), str(p.get("question") or ""))
+
+
+def _ask_vlm(c: dict[str, Any]) -> tuple[Optional[str], Optional[float], str, Optional[str], Optional[str]]:
+    """Bildmodell fragen → (Rohzustand|None, Messwert|None, engine, snapshot_path, Fehlertext).
+
+    Nutzt ausschließlich `vlm.ask` (A2). Messart nach `vlm_measure_of`: yesno → on/off (Wert 1/0),
+    count → Anzahl, fill → Füllstand 0..1 (C4-VLM-Modus); der Zustand folgt aus `raw_state` mit den Schwellen des
+    Sensors (bei verify_vlm von inventory_count mit dessen min_count/state_set)."""
     from . import vlm
+    from .vlm_measure import parse
+    measure = vlm_measure_of(c)
     _stats["vlm_calls"] += 1
     try:
-        res = vlm.ask(c["camera_id"], question, region=region_bbox(c["region"]), engine="auto", source="sensor")
+        res = vlm.ask(c["camera_id"], vlm_question(c), region=region_bbox(c["region"]), engine="auto",
+                      source="sensor")
     except vlm.AskError as e:
-        return None, "local", None, e.message
+        return None, None, "local", None, e.message
     except Exception as e:  # noqa: BLE001
         log.warning("Sensor %s: Bildmodell-Frage fehlgeschlagen: %s", c["id"], e)
-        return None, "local", None, "Bildmodell-Fehler"
-    yn = (res or {}).get("yes_no")
-    eng = (res or {}).get("engine") if (res or {}).get("engine") in ("local", "cloud") else "local"
-    snap = (res or {}).get("snapshot_url") or None
+        return None, None, "local", None, "Bildmodell-Fehler"
+    res = res or {}
+    eng = res.get("engine") if res.get("engine") in ("local", "cloud") else "local"
+    snap = res.get("snapshot_url") or None
     if snap and isinstance(snap, str) and snap.startswith("/media/"):
         snap = snap[len("/media/"):].split("?", 1)[0]
     else:
         snap = None
-    return {"yes": "on", "no": "off"}.get(yn), eng, snap, None if yn in ("yes", "no") else "Antwort unklar"
+    answer = str(res.get("answer") or "").strip()
+    with _lock:
+        m = _mem.get(c["id"])
+        if m is not None:
+            m["vlm_answer"] = answer[:300] or None
+    if measure == "yesno":
+        state = {"yes": "on", "no": "off"}.get(res.get("yes_no"))
+        if state is None:
+            return None, None, eng, snap, "Antwort unklar"
+        return state, 1.0 if state == "on" else 0.0, eng, snap, None
+    value = parse(measure, answer)
+    if value is None:
+        return None, None, eng, snap, "Antwort unklar" + (f" („{answer[:60]}“)" if answer else "")
+    probe = c
+    if c["kind"] == "inventory_count":          # gleiche Schwellen wie der Zählsensor
+        probe = {**c, "kind": "vlm", "params": {**(c.get("params") or {}), "measure": "count"}}
+    return raw_state(probe, value), value, eng, snap, None
 
 
 def _verify(sid: int, candidate: str, value: Optional[float]) -> None:
@@ -485,7 +572,7 @@ def _verify(sid: int, candidate: str, value: Optional[float]) -> None:
             c = dict(_cfg.get(sid) or {})
         if not c:
             return
-        state, engine, snap, err = _ask_vlm(c, c["params"].get("question") or "")
+        state, _vval, engine, snap, err = _ask_vlm(c)
         now = _now()
         with _lock:
             m = _mem.get(sid)
@@ -498,12 +585,17 @@ def _verify(sid: int, candidate: str, value: Optional[float]) -> None:
             if state is None:
                 log.info("Sensor %s: Bildmodell ohne Aussage (%s) – billiger Befund gilt", sid, err)
                 final, eng = candidate, "cheap"
-            elif state != candidate:
+            elif state == candidate:
+                final, eng = state, engine
+            elif state == cur["state"]:
                 log.info("Sensor %s: Bildmodell verneint Wechsel nach %s", sid, candidate)
                 m["verify_block"] = (candidate, now)
                 _effects.submit(_persist_vlm_ts, sid, now)
                 return
             else:
+                # level (C4-VLM): das Bildmodell sieht einen dritten Zustand (Kandidat „knapp“, Modell „leer“) –
+                # geändert hat sich der Bestand laut beiden; kleine Mengen zählt das Bildmodell genauer.
+                log.info("Sensor %s: Kandidat %s, Bildmodell meldet %s – Bildmodell gilt", sid, candidate, state)
                 final, eng = state, engine
         if final != c["state"]:
             _schedule_commit(sid, final, value, eng, snapshot_path=snap, vlm_ts=now)
@@ -521,7 +613,7 @@ def _run_vlm_sensor(sid: int, force: bool = False) -> None:
             c = dict(_cfg.get(sid) or {})
         if not c or not c["enabled"]:
             return
-        state, engine, snap, err = _ask_vlm(c, c["params"].get("question") or "")
+        state, value, engine, snap, err = _ask_vlm(c)
         now = _now()
         with _lock:
             cur = _cfg.get(sid)
@@ -536,8 +628,8 @@ def _run_vlm_sensor(sid: int, force: bool = False) -> None:
                 m["reason"] = err or "Bildmodell ohne Aussage"
                 m["dirty"] = True
         _effects.submit(_persist_vlm_ts, sid, now)
-        if state is not None:
-            _observe(sid, 1.0 if state == "on" else 0.0, engine=engine, now=now, direct=force, snapshot_path=snap)
+        if state is not None and value is not None:
+            _observe(sid, value, engine=engine, now=now, direct=force, snapshot_path=snap)
     finally:
         with _lock:
             m = _mem.get(sid)
@@ -882,14 +974,13 @@ def evaluate_now(sensor_id: int) -> Optional[dict[str, Any]]:
         return None
     if not c["enabled"]:
         return get_json(sensor_id)
-    if c["kind"] == "inventory_count":
+    if c["kind"] == "inventory_count" and not verify_enabled(c):
         _run_inventory_sensor(sensor_id, direct=True)
-    elif c["kind"] == "vlm" or (c["verify_vlm"] and (c["params"].get("question") or "").strip()
-                                and c["kind"] in VERIFY_KINDS):
+    elif c["kind"] == "vlm" or verify_enabled(c):
         if c["kind"] == "vlm":
             _run_vlm_sensor(sensor_id, force=True)
         else:
-            state, engine, snap, err = _ask_vlm(c, c["params"]["question"])
+            state, vvalue, engine, snap, err = _ask_vlm(c)
             now = _now()
             with _lock:
                 if sensor_id in _cfg:
@@ -897,11 +988,21 @@ def evaluate_now(sensor_id: int) -> Optional[dict[str, Any]]:
                 if sensor_id in _mem:
                     _mem[sensor_id]["changed"] = False
             if state is not None:
-                _observe(sensor_id, 1.0 if state == "on" else 0.0, engine=engine, direct=True, snapshot_path=snap)
-                # value bleibt der billige Messwert
+                # Zustand des Bildmodells direkt übernehmen (nicht über raw_state: 1/0 passt nicht zu den Schwellen
+                # der billigen Art, z. B. Helligkeit „umgekehrt“). Wert: Zählsensor → Zahl des Bildmodells,
+                # sonst bleibt der billige Messwert.
+                value = vvalue if c["kind"] == "inventory_count" else m.get("value")
                 with _lock:
-                    if sensor_id in _mem:
-                        _mem[sensor_id]["value"] = m.get("value")
+                    mm = _mem.get(sensor_id)
+                    if mm is not None:
+                        mm["cand"], mm["count"] = None, 0
+                        mm["value"] = value
+                        mm["last_eval"] = now
+                        mm["reason"] = None
+                        mm["dirty"] = True
+                        if c["kind"] == "inventory_count":
+                            mm["last_rx"] = now
+                _schedule_commit(sensor_id, state, value, engine, snapshot_path=snap, vlm_ts=now)
             else:
                 with _lock:
                     if sensor_id in _mem:

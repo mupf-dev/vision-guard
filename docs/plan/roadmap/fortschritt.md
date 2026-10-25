@@ -541,3 +541,39 @@ Settings `reid_ttl_min`/`reid_match_threshold`/`reid_assign_identity` hat C2 min
   prüfen (`/presence/status`: `linked`/`new`). Deckenkameras/Kleidungswechsel ungetestet. Der Worker übernimmt
   einen geänderten `presence_key` erst beim nächsten Embedding des Tracks (Event-Attribut kann kurz veralten).
   Gruppen nebeneinander werden oft übersprungen (Überdeckung). Im Haupt-Stack ist ReID an keiner Kamera aktiv.
+
+## Welle 4 – C4-VLM-Modus „Vorräte per Bildmodell“ (Zweig `w4/c4-vlm-modus`, autonom)
+
+Auftrag (S): Vorrats-Füllstand per VLM über die A2-Schnittstelle. Es gab keinen Kickoff K4; die nötigen
+Vertragsergänzungen sind rein additiv (keine Spalten/Tabellen/Settings) und stehen in CONTRACT.md
+„Nachträge: Welle 4 – C4-VLM-Modus“.
+
+- **Messung zuerst** (messungen.md §12, echter Moondream 2 INT4 über `vlm /infer` des Haupt-Stacks, unter
+  `flock`): Anzahl 0–3 Flaschen 19/19 exakt, größere Mengen zu niedrig (9 → 5); Füllstand in Stufen unbrauchbar
+  (halb/wenig → „full“, Ja/Nein immer „Yes“), „leer“ vs. „nicht leer“ 11/12. **Go mit Grenzen / eingeschränkte
+  Variante:** Anzahl nur mit Schwelle ≤ 3, Füllstand nur `ok`/`out`.
+- **Umgesetzt:** `backend/app/vlm_measure.py` (Fragevorlagen, Antworten lesen: Ziffern, Zahlwörter de/en,
+  voll/halb/leer, Prozent); Sensor-Art `vlm` mit `params.measure` `count|fill` (Vorrat möglich, Höchstalter ≥ 30 min);
+  `verify_vlm` für `inventory_count` (Bildmodell zählt einen Wechsel nach, ≤ 1×/5 min, dritter Zustand des Modells
+  gilt); `last_answer` im Sensor-JSON; „Jetzt prüfen“ übernimmt den Zustand des Bildmodells direkt (behebt
+  nebenbei: bei `verify_vlm` + Helligkeit „umgekehrt“ wurde „ja“ als „aus“ gewertet). MCP `list_sensors`/`get_sensor`
+  mit `measure`, Stückzahl und letzter Antwort. Oberfläche: Messart „Ja/Nein · Anzahl · leer / nicht leer“,
+  Artikel-Vorlagen, Fragevorschau, Hinweise zu den Grenzen, „Wechsel vom Bildmodell nachzählen lassen“ bei
+  „Gegenstände zählen“. Messwerkzeug `scripts/vlm_supply_bench.py`.
+- **Geprüft** (Testprojekt `vg-c4vlm`, Port 18094, ohne Worker, `vlm` = Mock mit steuerbarer Antwort, Kamera =
+  testcam `cam5`; danach `down -v`): 8 × 422 (fehlender Artikel, `min_count` 4, Höchstalter 900 s, unbekannte
+  Messart, Vorrat mit Ja/Nein, `fill` binär, Nachzählen mit `min_count` 4, `verify_vlm` bei `fill`); Zählsensor
+  „3“ → ok (Frage = Vorlage, Region = Bounding-Box, Modus `query`), „There is only one bottle …“ → knapp +
+  Einkaufsliste (`auto`) + Hinweis, „no bottles“ → leer, unklare Antwort → Zustand bleibt, „3“ → ok und Eintrag
+  erledigt; Verlauf ok/leer/knapp/ok; periodischer Pfad mit `confirm_n` 2: unknown → knapp nach 2 Fragen (65 s);
+  `fill`: empty → leer, half/low → ok; Ja/Nein-Sensor ohne `measure` unverändert; `inventory_count` + Nachzählen
+  (Gegenstände per SQL): unknown → ok ohne Rückfrage, Kandidat knapp + Modell „3“ → bleibt ok mit genau einer
+  Rückfrage, „Jetzt prüfen“ + Modell „1“ → knapp. MCP mit Lese-Key (danach widerrufen → 401 nach Ablauf des
+  30-s-Caches). `corepack pnpm build` grün; Screenshots Desktop/390 px (Sensoren, beide Dialoge, Vorräte) ohne
+  JS-Fehler.
+- **Entscheidungen:** keine neue Spalte (Messart in `params`); `fill` per Bildmodell nur „leer“ statt No-Go, weil
+  „Obstschale/Futter leer?“ der häufigste Fall ist; Grenze `min_count` ≤ 3 hart (422) statt nur Warnung; Nachzählen
+  nicht für `fill` (DINOv2-Stufen kann das Modell nicht bestätigen); `last_answer` nur im Speicher.
+- **Offen:** Messung mit echten Vorratsfotos (Eier, Dosen, Schrank), nachts/IR und mit Cloud-Modell; keine Fragen an
+  `cam_3`. Ein Zählsensor mit Nachzählen an `cam_3` (flackerndes Inventar, messungen.md §7) erzeugt höchstens
+  12 Fragen/h – im Haupt-Stack nach dem Merge beobachten (`/system.sensors.vlm_calls`).

@@ -396,3 +396,39 @@ docker run --rm -e VG_MODELS_DIR=/m -v "$W":/m -v "$PWD/worker/vg_worker":/app/v
 # CUDA/VRAM und DINOv2-Vergleich nur unter der GPU-Sperre:
 flock ~/vg-gpu.lock docker run --gpus all … reidtest --market /data/market --device cuda --dino
 ```
+
+## 12. C4-VLM-Modus – Vorräte per Bildmodell (Welle 4, `scripts/vlm_supply_bench.py`)
+
+Stand: 25.10.2026, früher Morgen (Zweig `w4/c4-vlm-modus`). Gemessen über die A2-Schnittstelle (`POST /infer` des
+laufenden Dienstes `vlm` im Haupt-Stack, Moondream 2 INT4, GPU-Lease durch den Dienst, Client unter
+`flock ~/vg-gpu.lock`), Modus `query`, Bilder unverändert. Keine Bilder von `cam_3`; nur das öffentliche
+Intel-Video `regal.mp4` (CC BY 4.0, Abschnitt `bottle-detection`) und synthetische Bilder.
+
+**Datensatz (36 Bilder, Wahrheit von Hand gezählt):**
+- 16 echte Frames (640×360) mit 1–3 Wasserflaschen auf einem Tisch, teils mit Hand im Bild;
+- 3 Ausschnitte (0 bzw. 1 Flasche);
+- 5 nebeneinander gesetzte Frames (4, 5, 6, 8, 9 Flaschen; 1280–1920 px breit) als Ersatz für ein volleres Regal;
+- 12 synthetische Gläser (Kaffeebohnen bzw. orangefarbener Inhalt) mit Füllstand 100/75/50/25/8/0 %.
+
+| Messart / Frage | Ergebnis | Zeit (Median, warm) |
+|---|---|---|
+| Anzahl, Vorlage „How many bottles are there? Answer with a number only.“ | **0–3 Flaschen: 19/19 exakt** (Antwort nur die Ziffer); 4→3, 5→4, 6→4, 8→4, 9→5 (zu niedrig) | 0,74 s |
+| Anzahl, „How many bottles are visible?“ | gleiche Zählung (Antwortsatz „There are three bottles …“, Parser liest Zahlwörter); 8→6, 9→6 | 0,91 s |
+| Zustand ok/knapp/leer bei `min_count` 2 | **24/24** richtig (Unterzählung großer Mengen bleibt ≥ 3 → „ok“) | – |
+| Füllstand, Vorlage „How full is the jar? Answer with one word: full, half, low or empty.“ | voll 2/2 „full“, leer 2/2 „empty“; 75 %/50 %/25 % fast immer „full“ (einmal „half“); 8 % einmal „empty“, einmal „full“ | 0,75 s |
+| Füllstand als Prozent („What percentage … is filled?“) | 50 % bei echten 8 %, 100 % bei 25 % – unbrauchbar | 0,97 s |
+| Ja/Nein „Is the jar empty or almost empty?“ / „less than half full?“ | **immer „Yes“** (auch beim vollen Glas) – unbrauchbar | 0,9 s |
+
+Erste Frage nach dem Laden 6,0 s (Lease + Laden), danach 0,73–0,76 s je Frage. Zwei Läufe lieferten identische
+Antworten (deterministisch).
+
+**Go/No-Go:**
+- **Anzahl: Go mit Grenze** – das Modell zählt kleine Mengen (0–3) zuverlässig und große zu niedrig. Daher
+  `min_count` ≤ 3 (dann sind alle Zustände richtig, auch bei voller Ablage). Für Regale mit vielen Artikeln bleibt
+  `inventory_count` (YOLOE) die Messart; das Bildmodell bestätigt dort nur Wechsel (`verify_vlm`, `min_count` ≤ 3).
+- **Füllstand in Stufen: No-Go** – Moondream trennt „halb“/„wenig“ nicht von „voll“, Ja/Nein-Fragen sind
+  zustimmungsverzerrt. **Eingeschränkte Variante:** Messart `fill` meldet nur `ok`/`out` („leer erkannt“, im Test
+  11/12 richtig bei Grenze 15 %), nie `low`. Gestufte Füllstände weiter über die Art `fill` (DINOv2-Referenzbilder).
+- Grenzen der Messung: nur ein Gegenstandstyp (Flaschen) und synthetische Gläser; kein echter Vorratsschrank, keine
+  Nacht/IR-Bilder, keine Verdeckung durch hintere Reihen. Vor einer Abnahme mit eigenen Fotos nachmessen
+  (`truth.json` mit `measure`/`item`/`truth`, siehe Kopf von `scripts/vlm_supply_bench.py`).

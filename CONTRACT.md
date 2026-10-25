@@ -1606,3 +1606,40 @@ Camera/`CameraIn`/`GET /api/internal/cameras`: zusätzlich `reid_enabled` (PUT o
   Text mit „gerade sichtbar“ und „zuletzt gesehen vor … in …“.
 - Oberfläche: Seite `/anwesenheit` (`pages/Presence.tsx`), Kamera-Dialog „Personenanalyse“ → Schalter
   „Wiedererkennung über Kameras“, Einstellungs-Karte `admin/ReidSettings.tsx`.
+
+## Nachträge: Welle 4 – C4-VLM-Modus (Vorräte per Bildmodell)
+
+Verbindlich wie der Rest, rein additiv (keine neuen Spalten, Tabellen oder Settings). Grundlage:
+`docs/plan/roadmap/00-wellenplan.md` (W4 „VLM-Modus für C4 als S-Auftrag“), Messung `messungen.md` §12.
+
+- **Sensor-Art `vlm`, `params.measure`** (`"yesno"` Default | `"count"` | `"fill"`). Fehlt `measure`, gilt `yesno`
+  (bisheriges Verhalten, binär).
+  - `count`: `params = {measure, item?: str ≤ 80 (englisch, z. B. "bottles"), question?: str ≤ 300,
+    min_count: 1..3}` – `item` oder `question` ist Pflicht. Frage = `question` oder
+    „How many {item} are there? Answer with a number only.“; `value` = gelesene Anzahl (Ziffern, Zahlwörter
+    englisch/deutsch, „no …“ = 0). `state_set` `binary` (on ⇔ Anzahl ≥ `min_count`) oder `level`
+    (ok ≥ `min_count`, low 1..`min_count`−1, out 0) wie `inventory_count`. `min_count` > 3 → 422 (Modell zählt
+    größere Mengen zu niedrig).
+  - `fill`: `params = {measure, item?, question?}`; Frage = `question` oder „How full is the {item}? Answer with one
+    word: full, half, low or empty.“; `value` 0..1 (full 1, almost full 0,8, half 0,5, quarter 0,25, low 0,2, almost
+    empty 0,15, empty 0, Prozentangaben direkt). `state_set` immer `level`, Zustand **nur `ok` oder `out`**
+    (`out` ⇔ `value` < 0,15) – „knapp“ meldet diese Messart nie (eingeschränkte Variante, §12).
+  - Für `count`/`fill` gilt `vlm_max_age_s` ≥ 1800 (sonst 422); `supply: true` erlaubt (Einkaufsliste, Hinweise
+    wie bei anderen Vorräten). Periodische Fragen laufen wie alle `vlm`-Sensoren im gemeinsamen Fenster
+    (`VG_SENSOR_VLM_GAP_S`), sichtbare Änderung (`change`) oder Verdeckung durch Personen wie bisher.
+  - Antwort nicht lesbar → keine Messung, Zustand bleibt; `state_text` zeigt „(letzte Prüfung: Antwort unklar …)“.
+- **`verify_vlm` auch für `inventory_count`** (bisher nur `brightness|blink|reference`): `params.item` (Default aus
+  dem Vokabular: erster Prompt des ersten Labels + „s“) bzw. `params.question`; nur mit `min_count` ≤ 3 (sonst 422).
+  Ablauf: Kandidat nach der Hysterese → Zählfrage an das Bildmodell (höchstens 1× je 5 min und Sensor) →
+  gleicher Zustand: übernehmen; bisheriger Zustand: Wechsel verneint (Sperre bis `vlm_max_age_s`); dritter Zustand
+  (z. B. Kandidat `low`, Modell zählt 0): Zustand des Bildmodells übernehmen. Modell nicht verfügbar → billiger
+  Befund (`last_engine: "cheap"`). `verify_vlm` für `fill` bleibt 422.
+- `POST /sensors/{id}/evaluate` bei `vlm` und wirksamem `verify_vlm`: Zustand des Bildmodells wird direkt (ohne
+  Hysterese) übernommen; bei `inventory_count` ist `value` dann die Zahl des Bildmodells.
+- **VirtualSensor zusätzlich** `last_answer: str | null` – letzte Antwort des Bildmodells (≤ 300 Zeichen, nur im
+  Speicher des Backends, nach Neustart `null`).
+- **MCP** `list_sensors`/`get_sensor`: je Sensor zusätzlich `measure` (`yesno|count|fill`, bei `inventory_count`
+  `count`, bei `fill` `fill`, sonst `null`) und `last_answer`; Text mit Stückzahl bzw. letzter Antwort.
+- Umsetzung: `backend/app/vlm_measure.py` (Fragen, Antworten lesen; ohne Abhängigkeiten), `sensors.py`
+  (`vlm_measure_of`, `vlm_question`, `verify_enabled`, `_ask_vlm`), `routers/sensors.py` (Prüfungen), Oberfläche
+  `admin/Sensors.tsx` (Messart Ja/Nein · Anzahl · leer/nicht leer, Nachzählen), Typ `VlmMeasure` in `types.ts`.

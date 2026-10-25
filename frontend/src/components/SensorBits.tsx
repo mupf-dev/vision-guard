@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Eye, Gauge, Image as ImageIcon, Lightbulb, Package, RefreshCw, Sparkles, Square, Waves, PenLine, Check, X } from "lucide-react";
-import type { SensorKind, SensorState, VirtualSensor } from "../lib/types";
+import type { SensorKind, SensorState, VirtualSensor, VlmMeasure } from "../lib/types";
 import { api } from "../lib/api";
 import { isMock, mockSnapshot } from "../lib/mock";
 
@@ -12,8 +12,16 @@ export const SENSOR_KIND: Record<SensorKind, { name: string; icon: React.ReactNo
   reference: { name: "Referenzbilder", icon: <ImageIcon size={15} />, text: "Vergleich mit aufgenommenen Bildern „an“ und „aus“ (z. B. Fenster offen/zu, Tür, Rollladen)." },
   inventory_count: { name: "Gegenstände zählen", icon: <Package size={15} />, text: "Zählt erkannte Gegenstände im Bereich (z. B. Flaschen im Regal). Braucht die Gegenstandserkennung der Kamera." },
   fill: { name: "Füllstand", icon: <Gauge size={15} />, text: "Vergleich mit Bildern „voll“, „halb“ und „leer“ (z. B. Obstschale, Futterbehälter, Holzstapel)." },
-  vlm: { name: "Bildmodell", icon: <Sparkles size={15} />, text: "Ja/Nein-Frage an das Bildmodell („Is the stove on?“) – nur bei sichtbarer Änderung oder nach Ablauf der Höchstzeit." },
+  vlm: { name: "Bildmodell", icon: <Sparkles size={15} />, text: "Frage an das Bildmodell: Ja/Nein („Is the stove on?“), Anzahl („How many bottles?“) oder leer/nicht leer – nur bei sichtbarer Änderung oder nach Ablauf der Höchstzeit." },
 };
+
+/** W4 (C4-VLM): Messart eines Bildmodell-Sensors bzw. der Rückfrage eines Zählsensors */
+export function vlmMeasure(s: Pick<VirtualSensor, "kind" | "params">): VlmMeasure | null {
+  if (s.kind === "inventory_count") return "count";
+  if (s.kind !== "vlm") return null;
+  const m = (s.params as { measure?: string } | undefined)?.measure;
+  return m === "count" || m === "fill" ? m : "yesno";
+}
 
 export const STATE_NAME: Record<SensorState, string> = { on: "an", off: "aus", ok: "ok", low: "knapp", out: "leer", unknown: "unklar" };
 export const STATE_CLASS: Record<SensorState, string> = { on: "ok", off: "outline", ok: "ok", low: "warn", out: "bad", unknown: "" };
@@ -25,7 +33,7 @@ export function SensorStateBadge({ s }: { s: Pick<VirtualSensor, "state" | "enab
 }
 
 /** Messwert lesbar: Helligkeit/Füllstand in %, Blinken als Schwankung, Zählung als Anzahl, Referenz als P(an). */
-export function fmtSensorValue(s: Pick<VirtualSensor, "kind" | "value">): string {
+export function fmtSensorValue(s: Pick<VirtualSensor, "kind" | "value"> & { params?: Record<string, unknown> }): string {
   const v = s.value;
   if (v === null || v === undefined) return "–";
   switch (s.kind) {
@@ -34,7 +42,12 @@ export function fmtSensorValue(s: Pick<VirtualSensor, "kind" | "value">): string
     case "reference": return `„an“ zu ${Math.round(v * 100)} %`;
     case "fill": return `Füllstand ${Math.round(v * 100)} %`;
     case "inventory_count": return `${Math.round(v)} Stück`;
-    case "vlm": return v >= 0.5 ? "Antwort: ja" : "Antwort: nein";
+    case "vlm": {
+      const m = vlmMeasure({ kind: s.kind, params: s.params ?? {} });
+      if (m === "count") return `${Math.round(v)} Stück (Bildmodell)`;
+      if (m === "fill") return v < 0.15 ? "Bildmodell: leer" : v >= 0.75 ? "Bildmodell: voll" : `Bildmodell: ca. ${Math.round(v * 100)} %`;
+      return v >= 0.5 ? "Antwort: ja" : "Antwort: nein";
+    }
   }
 }
 
