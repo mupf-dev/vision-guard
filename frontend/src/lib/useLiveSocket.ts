@@ -24,6 +24,15 @@ function refreshInventory(qc: QueryClient) {
   }, 800);
 }
 
+let presTimer: number | undefined;
+function refreshPresence(qc: QueryClient) {
+  if (presTimer !== undefined) return;
+  presTimer = window.setTimeout(() => {
+    presTimer = undefined;
+    qc.invalidateQueries({ queryKey: ["presence"] });
+  }, 1000);
+}
+
 function handle(msg: WsMessage, qc: QueryClient) {
   const s = useLive.getState();
   switch (msg.type) {
@@ -102,6 +111,9 @@ function handle(msg: WsMessage, qc: QueryClient) {
       break;
     case "report":
       qc.invalidateQueries({ queryKey: ["reports"] });
+      break;
+    case "presence":         // W4 (C2): Anwesenheit gedrosselt neu laden
+      refreshPresence(qc);
       break;
   }
 }

@@ -18,6 +18,7 @@ import type {
   AskInput, AskList, AskResult, HistoryFrameThumb, HistorySearch, HistoryStats, SensorHistoryEntry, SensorInput,
   SensorKind, SensorReference, ShoppingItem, ShoppingList, VirtualSensor,
 } from "./types";
+import type { Presence, PresenceStatus } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -289,6 +290,10 @@ export const api = {
   historyStats: () => get<HistoryStats>("/history/stats"),
   deleteHistory: (q: { camera_id?: number; before?: string } = {}) =>
     request<{ deleted: number }>("DELETE", "/history", undefined, q),
+  // W4 C2: Anwesenheit
+  presence: (minutes = 60, label?: string) => get<Presence[]>("/presence", { minutes, label }),
+  presenceStatus: () => get<PresenceStatus>("/presence/status"),
+  clearPresence: () => del("/presence"),
 };
 
 /** Antwort von /identities/{id}/events darf laut Vertrag "wie /events" sein – tolerant auch für Arrays. */

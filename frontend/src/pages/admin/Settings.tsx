@@ -9,6 +9,7 @@ import { InventorySettingsCard } from "./InventorySettings";
 import { NotificationSettingsCard, targetProblem } from "./NotificationSettings";
 import { ReviewSettingsCard } from "./ReviewSettings";
 import { PersonSettingsCard } from "./PersonSettings";
+import { ReidSettingsCard } from "./ReidSettings";
 import { PetSettingsCard } from "./PetSettings";
 import { ReportSettingsCard } from "./ReportSettings";
 import { AiSettingsCard } from "./AiSettings";
@@ -74,6 +75,7 @@ export function SettingsPage() {
         {/* W2: je Thema eine Karte (Fach-Agenten ändern nur ihre Datei) */}
         <ReviewSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <PersonSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        <ReidSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <PetSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <ReportSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         <AiSettingsCard f={f} saved={q.data} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />

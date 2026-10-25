@@ -23,6 +23,7 @@ const EMPTY: CameraInput = {
   inventory_tiling: false, health_enabled: true,
   pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {}, inventory_suppress: [],
   vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
+  reid_enabled: false,
 };
 
 function strip(c: Camera): CameraInput {
@@ -33,22 +34,34 @@ function strip(c: Camera): CameraInput {
 
 /** W2 (C1/D1): Haltung/Sturz und Gesten je Kamera (Pose-Modell yolo11n-pose, nur bei Personen im Bild) */
 function PersonAnalysis({ f, set }: { f: CameraInput; set: <K extends keyof CameraInput>(k: K, v: CameraInput[K]) => void }) {
-  const sys = useQuery({ queryKey: ["system"], queryFn: api.system, staleTime: 10_000, enabled: f.pose_enabled || f.gesture_enabled });
-  const model = (sys.data?.worker?.models as Record<string, string> | undefined)?.pose;
+  const sys = useQuery({ queryKey: ["system"], queryFn: api.system, staleTime: 10_000, enabled: f.pose_enabled || f.gesture_enabled || f.reid_enabled });
+  const models = sys.data?.worker?.models as Record<string, string> | undefined;
+  const model = models?.pose;
+  const reidModel = models?.reid;
   const noPerson = !f.labels.includes("person");
   return (
     <div className="field span-2"><label><PersonStanding size={13} style={{ verticalAlign: -2 }} /> Personenanalyse</label>
       <div className="row-wrap" style={{ gap: 24 }}>
         <Switch checked={f.pose_enabled} onChange={(v) => set("pose_enabled", v)} label="Haltung / Sturz erkennen" />
         <Switch checked={f.gesture_enabled} onChange={(v) => set("gesture_enabled", v)} label="Armgesten erkennen" />
+        <Switch checked={f.reid_enabled} onChange={(v) => set("reid_enabled", v)} label="Wiedererkennung über Kameras" />
       </div>
       <span className="hint muted" style={{ fontSize: 12 }}>
         Rechnet ein Pose-Modell (≈ 0,1 GB Grafikspeicher), nur solange eine Person im Bild ist: Haltung 2×/s, Gesten 5×/s.
         Auslösen über Regeln mit „Haltung“ bzw. „Geste“; Sofa/Bett als Zone anlegen und in der Regel ausschließen.
         {(f.pose_enabled || f.gesture_enabled) && model ? <> Modell: <b>{model}</b>.</> : null}
       </span>
-      {(f.pose_enabled || f.gesture_enabled) && noPerson && (
-        <span className="hint" style={{ fontSize: 12, color: "var(--warn)" }}>„Person“ ist bei den erkannten Objekten nicht ausgewählt – ohne Personen-Tracks gibt es keine Pose.</span>
+      {f.reid_enabled && (
+        <span className="hint muted" style={{ fontSize: 12 }}>
+          Wiedererkennung: verknüpft Personen ohne erkanntes Gesicht anhand von Kleidung und Statur mit anderen Kameras
+          (Seite „Anwesenheit“). Rechnet auf dem Prozessor (kein Grafikspeicher), nur für Personen ab ≈ 128 px Höhe.
+          Die Merkmale bleiben nur im Arbeitsspeicher und verfallen nach der eingestellten Zeit – nichts wird gespeichert.
+          Nur ein Hinweis: bei ähnlicher Kleidung sind Verwechslungen möglich.
+          {reidModel ? <> Modell: <b>{reidModel}</b>.</> : null}
+        </span>
+      )}
+      {(f.pose_enabled || f.gesture_enabled || f.reid_enabled) && noPerson && (
+        <span className="hint" style={{ fontSize: 12, color: "var(--warn)" }}>„Person“ ist bei den erkannten Objekten nicht ausgewählt – ohne Personen-Tracks gibt es keine Personenanalyse.</span>
       )}
     </div>
   );
@@ -181,7 +194,7 @@ export function CamerasPage() {
                   {c.face_recognition && <span className="badge info">Gesichter</span>}
                   {c.plate_recognition && <span className="badge warn">Kennzeichen</span>}
                   {c.pet_recognition && <span className="badge ok" style={{ animation: "none" }}>Tiere</span>}
-                  {(c.pose_enabled || c.gesture_enabled) && <span className="badge info" title="Personenanalyse (Pose)"><PersonStanding size={11} />{[c.pose_enabled && "Haltung", c.gesture_enabled && "Gesten"].filter(Boolean).join(" + ")}</span>}
+                  {(c.pose_enabled || c.gesture_enabled || c.reid_enabled) && <span className="badge info" title="Personenanalyse"><PersonStanding size={11} />{[c.pose_enabled && "Haltung", c.gesture_enabled && "Gesten", c.reid_enabled && "Wiedererkennung"].filter(Boolean).join(" + ")}</span>}
                   {c.inventory_enabled && <span className="badge accent" title={`alle ${c.inventory_interval_s} s · ${c.inventory_labels.length ? `${c.inventory_labels.length} Gegenstände` : "gesamtes Vokabular"}`}><Package size={11} />Gegenstände</span>}
                   {c.room && <span className="badge outline">{c.room}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>{c.labels.map(labelName).join(", ")}</span>

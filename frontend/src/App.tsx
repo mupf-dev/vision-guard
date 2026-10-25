@@ -15,6 +15,7 @@ import { PetsPage } from "./pages/Pets";
 import { ReportsPage } from "./pages/Reports";
 import { HistoryPage } from "./pages/History";
 import { SuppliesPage } from "./pages/Supplies";
+import { PresencePage } from "./pages/Presence";
 import { SensorsPage } from "./pages/admin/Sensors";
 import { AdminLayout } from "./pages/admin/AdminLayout";
 import { CamerasPage } from "./pages/admin/Cameras";
@@ -61,6 +62,7 @@ export function App() {
           <Route path="berichte" element={<ReportsPage />} />
           <Route path="zeitmaschine" element={<HistoryPage />} />
           <Route path="vorraete" element={<SuppliesPage />} />
+          <Route path="anwesenheit" element={<PresencePage />} />
           <Route path="statistik" element={<StatsPage />} />
           <Route path="admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="kameras" replace />} />

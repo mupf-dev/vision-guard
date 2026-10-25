@@ -54,6 +54,8 @@ export interface Camera {
   history_enabled: boolean;
   history_interval_s: number;
   history_tiling: boolean;
+  /** W4 C2: Personen über Kameras wiedererkennen (Kleidung/Statur, Embeddings nur im RAM) */
+  reid_enabled: boolean;
   status?: CameraStatus | null;
 }
 
@@ -305,6 +307,10 @@ export interface Settings {
   retention_days_history: number;
   history_min_change: number;
   history_model: "siglip2-b16-256" | "mobileclip2-s0";
+  // W4: Person über mehrere Kameras (C2)
+  reid_ttl_min: number;
+  reid_match_threshold: number;
+  reid_assign_identity: boolean;
 }
 
 export interface InventoryVocabEntry {
@@ -348,7 +354,8 @@ export type WsMessage =
   | PetVisitMsg
   | ReportMsg
   | SensorMsg
-  | ShoppingListMsg;
+  | ShoppingListMsg
+  | PresenceMsg;
 
 export interface IdentityDeleted {
   id: number;
@@ -1053,3 +1060,60 @@ export interface HistoryStats {
   /** Setting history_model */
   model?: string;
 }
+
+// ---------------------------------------------------------------- W4 C2: Anwesenheit / Person über mehrere Kameras
+
+/** face/pet = eigene Erkennung des aktuellen Tracks, reid = über Kleidung/Statur von einer anderen Kamera
+ *  übernommen, none = unbekannt */
+export type PresenceSource = "face" | "pet" | "reid" | "none";
+
+export interface PresenceTrail {
+  camera_id: number;
+  camera_name: string | null;
+  since: string | null;
+  last_seen: string | null;
+  active: boolean;
+  event_id: string | null;
+  via: "face" | "reid" | "track";
+}
+
+export interface Presence {
+  presence_key: string;
+  label: "person" | "dog" | "cat" | string;
+  identity: { id: number; kind: IdentityKind; display_name: string; name: string | null } | null;
+  source: PresenceSource;
+  /** 0..1 – bei reid der Kosinus-Score der Verknüpfung, bei face/pet 1 */
+  confidence: number;
+  camera_id: number;
+  camera_name: string | null;
+  room: string | null;
+  zones: string[];
+  zone_names: string[];
+  active: boolean;
+  since: string | null;
+  last_seen: string | null;
+  event_id: string | null;
+  thumb_url: string | null;
+  /** letzte Tracks dieses Eintrags (neueste zuerst) */
+  trail: PresenceTrail[];
+}
+
+export interface PresenceDeleted {
+  presence_key: string;
+  deleted: true;
+  merged_into?: string;
+}
+
+export interface PresenceStatus {
+  entries: number;
+  active: number;
+  embeddings: number;
+  requests: number;
+  linked: number;
+  new: number;
+  identity_given: number;
+  merged: number;
+  expired: number;
+}
+
+export type PresenceMsg = { type: "presence"; presence: Presence | PresenceDeleted };

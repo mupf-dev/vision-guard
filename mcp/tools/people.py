@@ -1,51 +1,77 @@
-"""Personen und Tiere: who_is_where."""
+"""Personen und Tiere: who_is_where (W4/C2: aus GET /presence – aktuell sichtbar und „zuletzt gesehen“)."""
 
 from __future__ import annotations
 
+from typing import Optional
 
-from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult
 
-from .common import READ_ONLY, BackendError, api, cameras, fail, fmt_time, ok, where
+from .common import READ_ONLY, BackendError, api, fail, fmt_ago, fmt_time, ok, where
 
-PEOPLE_LABELS = "person,dog,cat"
+LABEL_DE = {"person": "Person", "dog": "Hund", "cat": "Katze"}
+SOURCE_DE = {"face": "Gesicht", "pet": "Tiererkennung", "reid": "Wiedererkennung über Kameras", "none": ""}
 
 
+def _entry(p: dict) -> dict:
+    ident = p.get("identity") or {}
+    label = p.get("label") or "person"
+    return {
+        "display_name": ident.get("display_name") or f"Unbekannt ({LABEL_DE.get(label, label)})",
+        "identity_id": ident.get("id"),
+        "kind": ident.get("kind"),
+        "label": label,
+        "presence_key": p.get("presence_key"),
+        "source": p.get("source"),
+        "confidence": p.get("confidence"),
+        "active": bool(p.get("active")),
+        "camera_id": p.get("camera_id"),
+        "camera_name": p.get("camera_name"),
+        "room": p.get("room"),
+        "zones": p.get("zone_names") or p.get("zones") or [],
+        "since": p.get("since"),
+        "last_seen": p.get("last_seen"),
+        "thumb_url": p.get("thumb_url"),
+    }
 
-def register(mcp: MCPServer) -> None:
+
+def _line(p: dict) -> str:
+    text = f"- {p['display_name']}: "
+    if p["active"]:
+        text += f"{where(p['camera_name'], p['room'])}, seit {fmt_time(p['since'])}"
+    else:
+        text += f"zuletzt gesehen {fmt_ago(p['last_seen'])} ({fmt_time(p['last_seen'])}), {where(p['camera_name'], p['room'])}"
+    if p["zones"]:
+        text += ", Zone " + ", ".join(map(str, p["zones"]))
+    src = SOURCE_DE.get(p.get("source") or "", "")
+    if src and p.get("identity_id"):
+        conf = p.get("confidence")
+        text += f" – erkannt per {src}" + (f" ({round(conf * 100)} %)" if p.get("source") == "reid" and conf else "")
+    return text
+
+
+def register(mcp) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def who_is_where(ctx: Context) -> CallToolResult:
-        """Wer (Personen, Hunde, Katzen) ist gerade wo zu sehen? Mit erkannter Identität, Kamera, Raum und Zeit."""
+    async def who_is_where(ctx: Context, minutes: Optional[int] = 60) -> CallToolResult:
+        """Wer (Personen, Hunde, Katzen) ist gerade wo zu sehen – und wer wurde in den letzten `minutes` Minuten
+        (Standard 60) zuletzt wo gesehen? Mit Identität (Gesicht, Tiererkennung oder Wiedererkennung über Kameras
+        anhand der Kleidung), Kamera, Raum und Zeit."""
         try:
-            cams = {c.get("id"): c for c in await cameras(ctx)}
-            data = await api(ctx, "/events", {"active": "true", "label": PEOPLE_LABELS, "signed": 1, "limit": 100})
-            label_de = {"person": "Person", "dog": "Hund", "cat": "Katze"}
-            people = []
-            for ev in data.get("items", []):
-                ident = ev.get("identity") or {}
-                cam = cams.get(ev.get("camera_id")) or {}
-                zone_names = {z.get("id"): z.get("name") for z in cam.get("zones") or []}
-                people.append({
-                    "display_name": ident.get("display_name") or f"Unbekannt ({label_de.get(ev.get('label'), ev.get('label'))})",
-                    "identity_id": ident.get("id"),
-                    "kind": ident.get("kind"),
-                    "label": ev.get("label"),
-                    "camera_id": ev.get("camera_id"),
-                    "camera_name": ev.get("camera_name") or cam.get("name"),
-                    "room": cam.get("room"),
-                    "since": ev.get("start_ts"),
-                    "zones": [zone_names.get(z, z) for z in ev.get("zones") or []],
-                    "thumb_url": ev.get("thumb_url"),
-                })
+            m = max(1, min(720, int(minutes or 60)))
+            data = await api(ctx, "/presence", {"minutes": m, "signed": 1})
+            people = [_entry(p) for p in (data or []) if isinstance(p, dict)]
             if not people:
-                return ok("Derzeit ist niemand zu sehen.", {"people": []})
-            lines = []
-            for p in people:
-                line = f"- {p['display_name']}: {where(p['camera_name'], p['room'])}"
-                if p["zones"]:
-                    line += ", Zone " + ", ".join(map(str, p["zones"]))
-                line += f", seit {fmt_time(p['since'])}"
-                lines.append(line)
-            return ok(f"{len(people)} gerade sichtbar:\n" + "\n".join(lines), {"people": people})
+                return ok(f"Derzeit ist niemand zu sehen, und in den letzten {m} min wurde niemand erfasst.",
+                          {"people": []})
+            now = [p for p in people if p["active"]]
+            before = [p for p in people if not p["active"]]
+            parts = []
+            if now:
+                parts.append(f"{len(now)} gerade sichtbar:\n" + "\n".join(_line(p) for p in now))
+            else:
+                parts.append("Gerade ist niemand zu sehen.")
+            if before:
+                parts.append(f"Zuletzt gesehen (letzte {m} min):\n" + "\n".join(_line(p) for p in before))
+            return ok("\n".join(parts), {"people": people})
         except BackendError as e:
             return fail(str(e))
