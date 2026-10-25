@@ -40,6 +40,9 @@ class EmbedService:
         self._thread: threading.Thread | None = None
         self.hist: deque[tuple[float, float]] = deque(maxlen=500)   # (ts, ms je Anfrage)
         self.dropped = 0
+        # W3 (B1): SigLIP-2-Kodierer der Zeitmaschine (model "siglip2"), setzt history.HistoryEngine:
+        # Objekt mit encode_text(list[str]) -> np.ndarray[n, 768], encode_images(list[BGR]) -> np.ndarray, model_name
+        self.siglip = None
 
     # ------------------------------------------------------------------ Eingang (MQTT-Thread)
     def submit(self, msg: dict) -> None:
@@ -150,8 +153,12 @@ class EmbedService:
 
     def _handle(self, req: dict) -> None:
         kind = req.get("kind")
-        if kind == "text":
-            self._reply(req, ok=False, error="kind text nicht unterstützt")
+        model = req.get("model") or ("siglip2" if kind == "text" else "dinov2")
+        if model not in ("dinov2", "siglip2"):
+            self._reply(req, ok=False, error=f"unbekanntes Modell: {model}")
+            return
+        if model == "siglip2" or kind == "text":   # W3 (B1): Zeitmaschine
+            self._handle_siglip(req, kind)
             return
         if kind not in ("item", "image"):
             self._reply(req, ok=False, error=f"unbekannte Art: {kind}")
@@ -174,3 +181,31 @@ class EmbedService:
         self._reply(req, ok=True, model=settings.PET_MODEL, dim=int(mean.shape[0]),
                     embedding=[round(float(v), 6) for v in mean], variants=variants, width=int(w), height=int(h),
                     ms=round(ms, 2))
+
+    def _handle_siglip(self, req: dict, kind: str) -> None:
+        """W3 (B1): Text (CPU) bzw. Bild mit SigLIP 2 – 768-d, L2-normiert."""
+        enc = self.siglip
+        if enc is None:
+            self._reply(req, ok=False, error="Modell siglip2 nicht verfügbar")
+            return
+        if kind not in ("text", "image"):
+            self._reply(req, ok=False, error=f"Art {kind} mit siglip2 nicht unterstützt")
+            return
+        t0 = time.perf_counter()
+        if kind == "text":
+            text = str(req.get("text") or "").strip()
+            if not text:
+                self._reply(req, ok=False, error="text fehlt")
+                return
+            embs = enc.encode_text([text[:500]])
+            w = h = None
+        else:
+            img = self._load_image(req)
+            h, w = img.shape[:2]
+            embs = enc.encode_images([img])
+        vec = embs[0]
+        ms = (time.perf_counter() - t0) * 1000
+        self.hist.append((time.time(), ms))
+        self._reply(req, ok=True, model=getattr(enc, "model_name", "siglip2"), dim=int(vec.shape[0]),
+                    embedding=[round(float(v), 6) for v in vec], variants=None,
+                    width=int(w) if w else None, height=int(h) if h else None, ms=round(ms, 2))

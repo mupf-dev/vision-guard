@@ -84,7 +84,9 @@ class Service:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception:  # noqa: BLE001
             pass
-        client.subscribe([("vg/internal/config", 1), ("vg/internal/cmd/+", 1), ("vg/internal/embed", 1)])
+        client.subscribe([("vg/internal/config", 1), ("vg/internal/cmd/+", 1), ("vg/internal/embed", 1),
+                          # W3 (K3): GPU-Lease für den vlm-Dienst
+                          ("vg/internal/gpu/request", 1), ("vg/internal/gpu/release", 1)])
         self.reload_ev.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
@@ -102,6 +104,8 @@ class Service:
         elif msg.topic == "vg/internal/embed":   # W2: Embedding-Anfragen (geteiltes DINOv2)
             if not msg.retain:
                 self.pipeline.embed.submit(payload)
+        elif msg.topic.startswith("vg/internal/gpu/"):   # W3: GPU-Lease (request/release)
+            self.pipeline.lease.on_message(msg.topic, payload, retained=bool(msg.retain))
         elif msg.topic.startswith("vg/internal/cmd/"):
             if msg.retain:
                 return   # never execute stale retained commands
@@ -136,7 +140,8 @@ class Service:
             self.publish(f"vg/internal/status/{cid}", st, 0, True)
         perf = self.pipeline.perf()
         self.publish("vg/internal/system", {"gpu": gpu_info(), "models": self.pipeline.models_status(),
-                                            "perf": perf, "online": True, "ts": round(time.time(), 3)}, 0, True)
+                                            "perf": perf, "gpu_lease": self.pipeline.gpu_lease(),
+                                            "online": True, "ts": round(time.time(), 3)}, 0, True)
         log.debug("perf %s", perf)
 
     def run(self):

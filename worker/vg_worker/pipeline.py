@@ -104,6 +104,18 @@ class Pipeline:
         from .pose import PoseEngine
         self.pose = PoseEngine(publish, self.gpu, lambda cid: self.cams.get(cid))
         self.lying_grace_s = settings.LYING_GRACE_S
+        # W3 (K3): Frame-Tap (Abnehmer je Kamera: A3 Sensoren, B1 Zeitmaschine) und GPU-Lease (A2 vlm)
+        from .frametap import FrameTapHub
+        from .gpu_lease import GpuLeaseManager
+        self.taps = FrameTapHub()
+        self.lease = GpuLeaseManager(publish)
+        self.lease.register("inventory", self.inventory.pause_gpu, self.inventory.resume_gpu)
+        # W3: Fach-Module (Gerüste aus K3): Sensoren (A3), Zeitmaschine (B1)
+        from .history import HistoryEngine
+        from .sensors import SensorEngine
+        self.sensors = SensorEngine(publish, self.taps, self.identifier.pet)
+        self.history = HistoryEngine(publish, self.taps, self.gpu)
+        self.lease.register("history", self.history.pause_gpu, self.history.resume_gpu)
 
     # ------------------------------------------------------------------ lifecycle
     def load_detector(self):
@@ -119,6 +131,7 @@ class Pipeline:
         threading.Thread(target=self._infer_loop, name="infer", daemon=True).start()
         threading.Thread(target=self._expire_loop, name="expire", daemon=True).start()
         self.health.start()
+        self.lease.start()
 
     def _cams_snapshot(self) -> dict[int, CameraRuntime]:
         with self.lock:
@@ -130,6 +143,10 @@ class Pipeline:
         self.health.stop()
         self.embed.stop()
         self.pose.stop()
+        self.sensors.stop()
+        self.history.stop()
+        self.taps.stop()
+        self.lease.stop()
         with self.lock:
             cams = list(self.cams.values())
             self.cams.clear()
@@ -181,11 +198,20 @@ class Pipeline:
             self.pose.configure(list(wanted.values()))
         except Exception:  # noqa: BLE001
             log.exception("pose configuration failed")
+        for name, mod in (("sensors", self.sensors), ("history", self.history)):   # W3
+            try:
+                mod.configure(list(wanted.values()))
+            except Exception:  # noqa: BLE001
+                log.exception("%s configuration failed", name)
 
     def set_settings(self, s: dict | None):
         """Globale Settings aus GET /api/internal/settings (Inventar: confirm_n/miss_m)."""
         self.inventory.set_settings(s)
         self.pose.set_settings(s)
+        try:
+            self.history.set_settings(s)          # W3 (B1)
+        except Exception:  # noqa: BLE001
+            log.exception("history settings failed")
         if s and s.get("fall_track_grace_s") is not None:
             try:
                 self.lying_grace_s = max(0.0, min(300.0, float(s["fall_track_grace_s"])))
@@ -248,9 +274,14 @@ class Pipeline:
             c.done_times.append(time.time())
             c.last_ts = f.ts
             self.publish(f"vg/internal/detections/{c.id}", det_msg, 0, False)
+            persons = None
+            if self.inventory.wants_persons(c.id) or self.taps.active():
+                # rohe Detektionen (unabhängig vom Label-Filter der Kamera) – Personen verdecken Gegenstände/Bereiche
+                persons = [d[2] for d in dets if d[0] == "person" and d[1] >= 0.3]
             if self.inventory.wants_persons(c.id):
-                # rohe Detektionen (unabhängig vom Label-Filter der Kamera) – Personen verdecken Gegenstände
-                self.inventory.note_persons(c.id, f.ts, [d[2] for d in dets if d[0] == "person" and d[1] >= 0.3])
+                self.inventory.note_persons(c.id, f.ts, persons)
+            if self.taps.active():      # W3: Frame-Tap (gedrosselt je Abnehmer/Kamera, verwirft statt queuen)
+                self.taps.offer(c, f.ts, f.image, det_msg, persons)
             for m in msgs:
                 self.publish(f"vg/internal/track/{c.id}", m, 1, False)
             if self.pose.wants(c.id):
@@ -378,17 +409,24 @@ class Pipeline:
         d["inventory"] = self.inventory.status_text()
         d["embed"] = self.embed.status()
         d["pose"] = self.pose.status_text()
+        d["history"] = self.history.status_text()
         return d
+
+    def gpu_lease(self) -> dict | None:
+        """W3: aktive GPU-Lease für vg/internal/system.gpu_lease."""
+        return self.lease.status()
 
     def perf(self) -> dict:
         now = time.time()
         h = [x for x in self.batch_hist if now - x[0] <= 10]
         if not h:
             return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf(),
-                    "health": self.health.perf(), "embed": self.embed.perf(), "pose": self.pose.perf()}
+                    "health": self.health.perf(), "embed": self.embed.perf(), "pose": self.pose.perf(),
+                    "taps": self.taps.perf(), "sensors": self.sensors.perf(), "history": self.history.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
                 "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
                 "inventory": self.inventory.perf(), "health": self.health.perf(), "embed": self.embed.perf(),
-                "pose": self.pose.perf()}
+                "pose": self.pose.perf(), "taps": self.taps.perf(), "sensors": self.sensors.perf(),
+                "history": self.history.perf()}

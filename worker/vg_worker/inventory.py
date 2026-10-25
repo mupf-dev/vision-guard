@@ -707,6 +707,9 @@ class InventoryEngine:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
+        # W3 (K3): GPU-Lease – YOLOE entladen, solange ein anderer Dienst (vlm) die GPU geliehen hat
+        self._pause_holder: str | None = None
+        self._paused_ev = threading.Event()
         self.runs: deque[tuple[float, float]] = deque(maxlen=500)     # (ts, gpu ms)
         self.skips: deque[float] = deque(maxlen=500)
         self.cols, self.rows = parse_tiles(settings.INVENTORY_TILES)
@@ -771,6 +774,29 @@ class InventoryEngine:
                 c.removed = True
                 self._publish_stopped(c)
 
+    # ------------------------------------------------------------------ GPU-Lease (W3.C)
+    def pause_gpu(self, holder: str, timeout: float = 8.0) -> bool:
+        """YOLOE entladen und bis ``resume_gpu`` nicht neu laden. Blockiert, bis der Inventar-Thread das Modell
+        freigegeben hat (≤ timeout). True = Modell nicht (mehr) im VRAM."""
+        self._paused_ev.clear()
+        self._pause_holder = holder or "?"
+        if self._thread is None or not self._thread.is_alive():
+            if self.model is not None:            # sollte nicht vorkommen (Modell nur im Thread geladen)
+                self.model.close()
+                self.model = None
+            self.status = f"paused: GPU-Lease {self._pause_holder}"
+            return True
+        self._wake.set()
+        return self._paused_ev.wait(timeout)
+
+    def resume_gpu(self) -> None:
+        """Lease beendet: YOLOE darf beim nächsten Takt wieder laden."""
+        self._pause_holder = None
+        self._paused_ev.clear()
+        if self.status.startswith("paused"):
+            self.status = "off"
+        self._wake.set()
+
     # ------------------------------------------------------------------ status
     def status_text(self) -> str:
         return self.status
@@ -818,6 +844,25 @@ class InventoryEngine:
     def _run(self):
         last_err_log = 0.0
         while not self._stop.is_set():
+            if self._pause_holder is not None:          # W3: GPU-Lease → Modell entladen, Takte verfallen
+                if self.model is not None:
+                    log.info("GPU-Lease (%s): unloading inventory model", self._pause_holder)
+                    m, self.model = self.model, None
+                    m.model = None
+                    del m
+                    import gc
+                    gc.collect()                          # Zyklen in ultralytics-Objekten, sonst bleibt VRAM belegt
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:  # noqa: BLE001
+                        pass
+                self.status = f"paused: GPU-Lease {self._pause_holder}"
+                self._paused_ev.set()
+                self._wake.wait(1.0)
+                self._wake.clear()
+                continue
             with self.lock:
                 cams = list(self.cams.values())
             now = time.time()
@@ -906,7 +951,7 @@ class InventoryEngine:
         unsure: list[tuple[str, str, float, list[float]]] = []
         self.model.warmup(settings.INVENTORY_IMGSZ)          # nur nach Laden/Vokabularwechsel, ohne Lock
         for img, imgsz, ox, oy, tile in jobs:
-            if self._stop.is_set() or c.removed:
+            if self._stop.is_set() or c.removed or self._pause_holder is not None:
                 return
             small, scale = self.model.prepare(img, imgsz)     # CPU-Arbeit vor dem Lock
             lock = self.gpu.inventory_slot()
