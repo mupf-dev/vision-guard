@@ -199,3 +199,39 @@ Gegenüber W0 (4 141 MiB Spitze, Ø 4,99 fps an `cam_3`) unverändert – Welle 
 - Das Zugriffslog des Backends enthält signierte Medien-URLs inkl. `sig` (zeitlich begrenzt, bestand schon vor W1);
   ggf. Query im Access-Log kürzen.
 - `kv.rule_time_runs` behält den Eintrag der gelöschten Testregel (harmlos).
+
+## Welle 2 – Kickoff K2 (2026-10-25, nachts, autonom)
+
+Vertrag und Gerüst für B4+D2, C1+D1, C3 und B3 stehen in CONTRACT.md, Abschnitt „Nachträge: Welle 2“ (W2.A–I).
+
+- **Gebaut:** Spalten `rules.repeat_s/repeat_max`, `events.acknowledged_at`, `cameras.pose_enabled/gesture_enabled/
+  inventory_label_min_scores/inventory_suppress`, `identities.item_label`, `identity_samples.negative/source`,
+  `inventory_items.identity_id/identity_score`; Tabellen `review_requests`, `inventory_examples`, `pet_visits`,
+  `reports`; Index `ix_inventory_items_identity_id`; alle W2-Settings (inkl. `llm_*`, standardmäßig aus).
+  Gemeinsame Bausteine **fertig**: Embedding-Dienst (`worker/vg_worker/embed.py` mit geteiltem DINOv2,
+  `backend/app/embed_client.py`), Rückfragen-Kern (`review.py`: Dedup, Limits, Verfall, Antworten mit
+  Wirkungs-Registry, REST `/review`, WS `review`), LLM-Client (`llm_client.py`, openai_compat + anthropic,
+  `POST /settings/llm_test`), Track-Trigger-Evaluatoren in der Regel-Registry (`posture`/`gesture` registriert,
+  `dispatch_track_phase`, Tick-Phase), MQTT-Handler-Registry (`mqtt_bus.register_handler`), `POST /events/{id}/ack`,
+  MCP-Schreibregel (`require_write`, `api_send`, `WRITE`). Platzhalter mit fertiger Verdrahtung: `pose_events.py`,
+  `item_identity.py`, `pet_diary.py`, `report/`, Router `pets`/`reports`, MCP `alerts/review/pets/reports`,
+  Seiten „Bitte bestätigen“ (funktionsfähig), „Tiere“, „Berichte“, Einstellungs-Karten je Thema,
+  „KI-Sprachmodell“ (fertig). Test-Server `scripts/llm_mock.py` (OpenAI-kompatibel, ohne Kosten).
+- **Geprüft:** `py_compile` aller Module, `corepack pnpm build` grün, backend/worker/frontend/mcp neu gebaut
+  (`healthy`). Embedding über `vg/internal/embed` an echten Inventar-Crops von `cam_3`: 384-d, L2-normiert,
+  Rechenzeit Median 8,7 ms, **Rundlauf Median 9,9 ms, max. 13,6 ms** (Abnahme < 15 ms erfüllt), `augment` 12 ms,
+  0 MB zusätzliches VRAM (Tiermodell war geladen); Pfad-Ausbruch und fehlende Datei → `ok:false`.
+  REST mit temporärem Key (read+write, danach widerrufen): neue Settings inkl. 422 bei falschem Zweck, Regel
+  `posture` gespeichert, `gesture` leer/falsch und `repeat_s` 5 → 422; Rückfrage anlegen → Dublette verworfen →
+  „Nein“ (Quelle `mcp`) → zweite Antwort 409 → nach „Nein“ nie wieder; `ack` (danach zurückgesetzt); LLM-Client
+  gegen `llm_mock` (Docker-Netz) ok, danach wieder `none`. Screenshots der neuen Seiten/Karten ohne JS-Fehler.
+- **Entscheidungen:** `item_match_threshold` 0,55 und `item_min_px` 90 aus messungen.md §3 (statt 0,70 im Entwurf).
+  `pet_alerts` und `review_push` entfallen (Notifications `pet`/`review`), C3-Hinweise also ohne eigene Tabelle.
+  `reports.period_key` (eindeutig, nur `daily`) statt Unique über (`kind`, `period_start`). Posture-Ausschlusszonen
+  als `trigger_options.exclude_zone_ids`. Augmentierung: Original, gespiegelt, 120 px und 64 px (Empfehlung
+  messungen.md), Rückgabe Mittelwert **und** Einzelfassungen. `TCP_NODELAY` für Worker/Backend-MQTT und
+  `set_tcp_nodelay true` im Broker (vorher +40 ms je Antwort durch Delayed ACK; Mosquitto neu gestartet, retained
+  Nachrichten werden ohnehin alle 3–30 s neu gesendet). LLM-/SMTP-Schlüssel nur per Env (`docker-compose.yml`,
+  `.env.example`), `.env` unverändert.
+- **Offen für die Fach-Agenten:** siehe Bericht K2 bzw. CONTRACT.md W2.C–W2.I. MCP-Selbsttest erwartet die
+  W2-Tools noch nicht (bei der Integration ergänzen).
