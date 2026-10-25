@@ -39,6 +39,7 @@ log = logging.getLogger("vg.vlm")
 SNAPSHOT_MAX_W = 1920
 INFER_TIMEOUT_S = 45.0          # Laden (bis ~10 s, Qwen) + Lease (≤ 10 s) + Antwort (≤ 20 s)
 HEALTH_EVERY_S = 10.0
+FRAME_CACHE = "3s"
 
 _YESNO_EN = ("is", "are", "am", "was", "were", "do", "does", "did", "can", "could", "has", "have", "had", "will",
              "would", "should", "shall", "may", "might", "must", "isn't", "aren't", "doesn't", "don't")
@@ -103,10 +104,14 @@ def crop_jpeg(data: bytes, region: Optional[list[float]], max_w: Optional[int] =
 
 
 def grab_frame(camera_id: int, timeout: float = 15.0) -> bytes:
-    """JPEG des Hauptstreams (volle Auflösung) über go2rtc."""
+    """JPEG des Hauptstreams (volle Auflösung) über go2rtc.
+
+    `cache=3s`: go2rtc liefert innerhalb von 3 s dasselbe Bild ohne erneutes Warten auf einen Keyframe (gemessen
+    `cam_3`: 0,6–2,0 s → 0 s) – mehrere Fragen kurz hintereinander (MCP-Agent, Sensoren) beziehen sich so auf
+    dasselbe Bild."""
     try:
-        r = httpx.get(f"{config.go2rtc_url}/api/frame.jpeg", params={"src": go2rtc.stream_name(camera_id)},
-                      timeout=timeout)
+        r = httpx.get(f"{config.go2rtc_url}/api/frame.jpeg",
+                      params={"src": go2rtc.stream_name(camera_id), "cache": FRAME_CACHE}, timeout=timeout)
     except httpx.HTTPError as e:
         log.info("Standbild Kamera %s nicht verfügbar: %s", camera_id, type(e).__name__)
         raise AskError(502, "Kamerabild nicht verfügbar") from None

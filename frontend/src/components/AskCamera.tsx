@@ -79,7 +79,7 @@ function AnswerCard({ r }: { r: AskResult }) {
   const yn = YES_NO[r.yes_no];
   return (
     <div className="card" style={{ marginTop: 12 }}>
-      <div className="card-body" style={{ display: "grid", gap: 10 }}>
+      <div className="card-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 10 }}>
         <div className="row-wrap" style={{ gap: 8 }}>
           {yn && <span className={`badge ${yn.cls}`} style={{ fontSize: 14 }}>{yn.text}</span>}
           <b style={{ fontSize: 15 }}>{r.answer || "(keine Antwort)"}</b>
@@ -121,7 +121,7 @@ export function AskCameraDialog({ camera, onClose }: { camera: Camera; onClose: 
   const german = /\b(ist|sind|gibt|der|die|das|und|nicht|brennt|liegt)\b/i.test(question);
   return (
     <Dialog title={`Frag die Kamera – ${camera.name}`} icon={<MessageCircleQuestion size={18} />} onClose={onClose} size="lg">
-      <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 10 }}>
         <div className="row-wrap" style={{ gap: 8, justifyContent: "space-between" }}>
           <span className="hint muted" style={{ fontSize: 12 }}>
             <Crop size={12} style={{ verticalAlign: -2 }} /> Optional: Rahmen ins Bild ziehen, um nur nach einem Ausschnitt zu fragen.
@@ -156,9 +156,9 @@ export function AskCameraDialog({ camera, onClose }: { camera: Camera; onClose: 
         {(log.data?.items.length ?? 0) > 0 && (
           <div style={{ marginTop: 6 }}>
             <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Letzte Fragen an diese Kamera</div>
-            <div style={{ display: "grid", gap: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 4 }}>
               {log.data!.items.map((a) => (
-                <div key={a.id} className="row-wrap" style={{ gap: 8, fontSize: 13, cursor: "pointer" }} onClick={() => setRes(a)} title="Antwort anzeigen">
+                <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", minWidth: 0 }} onClick={() => setRes(a)} title="Antwort anzeigen">
                   {YES_NO[a.yes_no] && <span className={`badge ${YES_NO[a.yes_no].cls}`}>{YES_NO[a.yes_no].text}</span>}
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     <b>{a.question}</b> – {a.answer}
