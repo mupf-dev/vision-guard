@@ -687,3 +687,25 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
 .reports-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .reports-grid details > summary::-webkit-details-marker { display: none; }
 @media (max-width: 900px) { .reports-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* W3 (A3+C4): virtuelle Sensoren und Vorräte (Segmentschalter mit vielen Optionen, z. B. Regel-Auslöser, umbrechen) */
+.seg { flex-wrap: wrap; max-width: 100%; }
+.sensor-edit-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .sensor-edit-grid { grid-template-columns: minmax(0, 1fr); } }
+.sensor-thumb { width: 82px; height: 46px; object-fit: cover; border-radius: 8px; flex: none; background: #000; }
+.supply-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.supply-card { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); overflow: hidden; display: flex; flex-direction: column; }
+.supply-card .media { position: relative; aspect-ratio: 16/9; background: #000; }
+.supply-card .media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.supply-card .media .corner { position: absolute; top: 8px; left: 8px; }
+.supply-card .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.supply-card.low { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.supply-card.out { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+.fill-bar { height: 6px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
+.fill-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--ok); }
+.fill-bar.low > span { background: var(--warn); }
+.fill-bar.out > span { background: var(--bad); }
+.shop-row { display: flex; align-items: center; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--line); }
+.shop-row:last-child { border-bottom: none; }
+.shop-row.done .name { text-decoration: line-through; color: var(--text-3); }
+.shop-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }

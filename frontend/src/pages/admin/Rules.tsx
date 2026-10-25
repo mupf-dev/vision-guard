@@ -2,15 +2,15 @@ import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, Camera as CamIcon, Clapperboard, Clock, Copy, Globe, Image as ImageIcon, ListChecks, Pencil, Plus, Radio, Repeat, Trash2, Wand2, Workflow, X } from "lucide-react";
 import { api } from "../../lib/api";
-import type { Camera, GestureName, Identity, Posture, Rule, RuleAction, RuleInput } from "../../lib/types";
+import type { Camera, GestureName, Identity, Posture, Rule, RuleAction, RuleInput, SensorState, VirtualSensor } from "../../lib/types";
 import { ALL_LABELS, DAYS, KIND_NAME, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, LabelIcon, Loading, Range, SearchSelect, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
-import { ConditionsBlock, RULE_TEMPLATES, useConditionSummary } from "../../components/RuleConditions";
+import { ConditionsBlock, RULE_TEMPLATES, SENSOR_STATE_NAME, SensorStatePicker, useConditionSummary, useSensors } from "../../components/RuleConditions";
 import { ALL_GESTURES, GESTURE_HINT, GESTURE_NAME, POSTURE_TRIGGER_NAME, fmtDuration } from "../../lib/pose";
 import { GestureIcon } from "../../components/GestureIcon";
 
-const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}", "{posture}", "{gesture}", "{repeat}"];
+const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}", "{posture}", "{gesture}", "{repeat}", "{sensor}", "{sensor_state}"];
 
 const EMPTY: RuleInput = {
   name: "", enabled: true, camera_ids: [], zone_ids: [], labels: ["person"], min_score: 0.6,
@@ -22,7 +22,7 @@ const EMPTY: RuleInput = {
 
 const TRIGGER_NAME: Record<RuleInput["trigger"], string> = {
   enter: "Betreten", leave: "Verlassen", dwell: "Verweilen", posture: "Haltung", gesture: "Geste", time: "Uhrzeit",
-  sensor: "Sensor",   // W3 (A3): Auswahl + Optionen im Editor ergänzt A3
+  sensor: "Sensor",   // W3 (A3): virtueller Sensor wechselt (Regel ohne Ereignis)
 };
 
 const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactNode }> = {
@@ -48,7 +48,7 @@ function joinOr(items: string[]) {
   return `${items.slice(0, -1).join(", ")} oder ${items[items.length - 1]}`;
 }
 
-export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], condText = ""): React.ReactNode {
+export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], condText = "", sensors: VirtualSensor[] = []): React.ReactNode {
   const who = r.labels.length ? joinOr(r.labels.map(labelName)) : "ein Objekt";
   const idTxt = r.identity.mode === "known" ? " (bekannt)" : r.identity.mode === "unknown" ? " (unbekannt)"
     : r.identity.mode === "specific" ? ` (${joinOr(r.identity.identity_ids.map((id) => idents.find((i) => i.id === id)?.display_name ?? `#${id}`)) || "?"})` : "";
@@ -65,6 +65,18 @@ export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], co
   const sched = r.schedule ? ` · ${r.schedule.days.length === 7 ? "täglich" : r.schedule.days.map((d) => DAYS[d]).join(", ")} ${r.schedule.start}–${r.schedule.end}` : "";
   const acts = r.actions.map((a) => ACTION_META[a.type].name);
   const cond = condText ? <> und <b>{condText}</b>{r.condition_delay_s ? <span className="muted"> (geprüft nach {r.condition_delay_s} s)</span> : null}</> : null;
+  if (r.trigger === "sensor") {
+    const sid = Number(r.trigger_options?.sensor_id ?? 0);
+    const st = String(r.trigger_options?.state ?? "on");
+    const sname = sensors.find((x) => x.id === sid)?.name ?? (sid ? `#${sid}` : "?");
+    return (
+      <span className="rule-summary">
+        Wenn Sensor <b>{sname}</b> {st === "any" ? "den Zustand wechselt" : <>auf <b>{SENSOR_STATE_NAME[st as SensorState] ?? st}</b> wechselt</>}
+        {condText ? <>, und <b>{condText}</b></> : null}
+        <span className="arrow">→</span>{acts.length ? acts.join(", ") : "Hinweis"}
+      </span>
+    );
+  }
   if (r.trigger === "time") {
     const days = r.schedule && r.schedule.days.length < 7 ? r.schedule.days.map((d) => DAYS[d]).join(", ") : "Täglich";
     return (
@@ -277,31 +289,37 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
     onSuccess: () => { toast.success("Regel gespeichert", f.name); qc.invalidateQueries({ queryKey: ["rules"] }); onClose(); },
     onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
   });
-  const isTime = f.trigger === "time";
+  const isTime = f.trigger === "time" || f.trigger === "sensor";   // ohne Track/Ereignis
+  const isSensor = f.trigger === "sensor";
   const isTrack = !isTime;
+  const sensors = useSensors();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const poseCams = cams.filter((c) => (f.trigger === "gesture" ? c.gesture_enabled : c.pose_enabled || c.gesture_enabled));
   const condText = useConditionSummary(f.conditions, cams);
   const valid = f.name.trim() && (isTime || f.identity.mode !== "specific" || f.identity.identity_ids.length > 0)
-    && (!isTime || /^\d\d:\d\d$/.test(String(f.trigger_options?.at ?? "")))
+    && (f.trigger !== "time" || /^\d\d:\d\d$/.test(String(f.trigger_options?.at ?? "")))
+    && (!isSensor || Number(f.trigger_options?.sensor_id ?? 0) > 0)
     && (f.trigger !== "gesture" || (f.trigger_options?.gestures ?? []).length > 0)
     && (!f.repeat_s || f.repeat_s >= 10)
-    && f.conditions.every((c) => (c.type === "track_came_from" ? c.zone_ids.length > 0 : c.type === "weather" || c.labels.length > 0));
+    && f.conditions.every((c) => (c.type === "track_came_from" ? c.zone_ids.length > 0 : c.type === "sensor" ? c.sensor_id > 0
+      : c.type === "weather" || c.labels.length > 0));
   const setTrigger = (t: RuleInput["trigger"]) => setF((p) => ({
     ...p, trigger: t,
     trigger_options: t === "time" ? { at: String(p.trigger_options?.at ?? "10:00") }
       : t === "posture" ? { posture: "lying", max_motion: null, exclude_zone_ids: [] }
-      : t === "gesture" ? { gestures: ["arms_up"] } : {},
+      : t === "gesture" ? { gestures: ["arms_up"] }
+      : t === "sensor" ? { sensor_id: Number(p.trigger_options?.sensor_id ?? 0), state: String(p.trigger_options?.state ?? "on") } : {},
     // Haltung/Geste gibt es nur für Personen; Liegedauer-Vorschlag aus den Einstellungen
     labels: t === "posture" || t === "gesture" ? ["person"] : p.labels,
     min_dwell_s: t === "posture" ? (p.trigger === "posture" ? p.min_dwell_s : settings.data?.fall_default_dwell_s ?? 60) : p.min_dwell_s,
     // „kam aus Zone“ braucht einen Track
-    conditions: t === "time" ? p.conditions.filter((c) => c.type !== "track_came_from") : p.conditions,
+    conditions: t === "time" || t === "sensor" ? p.conditions.filter((c) => c.type !== "track_came_from") : p.conditions,
+    actions: t === "sensor" ? p.actions.filter((a) => a.type !== "clip") : p.actions,
   }));
 
   return (
     <Dialog size="lg" onClose={onClose} icon={<Workflow size={18} />} title={rule ? "Regel bearbeiten" : "Neue Regel"} footer={<>
-      <div className="spacer" style={{ fontSize: 13 }}>{ruleSummary(f, cams, idents, condText)}</div>
+      <div className="spacer" style={{ fontSize: 13 }}>{ruleSummary(f, cams, idents, condText, sensors)}</div>
       <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
       <button className="btn btn-primary" disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending && <span className="spinner" />}Speichern</button>
     </>}>
@@ -320,7 +338,13 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
           </div>
         )}
 
-        {isTime ? (
+        {isSensor ? (
+          <div className="muted" style={{ fontSize: 13 }}>
+            Sensor-Regeln laufen, wenn ein virtueller Sensor (Administration → Sensoren) seinen Zustand bestätigt wechselt –
+            ohne Kamera-Ereignis. Ergebnis ist ein Eintrag unter „Hinweise“; „Snapshot“ hängt das Standbild vom Wechsel an.
+            Wechsel nach oder aus „unklar“ (z. B. Kamera offline) lösen nicht aus.
+          </div>
+        ) : isTime ? (
           <div className="muted" style={{ fontSize: 13 }}>
             Zeit-Regeln laufen ohne Kamera-Ereignis: Kameras, Objekte und Identität spielen keine Rolle. Ergebnis ist ein Eintrag unter
             „Hinweise“ (und ein Push, wenn die Aktion „Push“ gewählt ist).
@@ -369,9 +393,9 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
 
         <fieldset className="fieldset"><legend>Wann</legend>
           <div className="form-grid">
-            <div className="field"><label>Auslöser</label>
+            <div className="field span-2"><label>Auslöser</label>
               <div className="seg">
-                {(["enter", "leave", "dwell", "posture", "gesture", "time"] as const).map((t) => (
+                {(["enter", "leave", "dwell", "posture", "gesture", "time", "sensor"] as const).map((t) => (
                   <button type="button" key={t} className={f.trigger === t ? "on" : ""} onClick={() => setTrigger(t)}>
                     {TRIGGER_NAME[t]}
                   </button>
@@ -382,7 +406,7 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
               <div className="field"><label>Mindest-Verweildauer</label><Range value={f.min_dwell_s} min={1} max={600} step={1} format={(v) => `${v} s`} onChange={(v) => set("min_dwell_s", v)} /></div>
             ) : f.trigger === "posture" ? (
               <div className="field"><label>Haltung besteht mindestens</label><Range value={f.min_dwell_s} min={5} max={900} step={5} format={fmtDuration} onChange={(v) => set("min_dwell_s", v)} /></div>
-            ) : isTime ? (
+            ) : f.trigger === "time" ? (
               <div className="field"><label><Clock size={13} style={{ verticalAlign: -2 }} /> Uhrzeit *</label>
                 <input type="time" className="input" style={{ width: 130 }} value={String(f.trigger_options?.at ?? "")}
                   onChange={(e) => set("trigger_options", { at: e.target.value })} />
@@ -393,7 +417,13 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
           {(f.trigger === "posture" || f.trigger === "gesture") && (
             <PoseTriggerFields f={f} setF={setF} zones={availZones} poseCams={poseCams.length} />
           )}
-          {isTime ? (
+          {isSensor && (
+            <div className="field"><label>Sensor und neuer Zustand *</label>
+              <SensorStatePicker allowAny sensorId={Number(f.trigger_options?.sensor_id ?? 0)} state={String(f.trigger_options?.state ?? "on")}
+                onChange={(id, st) => set("trigger_options", { sensor_id: id, state: st })} />
+            </div>
+          )}
+          {isSensor ? null : f.trigger === "time" ? (
             <div className="field"><label>An diesen Tagen</label>
               <ChipSelect options={[0, 1, 2, 3, 4, 5, 6]} value={f.schedule?.days ?? [0, 1, 2, 3, 4, 5, 6]}
                 onChange={(d) => set("schedule", d.length === 7 ? null : { days: [...d].sort(), start: "00:00", end: "23:59" })} render={(d) => DAYS[d]} />
@@ -438,7 +468,7 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
             <ActionEditor key={i} a={a} onChange={(n) => set("actions", f.actions.map((x, k) => (k === i ? n : x)))} onRemove={() => set("actions", f.actions.filter((_, k) => k !== i))} />
           ))}
           <div className="row-wrap">
-            {(Object.keys(ACTION_META) as RuleAction["type"][]).filter((t) => !isTime || (t !== "snapshot" && t !== "clip")).map((t) => (
+            {(Object.keys(ACTION_META) as RuleAction["type"][]).filter((t) => (isSensor ? t !== "clip" : !isTime || (t !== "snapshot" && t !== "clip"))).map((t) => (
               <button type="button" key={t} className="btn btn-sm" onClick={() => set("actions", [...f.actions, newAction(t)])}><Plus size={14} />{ACTION_META[t].name}</button>
             ))}
           </div>
@@ -450,7 +480,8 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
 
 function RuleSummaryRow({ r, cams, idents }: { r: Rule; cams: Camera[]; idents: Identity[] }) {
   const condText = useConditionSummary(r.conditions ?? [], cams);
-  return <>{ruleSummary(r, cams, idents, condText)}{r.conditions?.length ? <span className="badge outline" style={{ marginLeft: 6 }} title="Regel mit Bedingungen"><ListChecks size={12} /></span> : null}</>;
+  const sensors = useSensors();
+  return <>{ruleSummary(r, cams, idents, condText, sensors)}{r.conditions?.length ? <span className="badge outline" style={{ marginLeft: 6 }} title="Regel mit Bedingungen"><ListChecks size={12} /></span> : null}</>;
 }
 
 export function RulesPage() {

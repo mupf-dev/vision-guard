@@ -79,7 +79,9 @@ export type RuleCondition =
   | { type: "inventory"; labels: string[]; state: "present" | "absent"; camera_ids: number[]; room: string | null; zone_ids: string[] }
   | { type: "inventory_untouched"; labels: string[]; since: string; camera_ids: number[]; zone_ids: string[] }
   | { type: "weather"; metric: "rain_probability"; min: number; hours: number }
-  | { type: "track_came_from"; zone_ids: string[] };
+  | { type: "track_came_from"; zone_ids: string[] }
+  /** W3 (A3): virtueller Sensor ist im Zustand (für alle Trigger) */
+  | { type: "sensor"; sensor_id: number; state: SensorState };
 
 export type PushPriority = "low" | "default" | "high";
 
