@@ -83,6 +83,7 @@ class SensorEngine:
         self.rt: dict[int, _Runtime] = {}
         self.refs: dict[tuple, tuple] = {}          # (ref_id, region, w, h) → (Embedding, Farb-Miniatur)
         self._registered = False
+        self._last_ids: set[int] = set()
         self.done: deque = deque(maxlen=5000)       # (ts, ms, n)
         self._warned: dict[str, float] = {}
 
@@ -119,8 +120,9 @@ class SensorEngine:
             self.taps.unregister("sensors")
             self._registered = False
             log.info("sensors: none active")
-        elif cams:
+        elif cams and ids != self._last_ids:
             log.info("sensors: %d sensor(s) on %d camera(s)", len(ids), len(cams))
+        self._last_ids = ids
 
     def _interval(self, cid: int) -> float:
         sens = self.cams.get(cid) or []
