@@ -930,8 +930,11 @@ class Processor:
                     self._pub(topic, body, retain=bool(a.get("retain")), qos=1)
                 elif typ == "webhook":
                     rules.submit_async(self.loop, rules.run_webhook(a, pctx, payload))
+                elif typ == "snapshot" and trigger == "sensor" and snap:
+                    # W3 (A3): sensors.py nimmt beim bestätigten Wechsel ein Standbild auf (go2rtc) – das ist der
+                    # Snapshot dieser Regel (hängt an Notification/Push, Platzhalter {snapshot_url})
+                    log.debug("%s '%s': Snapshot = Standbild des Sensors (%s)", label, rule["name"], snap)
                 elif typ in ("snapshot", "clip"):
-                    # W3: Sensor-Regeln dürfen einen Snapshot über cmd anfordern (A3 setzt das um)
                     log.info("%s '%s': Aktion %s braucht ein Ereignis – übersprungen", label, rule["name"], typ)
             except Exception:
                 log.exception("%s '%s': Aktion %s fehlgeschlagen", label, rule["name"], typ)

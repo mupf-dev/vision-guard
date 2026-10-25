@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, CircleHelp, CloudRain, Footprints, Hand, Package, Play, Plus, X, XCircle } from "lucide-react";
+import { CheckCircle2, CircleHelp, CloudRain, Footprints, Gauge, Hand, Package, Play, Plus, X, XCircle } from "lucide-react";
 import { api } from "../lib/api";
-import type { Camera, InventoryVocabEntry, RuleCheckResult, RuleCondition, RuleInput } from "../lib/types";
+import type { Camera, InventoryVocabEntry, RuleCheckResult, RuleCondition, RuleInput, SensorState, VirtualSensor } from "../lib/types";
 import { Range } from "./ui";
 
 /**
@@ -17,7 +17,16 @@ export const COND_META: Record<CondType, { name: string; icon: React.ReactNode; 
   inventory_untouched: { name: "Gegenstand unberührt", icon: <Hand size={15} /> },
   weather: { name: "Regen", icon: <CloudRain size={15} /> },
   track_came_from: { name: "Kam aus Zone", icon: <Footprints size={15} />, trackOnly: true },
+  sensor: { name: "Sensor ist …", icon: <Gauge size={15} /> },   // W3 (A3)
 };
+
+/** W3 (A3): Zustände virtueller Sensoren (deutsch, wie {sensor_state}) */
+export const SENSOR_STATE_NAME: Record<SensorState, string> = { on: "an", off: "aus", ok: "ok", low: "knapp", out: "leer", unknown: "unklar" };
+
+export function useSensors(): VirtualSensor[] {
+  const q = useQuery({ queryKey: ["sensors"], queryFn: () => api.sensors() });
+  return q.data ?? [];
+}
 
 export function newCondition(t: CondType): RuleCondition {
   switch (t) {
@@ -25,6 +34,7 @@ export function newCondition(t: CondType): RuleCondition {
     case "inventory_untouched": return { type: "inventory_untouched", labels: ["medicine"], since: "06:00", camera_ids: [], zone_ids: [] };
     case "weather": return { type: "weather", metric: "rain_probability", min: 60, hours: 12 };
     case "track_came_from": return { type: "track_came_from", zone_ids: [] };
+    case "sensor": return { type: "sensor", sensor_id: 0, state: "on" };
   }
 }
 
@@ -43,7 +53,7 @@ function joinUnd(xs: string[]) {
 }
 
 /** Kurzer deutscher Text je Bedingung (Regel-Übersicht) */
-export function conditionText(c: RuleCondition, vocab: InventoryVocabEntry[], cams: Camera[]): string {
+export function conditionText(c: RuleCondition, vocab: InventoryVocabEntry[], cams: Camera[], sensors: VirtualSensor[] = []): string {
   const zoneName = (id: string) => cams.flatMap((x) => x.zones).find((z) => z.id === id)?.name ?? id;
   switch (c.type) {
     case "inventory": {
@@ -53,12 +63,45 @@ export function conditionText(c: RuleCondition, vocab: InventoryVocabEntry[], ca
     case "inventory_untouched": return `${joinUnd(c.labels.map((l) => vocabName(vocab, l)))} seit ${c.since} unberührt`;
     case "weather": return `Regen ≥ ${c.min} % in ${c.hours} h`;
     case "track_came_from": return `kam aus ${joinUnd(c.zone_ids.map(zoneName)) || "?"}`;
+    case "sensor": return `Sensor ${sensors.find((x) => x.id === c.sensor_id)?.name ?? (c.sensor_id ? `#${c.sensor_id}` : "?")} ist ${SENSOR_STATE_NAME[c.state] ?? c.state}`;
   }
 }
 
 export function useConditionSummary(conds: RuleCondition[], cams: Camera[]): string {
   const vocab = useVocab();
-  return conds.map((c) => conditionText(c, vocab, cams)).join(" und ");
+  const sensors = useSensors();
+  return conds.map((c) => conditionText(c, vocab, cams, sensors)).join(" und ");
+}
+
+/** W3 (A3): Sensor + Zustand wählen (Bedingung „Sensor ist …“ und Auslöser „Sensor“) */
+export function SensorStatePicker({ sensorId, state, onChange, allowAny, allowUnknown }: {
+  sensorId: number; state: string; onChange: (sensorId: number, state: string) => void; allowAny?: boolean; allowUnknown?: boolean;
+}) {
+  const sensors = useSensors();
+  const s = sensors.find((x) => x.id === sensorId);
+  const states: string[] = [...(s?.state_set === "level" ? ["ok", "low", "out"] : ["on", "off"]),
+    ...(allowUnknown ? ["unknown"] : []), ...(allowAny ? ["any"] : [])];
+  if (!sensors.length) return <span className="muted" style={{ fontSize: 13 }}>Noch keine Sensoren – unter Administration → Sensoren anlegen.</span>;
+  return (
+    <div className="row-wrap" style={{ gap: 8 }}>
+      <select className="select" style={{ width: "auto", minWidth: 200 }} value={sensorId || ""}
+        onChange={(e) => {
+          const n = sensors.find((x) => x.id === Number(e.target.value));
+          const first = n?.state_set === "level" ? "low" : "on";
+          onChange(Number(e.target.value), states.includes(state) && (n?.state_set ?? "binary") === (s?.state_set ?? "binary") ? state : first);
+        }}>
+        <option value="">Sensor wählen …</option>
+        {sensors.map((x) => <option key={x.id} value={x.id}>{x.name} · {x.camera_name}{x.supply ? " · Vorrat" : ""}</option>)}
+      </select>
+      <div className="seg">
+        {states.map((st) => (
+          <button type="button" key={st} className={state === st ? "on" : ""} onClick={() => onChange(sensorId, st)}>
+            {st === "any" ? "jeder Wechsel" : SENSOR_STATE_NAME[st as SensorState]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Mehrfachauswahl aus dem Gegenstands-Vokabular (gruppiert) */
@@ -187,6 +230,12 @@ function ConditionEditor({ c, cams, onChange, onRemove }: { c: RuleCondition; ca
           </div>
         </div>
       )}
+      {c.type === "sensor" && (
+        <div className="field"><label>Virtueller Sensor ist gerade</label>
+          <SensorStatePicker sensorId={c.sensor_id} state={c.state} allowUnknown
+            onChange={(id, st) => onChange({ ...c, sensor_id: id, state: st as SensorState })} />
+        </div>
+      )}
       {c.type === "track_came_from" && (
         <div className="form-grid">
           <div className="field span-2"><label>Die auslösende Person/das Objekt war vorher in Zone</label>
@@ -220,7 +269,8 @@ function CheckResult({ r }: { r: RuleCheckResult }) {
 }
 
 export function ConditionsBlock({ f, cams, onChange }: { f: RuleInput; cams: Camera[]; onChange: (p: Partial<RuleInput>) => void }) {
-  const isTime = f.trigger === "time";
+  const isTime = f.trigger === "time" || f.trigger === "sensor";   // ohne Track (W3: auch Sensor)
+  const isSensor = f.trigger === "sensor";
   const [result, setResult] = useState<RuleCheckResult | null>(null);
   const check = useMutation({
     mutationFn: () => api.checkRule({ ...f, name: f.name.trim() || "Entwurf" }),
@@ -233,7 +283,7 @@ export function ConditionsBlock({ f, cams, onChange }: { f: RuleInput; cams: Cam
     <fieldset className="fieldset"><legend>Nur wenn …</legend>
       {!f.conditions.length && (
         <div className="muted" style={{ fontSize: 13 }}>
-          Ohne Bedingungen löst die Regel {isTime ? "zur Uhrzeit immer" : "bei jedem Auslöser"} aus. Mit Bedingungen entsteht zusätzlich ein Eintrag unter „Hinweise“.
+          Ohne Bedingungen löst die Regel {isSensor ? "bei jedem passenden Sensorwechsel" : isTime ? "zur Uhrzeit immer" : "bei jedem Auslöser"} aus. Mit Bedingungen entsteht zusätzlich ein Eintrag unter „Hinweise“.
         </div>
       )}
       {f.conditions.map((c, i) => (
@@ -251,7 +301,7 @@ export function ConditionsBlock({ f, cams, onChange }: { f: RuleInput; cams: Cam
           </button>
         )}
       </div>
-      {f.conditions.length > 0 && (
+      {f.conditions.length > 0 && !isSensor && (
         <div className="field"><label>{isTime ? "Prüfen nach der Uhrzeit um" : "Prüfen nach dem Auslösen um"}</label>
           <Range value={f.condition_delay_s} min={0} max={600} step={5}
             format={(v) => (v >= 60 ? `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}` : `${v} s`)}

@@ -26,6 +26,7 @@ EXPECTED |= {"what_changed", "list_notifications", "get_camera_health"}   # Well
 EXPECTED |= {"list_alerts", "acknowledge_alert"}   # Welle 2 (C1/D1)
 EXPECTED |= {"list_open_questions", "answer_question", "get_pet_diary", "get_daily_report"}   # Welle 2 (D2, C3, B3)
 EXPECTED |= {"ask_camera"}   # Welle 3 (A2)
+EXPECTED |= {"list_sensors", "get_sensor", "get_shopping_list", "add_to_shopping_list"}   # Welle 3 (A3+C4)
 
 
 def _text(result) -> str:

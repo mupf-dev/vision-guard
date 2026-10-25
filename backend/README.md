@@ -37,6 +37,14 @@ Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
   Thread-Pool, nie im Track-Thread); erfüllt → Aktionen + Notification. Zeit-Regeln (`trigger=time`) prüft der
   Tick alle 20 s; der letzte Lauf steht in `kv.rule_time_runs`, verpasste Zeitpunkte werden bis 15 min nachgeholt.
   `POST /api/rules/check` prüft einen Entwurf sofort (UI „Jetzt prüfen“).
+- **Virtuelle Sensoren (A3/C4)** (`sensors.py`): Zustandsautomat im Speicher (DB wird im Effekt-Thread
+  nachgezogen). Ein abweichender Rohzustand braucht `confirm_n` Messungen in Folge; verdeckte Messungen zählen nicht.
+  `inventory_count` zählt `present`-Gegenstände im Bereich (Tick je `interval_s`), `vlm` fragt `vlm.ask` (A2) nur bei
+  Bildänderung, offenem Kandidaten oder nach `vlm_max_age_s`; `verify_vlm` lässt einen billigen Wechsel vom
+  Bildmodell bestätigen. Bestätigter Wechsel → `sensor_history`, Standbild (go2rtc, ≤ 1/min), WS `sensor`, MQTT
+  `{prefix}/sensor/{slug}` (+ `/attributes`), Regeln mit `trigger: sensor` (nur zwischen bekannten Zuständen).
+  Vorräte (`supply`) → Einkaufsliste (`shopping.py`, `shopping_list_auto`) und Hinweis `source: sensor`.
+  Ohne Messwerte seit `max(5 × interval_s, 120 s)` → `unknown`.
 - **Identitäten**: neue unbenannte → „Person #N“ / „Tier #N“ (Zähler je Art), „Kennzeichen <Text>“.
   Max. 20 Samples je Identität (beste Qualität bleibt), Crops werden nach `identities/<id>/` kopiert.
   `identify` mit `camera_id`+`track_id` verknüpft die Identität direkt mit dem aktiven Event.

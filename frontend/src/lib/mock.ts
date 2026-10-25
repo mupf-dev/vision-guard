@@ -680,6 +680,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
       ? { type: c.type, ok: null, reason: "wird erst beim Auslösen geprüft (Weg des Tracks)" }
       : c.type === "weather" ? { type: c.type, ok: c.min <= 40, reason: `Wetter: 40 % Regen ab 15 Uhr (Schwelle ${c.min} % in ${c.hours} h)` }
       : c.type === "inventory" ? { type: c.type, ok: c.state === "present", reason: c.state === "present" ? "Schlüssel: sichtbar (Flur, Schlüsselbrett, Score 0.62)" : "Schlüssel: noch sichtbar (Flur, Schlüsselbrett)" }
+      : c.type === "sensor" ? { type: c.type, ok: c.state === "on", reason: `Sensor #${c.sensor_id}: an` }
       : { type: c.type, ok: true, reason: `Medikamente: seit ${c.since} unberührt (Küche, Regal)` });
     const ph = { items: conds.some((c) => c.type.startsWith("inventory")) ? "Schlüssel" : "", item_place: "Flur, Schlüsselbrett", weather: conds.some((c) => c.type === "weather") ? "40 % Regen ab 15 Uhr" : "" };
     const ok = details.every((d) => d.ok !== false);
@@ -774,6 +775,7 @@ const mockSensors: VirtualSensor[] = [
     supply: true, verify_vlm: false, interval_s: 600, vlm_max_age_s: 900, change_threshold: 0.08, confirm_n: 2,
     state: "low", value: 1, since: ago(7200), last_eval: ago(60), last_engine: "cheap", snapshot_url: null, state_text: "knapp seit 2 h" },
 ];
+let mockRefs: { id: number; sensor_id: number; state: string; image_url: string; created_at: string }[] = [];
 let shopping: ShoppingItem[] = [
   { id: 1, name: "Wasserflaschen", note: "", source: "auto", sensor_id: 2, created_at: ago(7200), done_at: null, done: false },
   { id: 2, name: "Kaffee", note: "Bohnen", source: "manual", sensor_id: null, created_at: ago(86400), done_at: null, done: false },
@@ -799,11 +801,34 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
     const items = cid ? askLog.filter((a) => a.camera_id === Number(cid)) : askLog;
     return json({ items, total: items.length });
   }
-  if (path === "/sensors" && method === "GET") return json(mockSensors);
-  if ((m = path.match(/^\/sensors\/(\d+)(\/history)?$/))) {
+  if (path === "/sensors" && method === "GET") {
+    const supply = p.get("supply");
+    return json(mockSensors.filter((x) => supply === null || String(x.supply) === supply));
+  }
+  if (path === "/sensors" && method === "POST") {
+    const cam = cameras.find((c) => c.id === body?.camera_id);
+    const s: VirtualSensor = { ...body, id: nextId++, camera_name: cam?.name ?? "?", room: cam?.room ?? null, state: "unknown", value: null,
+      since: null, last_eval: null, last_engine: null, snapshot_url: null, state_text: "unklar – noch keine Messung" };
+    mockSensors.push(s);
+    return json(s, 201);
+  }
+  if ((m = path.match(/^\/sensors\/(\d+)\/references(?:\/(\d+))?$/))) {
+    const sid = Number(m[1]);
+    if (method === "POST") {
+      const r = { id: nextId++, sensor_id: sid, state: body?.state, image_url: mockSnapshot(1) ?? "", created_at: now() };
+      mockRefs.push(r);
+      return json(r, 201);
+    }
+    if (method === "DELETE") { mockRefs = mockRefs.filter((r) => r.id !== Number(m![2])); return json(undefined, 204); }
+    return json(mockRefs.filter((r) => r.sensor_id === sid));
+  }
+  if ((m = path.match(/^\/sensors\/(\d+)(\/history|\/evaluate)?$/))) {
     const s = mockSensors.find((x) => x.id === Number(m![1]));
     if (!s) return json({ detail: "Sensor nicht gefunden" }, 404);
-    if (m[2]) return json([{ ts: s.since, state: s.state, value: s.value, engine: "cheap", snapshot_url: null }]);
+    if (m[2] === "/history") return json([{ ts: s.since, state: s.state, value: s.value, engine: "cheap", snapshot_url: null }]);
+    if (m[2] === "/evaluate") { s.last_eval = now(); return json(s); }
+    if (method === "DELETE") { mockSensors.splice(mockSensors.indexOf(s), 1); return json(undefined, 204); }
+    if (method === "PUT") { Object.assign(s, body ?? {}); return json(s); }
     return json(s);
   }
   if (path === "/shopping-list" && method === "GET") {

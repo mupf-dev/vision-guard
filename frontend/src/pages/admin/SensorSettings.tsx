@@ -17,6 +17,11 @@ export function SensorSettingsCard({ f, patch }: { f: Settings; patch: (p: Parti
         <div className="field"><label>Sensor-Verlauf aufbewahren</label>
           <Range value={f.retention_days_sensors} min={1} max={365} step={1} format={(v) => `${v} Tage`} onChange={(v) => patch({ retention_days_sensors: v })} />
         </div>
+        <div className="hint muted span-2" style={{ fontSize: 12 }}>
+          Sensoren selbst unter Administration → Sensoren. Knappe/leere Vorräte erzeugen einen Hinweis (Push-Ziele unter
+          Benachrichtigungen → „Sensoren“); Zustandswechsel anderer Sensoren melden Regeln mit dem Auslöser „Sensor“.
+          Zustände gehen per MQTT nach außen (<code>{"{Präfix}"}/sensor/&lt;name&gt;</code>, <code>{"{Präfix}"}/shopping_list</code>).
+        </div>
       </div>
     </div>
   );

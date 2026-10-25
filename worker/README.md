@@ -110,6 +110,21 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 * **Gesten** (`arms_up`, `arm_left`, `arm_right`, `arms_cross` = X über dem Kopf) regelbasiert auf den Keypoints;
   gelten nach `gesture_hold_s` in ≥ 80 % der Pose-Bilder, danach 5 s Sperre je Track.
 
+## Virtuelle Sensoren (A3/C4)
+
+* Abnehmer `sensors` am Frame-Tap (eigener Thread, je Kamera nur das neueste Bild). Sensoren kommen aus
+  `GET /api/internal/cameras` (`sensors`, Arten `brightness|blink|reference|fill`, dazu `vlm` nur fürs Änderungsmaß).
+* Messung im Polygon auf dem Detect-Frame: `brightness` = mittlere Luma 0..1; `blink` = Std.-Abw. der Helligkeit über
+  `window_s` (Abtastung ≈ 5/s, solange ein Blink-Sensor aktiv ist); `reference`/`fill` = DINOv2 (geteiltes Tiermodell,
+  wird bei Bedarf geladen) gegen Referenzbilder → P(an) bzw. Füllstand 0..1 (Softmax-gewichtete Stufen 1/0,5/0;
+  beim Füllstand je zur Hälfte mit der Farbähnlichkeit einer 16×16-Miniatur gemischt).
+  Referenzbilder (`sensors/ref/…`, ganzes Kamerabild) werden auf die Detect-Auflösung skaliert, der Bereich wird
+  ausgeschnitten, Embeddings je Referenz + Bereich gecacht.
+* `occluded`: Personen-Boxen bedecken > 10 % des Bereichs → die Messung zählt nicht. `change`: Abweichung eines
+  32×32-Graubilds zum Ankerbild; ab `change_threshold` einmal melden, dann neuer Anker.
+* `vg/internal/sensor/{id}` (QoS 0) je Messung, `vg/internal/system.perf.sensors = {per_min, ms}`. CPU ≈ 1 ms je
+  Messung, kein zusätzliches VRAM (DINOv2 ist mit der Tiererkennung geteilt; ohne Tiererkennung ≈ 0,1 GB).
+
 ## Track-Lebenszyklus
 
 * `start`: nach ≥ 3 Treffern mit `score ≥ min_score` (Label = score-gewichtete Mehrheit).
