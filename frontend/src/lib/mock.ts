@@ -10,6 +10,7 @@ import type { InventoryHistoryEntry, InventoryItem, InventoryRelation, Inventory
 import type { ApiToken, TokenScope } from "./types";
 import type { IdentitySuggestion } from "./types";
 import type { CameraHealth, InventoryChange, InventoryChanges, PushTarget, VGNotification } from "./types";
+import type { PtzState } from "./types";
 import type { RuleAction, RuleInput } from "./types";
 import type { PetSummary, PetVisit, Report, ReportFacts, ReviewRequest } from "./types";
 
@@ -51,7 +52,26 @@ const INV_OFF = {
   vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
   // W4
   reid_enabled: false,
+  // PTZ
+  ptz_enabled: false,
+  ptz: {
+    onvif_port: null, onvif_user: null, onvif_password: null, profile_token: null, home_preset: null,
+    return_s: 60, home_on_start: true, speed: 0.5, invert_pan: false, invert_tilt: false,
+    patrol: { enabled: false, steps: [], schedule: null, pause_s: 0 },
+    follow: { enabled: false, labels: ["person"], schedule: null, lost_s: 8, max_s: 300, speed: 0.5, latency_s: 1.4, tilt: true },
+  } as Camera["ptz"],
 };
+
+// PTZ-Mock: Kamera 1 schwenkbar, Zustand im Speicher
+const ptzPresets = [{ token: "1", name: "Grundposition" }, { token: "2", name: "Tor" }];
+let ptzState: PtzState = {
+  mode: "idle", view: "home", moving: false, preset: "1", preset_name: "Grundposition", until: null,
+  patrol_step: null, target: null, paused_until: null, error: null, updated_at: new Date().toISOString(),
+};
+function ptzSet(p: Partial<PtzState>): PtzState {
+  ptzState = { ...ptzState, ...p, updated_at: new Date().toISOString() };
+  return ptzState;
+}
 
 const cameras: Camera[] = [
   { id: 1, name: "Einfahrt", url: "rtsp://testcam:8554/cam1", detect_url: null, enabled: true, detect_fps: 5,
@@ -59,6 +79,7 @@ const cameras: Camera[] = [
     face_recognition: true, plate_recognition: true, pet_recognition: true,
     zones: [{ id: "z1", name: "Tor", color: "#ff9800", polygon: [[0.28, 0.6], [0.58, 0.58], [0.82, 0.98], [0.22, 0.98]] }],
     ...INV_OFF, room: "Außen",
+    ptz_enabled: true, ptz: { ...INV_OFF.ptz, home_preset: "1" },
     status: { state: "online", fps: 4.9, width: 1280, height: 720, inference_ms: 11.8, last_seen: now(), health: { state: "ok", problems: [] } } },
   { id: 2, name: "Garten", url: "rtsp://testcam:8554/cam2", detect_url: null, enabled: true, detect_fps: 5,
     labels: ["person", "dog", "cat", "bird"], min_score: 0.55,
@@ -548,6 +569,29 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   let m: RegExpMatchArray | null;
   if (path === "/cameras" && method === "GET") return json(cameras);
   if (path === "/cameras" && method === "POST") { const c = { ...body, id: nextId++, status: { state: "starting" } }; cameras.push(c); return json(c, 201); }
+  if ((m = path.match(/^\/cameras\/(\d+)\/ptz(\/[a-z]+)?(\/[^/]+)?$/))) {
+    const sub = m[2] ?? "";
+    if (sub === "" && method === "GET") {
+      const cam = cameras.find((c) => c.id === Number(m![1]));
+      return json({ camera_id: Number(m[1]), enabled: !!cam?.ptz_enabled, connected: !!cam?.ptz_enabled, error: null,
+        device: { manufacturer: "Mock", model: "PTZ", firmware: "1.0" },
+        capabilities: { continuous: true, zoom: false, presets: true, presets_max: 64, status: true },
+        presets: ptzPresets, state: cam?.ptz_enabled ? ptzState : null });
+    }
+    if (sub === "/probe") return json({ ok: true, port: 8000, device: { manufacturer: "Mock", model: "PTZ", firmware: "1.0" },
+      capabilities: { continuous: true, zoom: false, presets: true, presets_max: 64, status: true }, presets: ptzPresets, error: null });
+    if (sub === "/move") return json(ptzSet({ mode: "manual", view: "away", preset: null, preset_name: null, until: new Date(Date.now() + 60_000).toISOString() }));
+    if (sub === "/stop") return json(ptzState);
+    if (sub === "/goto") {
+      const t = body?.preset ?? "1";
+      return json(ptzSet({ mode: t === "1" ? "idle" : "manual", view: t === "1" ? "home" : "away", preset: t,
+        preset_name: ptzPresets.find((x) => x.token === t)?.name ?? null, until: t === "1" ? null : new Date(Date.now() + 60_000).toISOString() }));
+    }
+    if (sub === "/resume") return json(ptzSet({ mode: "idle", view: "home", preset: "1", preset_name: "Grundposition", until: null }));
+    if (sub === "/pause") return json(ptzSet({ paused_until: body?.minutes ? new Date(Date.now() + body.minutes * 60_000).toISOString() : null }));
+    if (sub === "/presets" && method === "POST") { const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "Neu" }; ptzPresets.push(p); return json(p, 201); }
+    if (sub === "/presets" && method === "DELETE") { const i = ptzPresets.findIndex((x) => x.token === decodeURIComponent((m![3] ?? "").slice(1))); if (i >= 0) ptzPresets.splice(i, 1); return json(undefined, 204); }
+  }
   if (path === "/cameras/test") {
     await new Promise((r) => setTimeout(r, 900));
     return json(String(body?.url).includes("fail") ? { ok: false, error: "Verbindung abgelehnt (connection refused)" } : { ok: true, width: 1920, height: 1080, codec: "H264" });

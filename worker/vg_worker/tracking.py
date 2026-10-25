@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import supervision as sv
 
-from . import settings
+from . import ptz_view, settings
 from .util import crop_norm, new_media_path, point_in_polygon, write_jpeg
 
 log = logging.getLogger("vg.tracking")
@@ -149,6 +149,8 @@ class CameraTracker:
             cfg = self.cfg
             labels = set(cfg.get("labels") or [])
             min_score = float(cfg.get("min_score") or 0.5)
+            # PTZ: Zonen gelten nur in der Grundposition – sonst behalten Tracks ihre Zonen (keine Wechsel)
+            zones_live = ptz_view.at_home(self.camera_id)
             h, w = frame.shape[:2]
             self.last_frame_size = (w, h)
             floor = max(settings.DETECT_MIN_CONF, min(0.1, min_score))
@@ -201,7 +203,7 @@ class CameraTracker:
                 if not tr.confirmed:
                     tr.label = tr.label_votes.most_common(1)[0][0]
                 # zones
-                zs = self._zones_of(bbox)
+                zs = self._zones_of(bbox) if zones_live else tr.zones
                 if zs != tr.zones:
                     if tr.confirmed:
                         for z in zs:

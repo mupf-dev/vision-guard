@@ -46,6 +46,9 @@ from .routers import sensors as sensors_router
 # Welle 4: Person über mehrere Kameras (C2)
 from . import reid as presence_reid
 from .routers import presence as presence_router
+# PTZ (ONVIF)
+from . import ptz
+from .routers import ptz as ptz_router
 from .sync import load_cameras
 from .util import ensure_media_dirs
 from .ws import hub
@@ -165,6 +168,7 @@ async def lifespan(app: FastAPI):
     register_handler("history", time_machine.handle_worker_frame)
     bus.start()
     bus.publish_config_changed()
+    await asyncio.to_thread(ptz.manager.reload)        # PTZ: Steuerung je Kamera (verbindet im Hintergrund)
     tasks = [asyncio.create_task(t) for t in (_ticker(CORE_TICKS), _ticker(W2_TICKS), _ticker(IO_TICKS),
                                                 _retention_loop(), _go2rtc_startup_sync())]
     log.info("VisionGuard Backend %s gestartet", VERSION)
@@ -173,6 +177,7 @@ async def lifespan(app: FastAPI):
     finally:
         for t in tasks:
             t.cancel()
+        ptz.manager.stop()
         bus.stop()
 
 
@@ -201,6 +206,7 @@ for r in (review_router.router, review_router.public_router, pets_router.router,
 for r in (ask_router.router, sensors_router.router, history_router.router):
     app.include_router(r)
 app.include_router(presence_router.router)   # W4 (C2)
+app.include_router(ptz_router.router)        # PTZ
 
 for r in (auth_router.router, cameras.router, rules_router.router, events.router,
           identities.router, misc.router, internal.router):

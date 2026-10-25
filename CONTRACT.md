@@ -1704,3 +1704,116 @@ Verbindlich wie der Rest; wo es älteren Aussagen widerspricht, gilt dieser Absc
 - `log.streams: error` – die Warnungen des Moduls `streams` enthalten die Quell-URL samt Zugangsdaten.
 - `DELETE /api/streams` antwortet wegen der read-only eingebundenen `go2rtc.yaml` mit 400 „read-only file
   system“, obwohl der Stream gelöscht ist; das Backend wertet das als Erfolg.
+
+## Nachträge: PTZ – Schwenken, Neigen, Zoomen (ONVIF)
+
+Verbindlich wie der Rest. Steuerung herstellerneutral über **ONVIF Profile S (PTZ-Dienst)**; getestet mit Reolink
+E1 Pro (ONVIF-Port 8000, nur `ContinuousMove`, Presets, `GetStatus` ohne Position). Nur das Backend spricht mit der
+Kamera (es kennt die Zugangsdaten); Worker und Frontend erfahren nur den Zustand.
+
+### PTZ.A Datenbank und Kamera-Felder
+
+| Tabelle | Spalte | Typ / Default |
+|---|---|---|
+| `cameras` | `ptz_enabled` | boolean NOT NULL DEFAULT false |
+| `cameras` | `ptz` | jsonb NOT NULL DEFAULT '{}' (PtzConfig) |
+
+```jsonc
+// Camera (REST, zusätzlich; beide Felder bei PUT optional wie room/inventory_*)
+{ ..., "ptz_enabled": false,
+  "ptz": {                                  // PtzConfig – fehlende Schlüssel = Default
+    "onvif_port": null,                     // null = automatisch (80, 8000, 2020, 8899, 8080), sonst 1..65535
+    "onvif_user": null,                     // null = Benutzer/Passwort aus der Kamera-URL
+    "onvif_password": null,                 // in Antworten "***" wenn gesetzt; "***" zurückgeschickt = unverändert
+    "profile_token": null,                  // null = erstes Medienprofil mit PTZ-Konfiguration
+    "home_preset": null,                    // Preset-Token der Grundposition (null = keine)
+    "return_s": 60,                         // 0..3600; Rückkehr zur Grundposition nach Handsteuerung (0 = nie)
+    "home_on_start": true,                  // beim Backend-Start/Einschalten einmal zur Grundposition fahren
+    "speed": 0.5,                           // 0.1..1 Geschwindigkeit der Handsteuerung
+    "invert_pan": false, "invert_tilt": false,
+    "patrol": { "enabled": false,
+                "steps": [ { "preset": "1", "dwell_s": 20 } ],   // 1..32 Schritte, dwell_s 3..3600
+                "schedule": null,           // wie Rule.schedule; null = immer
+                "pause_s": 0 },             // 0..86400 Pause in der Grundposition zwischen zwei Runden
+    "follow": { "enabled": false,
+                "labels": ["person"],       // aus den Detektions-Labels der Kamera
+                "schedule": null,
+                "lost_s": 8,                // 2..120 ohne Ziel → zurück zur Grundposition
+                "max_s": 300,               // 10..3600 längste Verfolgung, danach 60 s Ruhe
+                "speed": 0.5,               // 0.1..1 (viele Kameras ignorieren den Wert, z. B. Reolink E1 Pro)
+                "latency_s": 1.4,           // 0.3..5 Bildverzögerung: nach einem Impuls erst Bilder ab Stopp + latency_s auswerten
+                "tilt": true } },           // auch neigen (false = nur schwenken)
+  "ptz_state": PtzState | null }            // null wenn ptz_enabled false
+```
+Prüfungen (422, deutsch): `home_preset`/Patrouille-Presets müssen nicht vorab existieren (Kamera evtl. offline),
+werden aber beim Ausführen geprüft („Position … gibt es auf der Kamera nicht“).
+
+### PTZ.B Betriebsarten und Sicht
+
+```jsonc
+// PtzState
+{ "mode": "idle|manual|rule|follow|patrol|error",
+  "view": "home|away|unknown",   // home = steht ruhig in der Grundposition (dann gelten Zonen, Gegenstände, Sensoren)
+  "moving": false,
+  "preset": "1" | null, "preset_name": "Fenster" | null,    // zuletzt angefahrene Position (null nach Handsteuerung)
+  "until": "...iso" | null,      // Ende von manual/rule bzw. Verweilen im Patrouillen-Schritt
+  "patrol_step": 0 | null, "target": { "track_id": 4711, "label": "person" } | null,
+  "paused_until": "...iso" | null,   // Automatik (Patrouille/Verfolgung) pausiert
+  "error": "Kamera nicht erreichbar …" | null, "updated_at": "..." }
+```
+- Vorrang: `manual` > `rule` > `follow` > `patrol` > `idle`. Eine höhere Betriebsart unterbricht eine niedrigere;
+  `follow` startet nur aus `idle`/`patrol` (bestätigtes Objekt eines `follow.labels` ≥ 1 s im Bild).
+- `manual`: jede Handsteuerung verlängert `until` = jetzt + `return_s` (`return_s` 0 = bleibt stehen, bis
+  `resume`); danach Grundposition. Während `manual` laufen Patrouille und Verfolgung nicht.
+- `rule`: Regel-Aktion `ptz` (PTZ.D), `until` = jetzt + `hold_s`, danach Grundposition.
+- `follow`: Ziel mittig halten: je Schritt **eine** Achse, Impuls 0,25–0,6 s (`ContinuousMove` mit `Timeout` +
+  `Stop`), der ≈ 60 % der Abweichung ausgleicht; Totzone 0,12 (waagrecht) / 0,15 (senkrecht); erst wieder
+  nachsteuern, wenn eine Detektion mit `ts ≥ Stopp + latency_s` vorliegt. Schrittweite (Bildanteil je s) und
+  Richtung je Achse lernt das Backend aus der Verschiebung des Ziels nach (nur im Speicher; zweimal deutlich
+  falsche Richtung → Achse umgekehrt, Warnung im Log). Ziel weg > `lost_s` oder Dauer > `max_s` → Grundposition.
+- `patrol`: Schritte der Reihe nach (anfahren, ruhig werden, `dwell_s` verweilen), danach Grundposition und
+  `pause_s` warten; nur wenn `schedule` aktiv.
+- `view`: `home` nur nach einer abgeschlossenen Fahrt zu `home_preset` (Kamera meldet `IDLE` bzw. 6 s ohne
+  Statusabfrage, danach 1,5 s Beruhigung) und ohne Handbewegung seitdem; jede Bewegung → `away`. Ohne
+  `home_preset` bleibt `view` bis zur ersten Bewegung `home`, danach `away`.
+- Kamera nicht erreichbar → `mode: "error"` mit deutscher Meldung, neuer Versuch alle 60 s; die Detektion läuft
+  davon unberührt weiter.
+
+### PTZ.C REST (Präfix `/api/cameras/{id}/ptz`; GET Scope `read`, sonst `write`)
+
+- `GET` → `PtzInfo { camera_id, enabled, connected, error, device: {manufacturer, model, firmware} | null,
+  capabilities: {continuous, zoom, presets, presets_max, status}, presets: [{token, name}], state: PtzState | null }`
+  (Presets max. 30 s gecacht).
+- `POST /probe {onvif_port?, onvif_user?, onvif_password?}` → `{ok, port, device, capabilities, presets, error}` –
+  auch bei `ptz_enabled=false` (Einrichtung); fehlende Werte aus der gespeicherten Konfiguration bzw. Kamera-URL.
+- `POST /move {pan, tilt, zoom (je -1..1, Default 0), duration_ms 50..3000 = 500}` → PtzState. Bewegt mit
+  `speed`·Wert, stoppt nach `duration_ms` selbst (Halten in der Oberfläche = wiederholte Aufrufe). Modus `manual`.
+- `POST /stop` → PtzState. `POST /goto {preset: str | null (null = Grundposition), hold_s?: 5..3600}` → PtzState
+  (`manual`, `until` = jetzt + (`hold_s` oder `return_s`)).
+- `POST /presets {name: 1..40}` → `{token, name}` (aktuelle Position speichern); `DELETE /presets/{token}` → 204,
+  409 wenn Grundposition oder in der Patrouille benutzt.
+- `POST /resume` → beendet `manual`/`rule`/`follow`, fährt zur Grundposition, Automatik läuft wieder.
+- `POST /pause {minutes: 1..1440}` → Patrouille/Verfolgung pausieren (`paused_until`); `minutes: 0` hebt auf.
+- Fehler: 409 „PTZ ist für diese Kamera nicht eingeschaltet“, 502 mit deutscher Meldung bei Kamerafehlern.
+
+### PTZ.D Regeln, WebSocket, MQTT
+
+- Regel-Aktion `{ "type": "ptz", "camera_id": null | int (null = Kamera des Ereignisses), "preset": null | str
+  (null = Grundposition), "hold_s": 30 (5..3600) }`. Wirkt bei Track- und Bedingungs-Regeln; wird ignoriert,
+  solange `manual` aktiv ist.
+- WS: `{"type":"ptz","camera_id":3,"state":PtzState}` bei jeder Zustandsänderung.
+- Intern (Backend → Worker, retain): `vg/internal/ptz/{camera_id}` `{camera_id, view, moving, mode, ts}`; leer
+  (gelöscht), wenn PTZ aus ist. Der Worker wertet bei `view != "home"` oder `moving`: **keine Zonen-Wechsel**
+  (bestehende Tracks behalten ihre Zonen, neue haben keine), **kein Inventar-Durchlauf** (stattdessen derselbe
+  Zustand mit neuem `ts` und `"paused": "ptz"`, nichts wird `missing`), **keine Sensor-Messung**, **keine
+  Gesundheitsprüfung**. Detektion, Tracking, Identifikation, Clips und Zeitmaschine laufen weiter.
+- Extern: `{prefix}/{camera_slug}/ptz` (retain) `{mode, view, preset_name}`.
+- Kamera-Gesundheit meldet bei PTZ-Kameras in der Grundposition „verschoben“ → das Backend fährt (höchstens alle
+  10 min) erneut die Grundposition an.
+
+### PTZ.E MCP (Tools mit Schreibwirkung brauchen Scope `write`)
+
+| Tool | Parameter | Rückgabe |
+|---|---|---|
+| `ptz_status` | `camera_id?`, `camera_name?` | `{cameras:[{id, name, state, presets:[{token,name}], home_preset}]}` (nur PTZ-Kameras) |
+| `ptz_move_to` | `camera_id?`/`camera_name?`, `preset: str` (Name oder Token; „home“/„Grundposition“), `hold_s?` | PtzState; danach Bild per `get_camera_snapshot` |

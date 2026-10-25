@@ -334,6 +334,35 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
   .page-full:has(.focus) { height: auto; }
 }
 
+/* PTZ-Steuerkreuz (Fokusansicht) */
+.ptz-pad {
+  position: absolute; right: 12px; bottom: 12px; z-index: 5; width: 188px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  background: rgba(10, 15, 23, 0.78); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius);
+  font-size: 12px; touch-action: none; user-select: none;
+}
+.ptz-head { display: flex; align-items: center; gap: 6px; }
+.ptz-head b { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.ptz-err { color: var(--warn); font-size: 12px; }
+.ptz-cross { display: grid; grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px); gap: 4px; justify-content: center; }
+.ptz-cross .up { grid-column: 2; grid-row: 1; }
+.ptz-cross .left { grid-column: 1; grid-row: 2; }
+.ptz-cross .mid { grid-column: 2; grid-row: 2; }
+.ptz-cross .right { grid-column: 3; grid-row: 2; }
+.ptz-cross .down { grid-column: 2; grid-row: 3; }
+.ptz-btn {
+  width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; cursor: pointer;
+  background: var(--bg-3); border: 1px solid var(--line-2); color: var(--text-1);
+}
+.ptz-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.ptz-btn:active:not(:disabled) { background: var(--accent-soft); }
+.ptz-btn:disabled { opacity: .4; cursor: not-allowed; }
+.ptz-toggle { position: absolute; right: 12px; bottom: 12px; z-index: 5; background: rgba(10, 15, 23, 0.7); backdrop-filter: blur(6px); }
+@media (max-width: 640px) {
+  .ptz-pad { right: 8px; bottom: 8px; width: 164px; padding: 8px; }
+  .ptz-cross { grid-template-columns: repeat(3, 36px); grid-template-rows: repeat(3, 36px); }
+  .ptz-btn { width: 36px; height: 36px; }
+}
+
 /* ---------------- Event feed ---------------- */
 .feed {
   width: 340px; flex: none; display: flex; flex-direction: column; min-height: 0;

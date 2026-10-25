@@ -30,6 +30,9 @@ RAM-Ringpuffer, Push aufs Handy, MQTT-Nachricht oder Webhook.
   MQTT, Webhook oder Mail
 - **Frag die Kamera:** Fragen zum aktuellen Bild an ein lokales Bildmodell (Moondream, Dienst `vlm`, optional)
 - **Kamera-Gesundheit:** verdeckt, unscharf, zu dunkel, eingefroren oder verschoben – mit Hinweis
+- **Schwenk-Kameras (PTZ über ONVIF):** Steuerkreuz im Live-Bild, gespeicherte Positionen, Grundposition,
+  Patrouille nach Zeitplan, Verfolgen von Personen/Tieren, Regel-Aktion „Kamera schwenken“; Zonen, Gegenstände und
+  Sensoren gelten für die Grundposition und pausieren, solange die Kamera woanders hinschaut
 - **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
 - **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
 - **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse, Sensoren;
@@ -129,9 +132,9 @@ damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten könne
 
 - **URL:** `http://<host>:8080/mcp` (über nginx; intern `http://mcp:8100/mcp`).
 - **API-Key:** unter **Administration → API-Zugänge** erzeugen. Scope `read` genügt für alle lesenden Tools;
-  die drei Tools mit Wirkung (unten mit ✎) brauchen `write`. Der Key wird nur einmal angezeigt und kann dort
+  die Tools mit Wirkung (unten mit ✎) brauchen `write`. Der Key wird nur einmal angezeigt und kann dort
   jederzeit widerrufen werden. Ohne gültigen Key antwortet `/mcp` mit 401.
-- **Tools** (21, Antworten auf Deutsch):
+- **Tools** (23, Antworten auf Deutsch):
 
 | Tool | Zweck |
 |---|---|
@@ -152,6 +155,7 @@ damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten könne
 | `ask_camera(question, camera_id? \| camera_name?)` | Frage zum aktuellen Bild (lokales Bildmodell; global höchstens 12 Fragen/h über API-Keys) |
 | `list_sensors(…)` / `get_sensor(…)` | virtuelle Sensoren und Vorräte |
 | `get_shopping_list()` / `add_to_shopping_list(name)` ✎ | Einkaufsliste |
+| `ptz_status(camera_id? \| camera_name?)` / `ptz_move_to(preset, camera_id? \| camera_name?, hold_s?)` ✎ | Schwenk-Kameras: Ausrichtung und Positionen / Position anfahren (danach `get_camera_snapshot`) |
 
 Beispiel Claude Code:
 

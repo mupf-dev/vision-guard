@@ -638,8 +638,23 @@ class Processor:
             rules.submit_async(self.loop, rules.run_webhook(action, ctx, event_data))
         elif typ == "push":
             self._run_push(action, rule, tr, ev, ctx, date, cond)
+        elif typ == "ptz":
+            self._run_ptz(action, rule, tr.camera_id)
         else:
             log.warning("Unbekannte Aktion: %s", typ)
+
+    @staticmethod
+    def _run_ptz(action: dict[str, Any], rule: dict[str, Any], camera_id: Optional[int]) -> None:
+        """PTZ: Kamera (Aktion oder Ereignis) zu `preset` fahren und `hold_s` halten (CONTRACT PTZ.D)."""
+        from .ptz import manager as ptz_manager
+        target = action.get("camera_id") or camera_id
+        ctl = ptz_manager.get(int(target)) if target else None
+        if ctl is None:
+            log.info("Regel '%s': PTZ-Aktion – Kamera %s hat keine PTZ-Steuerung", rule["name"], target)
+            return
+        if not ctl.rule_goto(action.get("preset"), float(action.get("hold_s") or 30)):
+            log.info("Regel '%s': PTZ-Aktion für Kamera %s ignoriert (Handsteuerung aktiv oder nicht verbunden)",
+                     rule["name"], target)
 
     def _run_push(self, action: dict[str, Any], rule: dict[str, Any], tr: TrackState, ev: Event,
                   ctx: dict[str, Any], date: str, cond: Optional[rules.CondResult] = None) -> Optional[dict]:
@@ -1048,6 +1063,8 @@ class Processor:
                     # W3 (A3): sensors.py nimmt beim bestätigten Wechsel ein Standbild auf (go2rtc) – das ist der
                     # Snapshot dieser Regel (hängt an Notification/Push, Platzhalter {snapshot_url})
                     log.debug("%s '%s': Snapshot = Standbild des Sensors (%s)", label, rule["name"], snap)
+                elif typ == "ptz":
+                    self._run_ptz(a, rule, cam_id)
                 elif typ in ("snapshot", "clip"):
                     log.info("%s '%s': Aktion %s braucht ein Ereignis – übersprungen", label, rule["name"], typ)
             except Exception:

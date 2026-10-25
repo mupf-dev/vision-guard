@@ -4,7 +4,7 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import state
+from . import ptz, state
 from .models import Camera, Event, Identity, IdentitySample, Notification, Rule
 from .schemas import iso, media_url
 from .secrets_mask import mask_url
@@ -43,6 +43,10 @@ def camera_json(c: Camera) -> dict[str, Any]:
         "history_tiling": bool(c.history_tiling),
         # W4 (C2)
         "reid_enabled": bool(c.reid_enabled),
+        # PTZ (ONVIF)
+        "ptz_enabled": bool(c.ptz_enabled),
+        "ptz": ptz.public_config(c.ptz),
+        "ptz_state": ptz.manager.state(c.id) if c.ptz_enabled else None,
         "status": state.status_for(c.id, c.enabled),
     }
 

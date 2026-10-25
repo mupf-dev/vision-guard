@@ -53,7 +53,9 @@ OPTIONAL_UPDATE_FIELDS = ("room", "inventory_enabled", "inventory_interval_s", "
                           # W3
                           "vlm_cloud_allowed", "history_enabled", "history_interval_s", "history_tiling",
                           # W4
-                          "reid_enabled")
+                          "reid_enabled",
+                          # PTZ
+                          "ptz_enabled", "ptz")
 
 
 def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:
@@ -75,6 +77,11 @@ def _apply(c: Camera, body: CameraIn, update: bool = False) -> None:
         data["inventory_label_min_scores"] = {k: v for k, v in scores.items() if k in keep}
     if "inventory_suppress" in data:
         data["inventory_suppress"] = [x.model_dump() for x in body.inventory_suppress]
+    if "ptz" in data:   # PTZ: "***" = gespeichertes ONVIF-Passwort behalten
+        new = body.ptz.model_dump()
+        if new.get("onvif_password") == "***":
+            new["onvif_password"] = (c.ptz or {}).get("onvif_password")
+        data["ptz"] = new
     for k, v in data.items():
         setattr(c, k, v)
 

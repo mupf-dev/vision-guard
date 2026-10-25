@@ -36,6 +36,7 @@ from typing import Any, Callable, Optional
 import cv2
 import numpy as np
 
+from . import ptz_view
 from .util import abs_media_path
 
 log = logging.getLogger("vg.sensors")
@@ -174,6 +175,8 @@ class SensorEngine:
         return float((cover & mask).sum()) / n if n else 0.0
 
     def _on_frame(self, f) -> None:
+        if not ptz_view.at_home(f.camera_id) or f.ts < ptz_view.home_since(f.camera_id):
+            return                  # PTZ: Bereiche gelten nur in der Grundposition
         t0 = time.perf_counter()
         with self.lock:
             sens = list(self.cams.get(f.camera_id) or [])

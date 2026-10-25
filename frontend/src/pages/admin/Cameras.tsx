@@ -11,6 +11,8 @@ import { HeartPulse, Package, PersonStanding } from "lucide-react";
 import { CameraHealthTab } from "./CameraHealth";
 import { CameraAskSection } from "./CameraAsk";
 import { CameraHistorySection } from "./CameraHistory";
+import { CameraPtzTab, PTZ_DEFAULT } from "./CameraPtz";
+import { Move } from "lucide-react";
 import { HealthBadge } from "../../components/HealthBadge";
 import { StatusBadge } from "../Live";
 import { toast, useLive } from "../../lib/store";
@@ -24,11 +26,12 @@ const EMPTY: CameraInput = {
   pose_enabled: false, gesture_enabled: false, inventory_label_min_scores: {}, inventory_suppress: [],
   vlm_cloud_allowed: false, history_enabled: false, history_interval_s: 30, history_tiling: false,
   reid_enabled: false,
+  ptz_enabled: false, ptz: PTZ_DEFAULT,
 };
 
 function strip(c: Camera): CameraInput {
-  const { id: _id, status: _s, ...rest } = c;
-  void _id; void _s;
+  const { id: _id, status: _s, ptz_state: _p, ...rest } = c;
+  void _id; void _s; void _p;
   return { ...EMPTY, ...rest };
 }
 
@@ -70,7 +73,7 @@ function PersonAnalysis({ f, set }: { f: CameraInput; set: <K extends keyof Came
 function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState<CameraInput>(cam ? strip(cam) : EMPTY);
-  const [tab, setTab] = useState<"general" | "zones" | "inventory" | "health">("general");
+  const [tab, setTab] = useState<"general" | "zones" | "inventory" | "health" | "ptz">("general");
   const [test, setTest] = useState<{ url: string; res?: CameraTestResult; busy?: boolean; err?: string } | null>(null);
   const set = <K extends keyof CameraInput>(k: K, v: CameraInput[K]) => setF((p) => ({ ...p, [k]: v }));
   const valid = f.name.trim() && f.url.trim();
@@ -107,6 +110,7 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
         <button className={tab === "zones" ? "on" : ""} onClick={() => setTab("zones")}><MapPin size={15} />Zonen<span className="count">{f.zones.length}</span></button>
         <button className={tab === "inventory" ? "on" : ""} onClick={() => setTab("inventory")}><Package size={15} />Gegenstände{f.inventory_enabled && <span className="count">an</span>}</button>
         <button className={tab === "health" ? "on" : ""} onClick={() => setTab("health")}><HeartPulse size={15} />Zustand{cam?.status?.health?.state === "warn" && <span className="count" style={{ color: "var(--warn)" }}>!</span>}</button>
+        <button className={tab === "ptz" ? "on" : ""} onClick={() => setTab("ptz")}><Move size={15} />Schwenken{f.ptz_enabled && <span className="count">an</span>}</button>
       </div>
       {tab === "general" ? (
         <div className="form-grid">
@@ -147,6 +151,8 @@ function CameraDialog({ cam, onClose }: { cam: Camera | null; onClose: () => voi
         <CameraInventoryTab f={f} set={set} cameraId={cam?.id} />
       ) : tab === "health" ? (
         <CameraHealthTab cam={cam} f={f} set={set} />
+      ) : tab === "ptz" ? (
+        <CameraPtzTab f={f} set={set} cameraId={cam?.id} savedEnabled={!!cam?.ptz_enabled} />
       ) : (
         <ZoneEditor cameraId={cam?.id ?? null} zones={f.zones} onChange={(z) => set("zones", z)} />
       )}
@@ -196,6 +202,7 @@ export function CamerasPage() {
                   {c.pet_recognition && <span className="badge ok" style={{ animation: "none" }}>Tiere</span>}
                   {(c.pose_enabled || c.gesture_enabled || c.reid_enabled) && <span className="badge info" title="Personenanalyse"><PersonStanding size={11} />{[c.pose_enabled && "Haltung", c.gesture_enabled && "Gesten", c.reid_enabled && "Wiedererkennung"].filter(Boolean).join(" + ")}</span>}
                   {c.inventory_enabled && <span className="badge accent" title={`alle ${c.inventory_interval_s} s · ${c.inventory_labels.length ? `${c.inventory_labels.length} Gegenstände` : "gesamtes Vokabular"}`}><Package size={11} />Gegenstände</span>}
+                  {c.ptz_enabled && <span className="badge info" title="Schwenken/Neigen über ONVIF"><Move size={11} />PTZ{c.ptz?.patrol?.enabled ? " · Patrouille" : ""}{c.ptz?.follow?.enabled ? " · Verfolgen" : ""}</span>}
                   {c.room && <span className="badge outline">{c.room}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>{c.labels.map(labelName).join(", ")}</span>
                 </div>

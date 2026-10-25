@@ -56,10 +56,117 @@ export interface Camera {
   history_tiling: boolean;
   /** W4 C2: Personen über Kameras wiedererkennen (Kleidung/Statur, Embeddings nur im RAM) */
   reid_enabled: boolean;
+  /** PTZ (ONVIF): Schwenken/Neigen, Patrouille, Verfolgung */
+  ptz_enabled: boolean;
+  ptz: PtzConfig;
+  /** read-only, null wenn PTZ aus */
+  ptz_state?: PtzState | null;
   status?: CameraStatus | null;
 }
 
-export type CameraInput = Omit<Camera, "id" | "status">;
+export type CameraInput = Omit<Camera, "id" | "status" | "ptz_state">;
+
+/* ---------- PTZ (CONTRACT „Nachträge: PTZ“) ---------- */
+export interface PtzStep {
+  preset: string;
+  dwell_s: number;
+}
+
+export interface PtzSchedule {
+  days: number[];
+  start: string;
+  end: string;
+}
+
+export interface PtzConfig {
+  onvif_port: number | null;
+  onvif_user: string | null;
+  /** "***" = gesetzt (unverändert zurückschicken) */
+  onvif_password: string | null;
+  profile_token: string | null;
+  home_preset: string | null;
+  return_s: number;
+  home_on_start: boolean;
+  speed: number;
+  invert_pan: boolean;
+  invert_tilt: boolean;
+  patrol: { enabled: boolean; steps: PtzStep[]; schedule: PtzSchedule | null; pause_s: number };
+  follow: {
+    enabled: boolean;
+    labels: string[];
+    schedule: PtzSchedule | null;
+    lost_s: number;
+    max_s: number;
+    speed: number;
+    /** Bildverzögerung (s): erst danach wird nachgesteuert */
+    latency_s: number;
+    /** auch neigen (sonst nur schwenken) */
+    tilt: boolean;
+  };
+}
+
+export type PtzMode = "idle" | "manual" | "rule" | "follow" | "patrol" | "error";
+
+export interface PtzState {
+  mode: PtzMode;
+  /** home = steht ruhig in der Grundposition (Zonen, Gegenstände, Sensoren gelten) */
+  view: "home" | "away" | "unknown";
+  moving: boolean;
+  preset: string | null;
+  preset_name: string | null;
+  until: string | null;
+  patrol_step: number | null;
+  target: { track_id: number; label: string } | null;
+  paused_until: string | null;
+  error: string | null;
+  updated_at: string;
+}
+
+export interface PtzPreset {
+  token: string;
+  name: string;
+}
+
+export interface PtzCapabilities {
+  continuous: boolean;
+  zoom: boolean;
+  presets: boolean;
+  presets_max: number;
+  status: boolean;
+}
+
+export interface PtzDevice {
+  manufacturer: string | null;
+  model: string | null;
+  firmware: string | null;
+}
+
+export interface PtzInfo {
+  camera_id: number;
+  enabled: boolean;
+  connected: boolean;
+  error: string | null;
+  device: PtzDevice | null;
+  capabilities: PtzCapabilities | null;
+  presets: PtzPreset[];
+  state: PtzState | null;
+}
+
+export interface PtzProbeResult {
+  ok: boolean;
+  port: number | null;
+  device: PtzDevice | null;
+  capabilities: PtzCapabilities | null;
+  presets: PtzPreset[];
+  profile_token?: string | null;
+  error: string | null;
+}
+
+export interface PtzMsg {
+  type: "ptz";
+  camera_id: number;
+  state: PtzState;
+}
 
 export type IdentityMode = "any" | "known" | "unknown" | "specific";
 /** Registry im Backend (rules.TRIGGERS); W1: time = Regel ohne Track/Event → Notification */
@@ -99,7 +206,9 @@ export type RuleAction =
   | { type: "mqtt"; topic: string; payload: string | null; retain: boolean }
   | { type: "webhook"; url: string; method: string; headers: Record<string, string>; body: string | null }
   /** W1: Push an ein Ziel aus Settings.push_targets (target null = alle aktiven Ziele) */
-  | { type: "push"; target: string | null; title: string; message: string; priority: PushPriority; image: "snapshot" | "crop" | "none" };
+  | { type: "push"; target: string | null; title: string; message: string; priority: PushPriority; image: "snapshot" | "crop" | "none" }
+  /** PTZ: Kamera zu einer gespeicherten Position fahren (null = Kamera des Ereignisses / Grundposition) */
+  | { type: "ptz"; camera_id: number | null; preset: string | null; hold_s: number };
 
 export interface Rule {
   id: number;
@@ -355,7 +464,8 @@ export type WsMessage =
   | ReportMsg
   | SensorMsg
   | ShoppingListMsg
-  | PresenceMsg;
+  | PresenceMsg
+  | PtzMsg;
 
 export interface IdentityDeleted {
   id: number;

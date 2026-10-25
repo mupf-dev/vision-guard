@@ -9,6 +9,7 @@ import { toast } from "../../lib/store";
 import { ConditionsBlock, RULE_TEMPLATES, SENSOR_STATE_NAME, SensorStatePicker, useConditionSummary, useSensors } from "../../components/RuleConditions";
 import { ALL_GESTURES, GESTURE_HINT, GESTURE_NAME, POSTURE_TRIGGER_NAME, fmtDuration } from "../../lib/pose";
 import { GestureIcon } from "../../components/GestureIcon";
+import { Move } from "lucide-react";
 
 const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}", "{posture}", "{gesture}", "{repeat}", "{sensor}", "{sensor_state}"];
 
@@ -31,6 +32,7 @@ const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactN
   mqtt: { name: "MQTT", icon: <Radio size={15} /> },
   webhook: { name: "Webhook", icon: <Globe size={15} /> },
   push: { name: "Push", icon: <BellRing size={15} /> },
+  ptz: { name: "Kamera schwenken", icon: <Move size={15} /> },
 };
 
 function newAction(t: RuleAction["type"]): RuleAction {
@@ -40,6 +42,7 @@ function newAction(t: RuleAction["type"]): RuleAction {
     case "mqtt": return { type: "mqtt", topic: "visionguard/alarm/{camera}", payload: null, retain: false };
     case "webhook": return { type: "webhook", url: "", method: "POST", headers: {}, body: null };
     case "push": return { type: "push", target: null, title: "{rule}", message: "{label} an {camera} ({zone})", priority: "default", image: "snapshot" };
+    case "ptz": return { type: "ptz", camera_id: null, preset: null, hold_s: 30 };
   }
 }
 
@@ -162,6 +165,42 @@ function PushActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "pus
   );
 }
 
+/** PTZ: Kamera zu einer gespeicherten Position fahren und dort halten (danach Grundposition). */
+function PtzActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "ptz" }>; onChange: (a: RuleAction) => void }) {
+  const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
+  const ptzCams = (cams.data ?? []).filter((c) => c.ptz_enabled);
+  const camId = a.camera_id ?? (ptzCams.length === 1 ? ptzCams[0].id : null);
+  const info = useQuery({ queryKey: ["ptz", camId], queryFn: () => api.ptz(camId!), enabled: camId !== null, staleTime: 30_000 });
+  const presets = info.data?.presets ?? [];
+  if (cams.data && !ptzCams.length) {
+    return <div className="hint" style={{ fontSize: 13, color: "var(--warn)" }}>Keine Kamera mit Schwenk-Steuerung – unter Kameras → „Schwenken“ einrichten.</div>;
+  }
+  return (
+    <div className="form-grid">
+      <div className="field"><label>Kamera</label>
+        <select className="select" value={a.camera_id ?? ""} onChange={(e) => onChange({ ...a, camera_id: e.target.value ? Number(e.target.value) : null })}>
+          <option value="">Kamera des Ereignisses</option>
+          {ptzCams.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Position</label>
+        <select className="select" value={a.preset ?? ""} onChange={(e) => onChange({ ...a, preset: e.target.value || null })}>
+          <option value="">Grundposition</option>
+          {a.preset && !presets.some((p) => p.token === a.preset) && <option value={a.preset}>#{a.preset}</option>}
+          {presets.map((p) => <option key={p.token} value={p.token}>{p.name}</option>)}
+        </select>
+      </div>
+      <div className="field span-2"><label>Dort halten</label>
+        <Range value={a.hold_s} min={5} max={600} step={5} format={(v) => (v < 120 ? `${v} s` : `${Math.round(v / 60)} min`)} onChange={(v) => onChange({ ...a, hold_s: v })} />
+      </div>
+      <div className="hint muted span-2" style={{ fontSize: 12 }}>
+        Danach fährt die Kamera zurück zur Grundposition. Wird ignoriert, solange jemand die Kamera von Hand steuert.
+        Andere Kamera wählen, um z. B. bei einer Türklingel-Erkennung eine Schwenk-Kamera auf die Tür zu richten.
+      </div>
+    </div>
+  );
+}
+
 function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: RuleAction) => void; onRemove: () => void }) {
   const meta = ACTION_META[a.type];
   return (
@@ -171,6 +210,7 @@ function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: 
       </div>
       {a.type === "snapshot" && <div className="muted" style={{ fontSize: 13 }}>Speichert ein Vollbild zum Ereignis.</div>}
       {a.type === "push" && <PushActionFields a={a} onChange={onChange} />}
+      {a.type === "ptz" && <PtzActionFields a={a} onChange={onChange} />}
       {a.type === "clip" && (
         <div className="form-grid">
           <div className="field"><label>Vorlauf</label><Range value={a.pre_s} min={0} max={30} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, pre_s: v })} /></div>

@@ -41,7 +41,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from . import settings
+from . import ptz_view, settings
 from .util import crop_norm, day_dir, draw_objects, point_in_polygon, rtsp_input_args, write_jpeg
 
 log = logging.getLogger("vg.inventory")
@@ -669,6 +669,7 @@ class CamInv:
         self.runs_done = 0
         self.uncertain_ts: dict[str, float] = {}     # label → letzter unsicherer Crop (D2)
         self.rematch = True                          # Exemplare neu abgleichen (B4)
+        self.last_frame_ts = 0.0                     # PTZ: Aufnahmezeit des letzten ausgewerteten Bildes
 
     @property
     def interval(self) -> float:
@@ -921,8 +922,25 @@ class InventoryEngine:
                     log.warning("inventory run camera %s failed: %s", c.id, e, exc_info=True)
                     last_err_log = now
 
+    def _ptz_hold(self, c: CamInv) -> None:
+        """PTZ: Kamera nicht in der Grundposition – keinen Durchlauf, aber denselben Zustand mit neuem `ts` melden
+        (`paused: "ptz"`), damit nichts „missing“/„stale“ wird."""
+        c.next_due = time.time() + c.interval_eff
+        if not c.runs_done:
+            return
+        with self.lock:
+            if c.removed:
+                return
+            m = self._base_msg(c, c.last_frame_ts or time.time())
+            m.update({"snapshot_path": None, "stopped": False, "items": c.state.items_msg(), "changes": [],
+                      "uncertain": [], "paused": "ptz"})
+            self.publish(f"vg/internal/inventory/{c.id}", m, 1, True)
+
     def _run_camera(self, c: CamInv, n_cams: int):
         t_start = time.time()
+        if not ptz_view.at_home(c.id):
+            self._ptz_hold(c)
+            return
         rt = self.runtime_of(c.id)
         got = c.grabber.grab(rt, c.cfg)
         if got is None:
@@ -933,6 +951,10 @@ class InventoryEngine:
             return
         c.fail_count = 0
         image, frame_ts = got
+        if frame_ts < ptz_view.home_since(c.id) or not ptz_view.at_home(c.id):
+            self._ptz_hold(c)                       # Keyframe noch aus der Zeit vor der Rückkehr
+            return
+        c.last_frame_ts = frame_ts
         h, w = image.shape[:2]
         c.width, c.height = w, h
         cfg = c.cfg

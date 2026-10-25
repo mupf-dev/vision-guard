@@ -113,7 +113,20 @@ Details je Dienst: [backend/README.md](backend/README.md), [worker/README.md](wo
   sie kennt (TTL `media_link_ttl_h`). `VG_MEDIA_PUBLIC=1` schaltet auf das alte, ungeschützte Verhalten zurück.
 - `VG_SECRET_KEY` ist zugleich Pepper der API-Key-Hashes und Schlüssel der Medien-Signaturen: ein Wechsel macht
   alle Sitzungen, API-Keys und signierten Links ungültig.
-- API-Keys (Admin → „API-Zugänge“) öffnen kein go2rtc-Live-Video und können keine Keys verwalten. Auch mit
+- API-Keys (Admin → „API-Zugänge“) öffnen kein go2rtc-Live-Video und können keine Keys verwalten.
+- **PTZ:** nur ONVIF (kein Hersteller-API). Kameras melden ihre Position meist nicht (Reolink E1 Pro: nur
+  `ContinuousMove`, Presets; `GetStatus` meldet auch während der Fahrt `IDLE`, `GotoPreset` blockiert bis ≈ 4,5 s).
+  Die Grundposition ist ein gespeichertes Preset; „in der Grundposition“ heißt: zuletzt dorthin gefahren und seitdem
+  nicht bewegt. Wer die Kamera mit der Hersteller-App bewegt, wird erst über die Kamera-Gesundheit („verschoben“)
+  bemerkt. Bewegungen immer mit ONVIF-`Timeout`, damit die Kamera auch ohne `Stop` anhält (WLAN). Verfolgen arbeitet
+  mit kurzen Impulsen auf je einer Achse (`FOLLOW_*` in `ptz.py`); gemessen an der E1 Pro: Geschwindigkeit wirkt
+  nicht, 0,5 s ≈ ⅓ Bildbreite, Bewegung erst 1,1–1,2 s nach dem Befehl im Detect-Bild, Impulse < 0,25 s teils
+  verschluckt. Schrittweite und Richtung lernt der Regler zur Laufzeit nach (Log beim Ende der Verfolgung). Das Standbild
+  (`/snapshot.jpg`, go2rtc `frame.jpeg`) ist der letzte Keyframe und läuft nach einer Fahrt einige Sekunden nach.
+  Tests ohne PTZ-Kamera: `scripts/fake_onvif.py` simuliert ein ONVIF-Gerät (Presets, Fahrten, Aufruf-Protokoll) und
+  läuft im Netz von `testcam`, sodass eine Kamera mit `rtsp://user:pw@testcam:8554/cam1` und ONVIF-Port 8000 echte
+  Personen-Detektionen für „Verfolgen“ liefert:
+  `docker run -d --rm --name vg-fakeonvif --network container:$(docker compose ps -q testcam) -v "$PWD/scripts:/app:ro" python:3.12-slim python -u /app/fake_onvif.py 8000` Auch mit
   `write` ändern/sehen sie keine Push-Ziele, LLM-Adresse, Standort, Berichtsversand oder `public_base_url`
   (`routers/misc.py::SESSION_ONLY_SETTINGS`).
 - MQTT von außen (Host-Port `MQTT_PORT`) ist **nur lesend** (Listener 1884 mit ACL); schreiben können nur Dienste

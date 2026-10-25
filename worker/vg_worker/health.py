@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 
 from . import frame_metrics as fm
-from . import settings
+from . import ptz_view, settings
 from .util import abs_media_path, write_jpeg
 
 log = logging.getLogger("vg.health")
@@ -232,7 +232,8 @@ class HealthMonitor:
                     ch.last_reported = ()
                     ch.last_pub = 0.0
                 # Keine Prüfung, solange die Kamera nicht läuft (kurze Ausfälle sind kein Bildproblem)
-                if rt.source.state != "online":
+                # oder eine PTZ-Kamera nicht ruhig in der Grundposition steht
+                if rt.source.state != "online" or not ptz_view.at_home(cid):
                     continue
                 f = rt.source.latest()
                 if f is None or f.seq == ch.prev_seq or now - f.ts > max(5.0, settings.HEALTH_INTERVAL_S):

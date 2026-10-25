@@ -1,4 +1,5 @@
 """Aktionen nach Konfigurationsänderungen."""
+import asyncio
 import logging
 
 from sqlalchemy import select
@@ -21,6 +22,8 @@ async def cameras_changed() -> None:
     await go2rtc.sync(load_cameras())
     bus.publish_config_changed()
     bus.work.put(("reset_counts", None, None))
+    from . import ptz
+    await asyncio.to_thread(ptz.manager.reload)
 
 
 def rules_changed() -> None:

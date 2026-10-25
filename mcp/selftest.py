@@ -28,6 +28,7 @@ EXPECTED |= {"list_open_questions", "answer_question", "get_pet_diary", "get_dai
 EXPECTED |= {"ask_camera"}   # Welle 3 (A2)
 EXPECTED |= {"list_sensors", "get_sensor", "get_shopping_list", "add_to_shopping_list"}   # Welle 3 (A3+C4)
 EXPECTED |= {"search_history"}   # Welle 3 (B1)
+EXPECTED |= {"ptz_status", "ptz_move_to"}   # PTZ
 
 
 def _text(result) -> str:

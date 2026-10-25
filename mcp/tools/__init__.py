@@ -25,6 +25,7 @@ MODULES = (
     "ask",             # W3 A2: ask_camera
     "sensors",         # W3 A3+C4: list_sensors, get_sensor, get_shopping_list, add_to_shopping_list (write)
     "history",         # W3 B1: search_history
+    "ptz",             # PTZ: ptz_status, ptz_move_to (write)
 )
 
 

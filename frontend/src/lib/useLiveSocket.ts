@@ -40,6 +40,12 @@ function handle(msg: WsMessage, qc: QueryClient) {
       pushDetection(msg);
       s.setDetections(msg);
       break;
+    case "ptz":              // PTZ: Zustand je Kamera (Steuerkreuz, Zonen nur in der Grundposition)
+      s.setPtz(msg.camera_id, msg.state);
+      qc.setQueryData<Camera[]>(["cameras"], (old) =>
+        old?.map((c) => (c.id === msg.camera_id ? { ...c, ptz_state: msg.state } : c)),
+      );
+      break;
     case "camera_status":
       s.setStatus(msg.camera_id, msg.status);
       qc.setQueryData<Camera[]>(["cameras"], (old) =>

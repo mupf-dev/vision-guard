@@ -19,6 +19,7 @@ import type {
   SensorKind, SensorReference, ShoppingItem, ShoppingList, VirtualSensor,
 } from "./types";
 import type { Presence, PresenceStatus } from "./types";
+import type { PtzInfo, PtzPreset, PtzProbeResult, PtzState } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -176,6 +177,19 @@ export const api = {
   deleteCamera: (id: number) => del(`/cameras/${id}`),
   testCamera: (url: string) => post<CameraTestResult>("/cameras/test", { url }),
   snapshotUrl: (id: number, bust?: number) => `/api/cameras/${id}/snapshot.jpg${bust ? `?t=${bust}` : ""}`,
+  // PTZ (ONVIF)
+  ptz: (id: number) => get<PtzInfo>(`/cameras/${id}/ptz`),
+  ptzProbe: (id: number, b: { onvif_port?: number | null; onvif_user?: string | null; onvif_password?: string | null } = {}) =>
+    post<PtzProbeResult>(`/cameras/${id}/ptz/probe`, b),
+  ptzMove: (id: number, b: { pan?: number; tilt?: number; zoom?: number; duration_ms?: number }) =>
+    post<PtzState>(`/cameras/${id}/ptz/move`, b),
+  ptzStop: (id: number) => post<PtzState>(`/cameras/${id}/ptz/stop`, {}),
+  ptzGoto: (id: number, preset: string | null, hold_s?: number) =>
+    post<PtzState>(`/cameras/${id}/ptz/goto`, { preset, hold_s }),
+  ptzSavePreset: (id: number, name: string) => post<PtzPreset>(`/cameras/${id}/ptz/presets`, { name }),
+  ptzDeletePreset: (id: number, token: string) => del(`/cameras/${id}/ptz/presets/${encodeURIComponent(token)}`),
+  ptzResume: (id: number) => post<PtzState>(`/cameras/${id}/ptz/resume`, {}),
+  ptzPause: (id: number, minutes: number) => post<PtzState>(`/cameras/${id}/ptz/pause`, { minutes }),
 
   rules: () => get<Rule[]>("/rules"),
   createRule: (r: RuleInput) => post<Rule>("/rules", r),

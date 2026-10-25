@@ -98,6 +98,9 @@ class CameraIn(BaseModel):
     history_tiling: bool = False
     # W4 (C2): Wiedererkennung über Kameras (Kleidung/Statur, nur RAM)
     reid_enabled: bool = False
+    # PTZ (ONVIF): Schwenken/Neigen, Patrouille, Verfolgung (CONTRACT „Nachträge: PTZ“)
+    ptz_enabled: bool = False
+    ptz: "PtzConfig" = Field(default_factory=lambda: PtzConfig())
 
     @field_validator("inventory_label_min_scores")
     @classmethod
@@ -206,7 +209,88 @@ class ActionPush(BaseModel):
     image: Literal["snapshot", "crop", "none"] = "snapshot"
 
 
-Action = ActionSnapshot | ActionClip | ActionMqtt | ActionWebhook | ActionPush
+class ActionPtz(BaseModel):
+    """PTZ: Kamera zu einer gespeicherten Position fahren und dort `hold_s` halten (danach Grundposition)."""
+    type: Literal["ptz"]
+    camera_id: Optional[int] = None          # None = Kamera des Ereignisses
+    preset: Optional[str] = Field(None, max_length=64)   # None = Grundposition
+    hold_s: float = Field(30, ge=5, le=3600)
+
+
+Action = ActionSnapshot | ActionClip | ActionMqtt | ActionWebhook | ActionPush | ActionPtz
+
+
+# ---------- PTZ (ONVIF) – Kamera-Feld `ptz`
+class PtzStep(BaseModel):
+    preset: str = Field(min_length=1, max_length=64)
+    dwell_s: float = Field(20, ge=3, le=3600)
+
+
+class PtzPatrol(BaseModel):
+    enabled: bool = False
+    steps: list[PtzStep] = Field(default_factory=list, max_length=32)
+    schedule: Optional[Schedule] = None
+    pause_s: float = Field(0, ge=0, le=86400)
+
+
+class PtzFollow(BaseModel):
+    enabled: bool = False
+    labels: list[str] = Field(default_factory=lambda: ["person"], min_length=1, max_length=20)
+    schedule: Optional[Schedule] = None
+    lost_s: float = Field(8, ge=2, le=120)
+    max_s: float = Field(300, ge=10, le=3600)
+    speed: float = Field(0.5, ge=0.1, le=1)
+    latency_s: float = Field(1.4, ge=0.3, le=5)    # Bildverzögerung: erst danach wird nachgesteuert
+    tilt: bool = True                              # auch neigen (sonst nur schwenken)
+
+
+class PtzConfig(BaseModel):
+    onvif_port: Optional[int] = Field(None, ge=1, le=65535)
+    onvif_user: Optional[str] = Field(None, max_length=100)
+    onvif_password: Optional[str] = Field(None, max_length=200)   # "***" = unverändert
+    profile_token: Optional[str] = Field(None, max_length=64)
+    home_preset: Optional[str] = Field(None, max_length=64)
+    return_s: float = Field(60, ge=0, le=3600)
+    home_on_start: bool = True
+    speed: float = Field(0.5, ge=0.1, le=1)
+    invert_pan: bool = False
+    invert_tilt: bool = False
+    patrol: PtzPatrol = Field(default_factory=PtzPatrol)
+    follow: PtzFollow = Field(default_factory=PtzFollow)
+
+    @field_validator("onvif_user", "onvif_password", "profile_token", "home_preset")
+    @classmethod
+    def _blank_none(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() or None if isinstance(v, str) else v
+
+
+class PtzMoveIn(BaseModel):
+    pan: float = Field(0, ge=-1, le=1)
+    tilt: float = Field(0, ge=-1, le=1)
+    zoom: float = Field(0, ge=-1, le=1)
+    duration_ms: int = Field(500, ge=50, le=3000)
+
+
+class PtzGotoIn(BaseModel):
+    preset: Optional[str] = Field(None, max_length=64)    # None = Grundposition
+    hold_s: Optional[float] = Field(None, ge=5, le=3600)
+
+
+class PtzPresetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class PtzPauseIn(BaseModel):
+    minutes: int = Field(ge=0, le=1440)
+
+
+class PtzProbeIn(BaseModel):
+    onvif_port: Optional[int] = Field(None, ge=1, le=65535)
+    onvif_user: Optional[str] = Field(None, max_length=100)
+    onvif_password: Optional[str] = Field(None, max_length=200)
+
+
+CameraIn.model_rebuild()
 
 
 # ---------- Regel-Engine v2: Trigger-Optionen und Bedingungen (Registry in rules.py)

@@ -73,6 +73,9 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("cameras", "history_tiling", "boolean NOT NULL DEFAULT false"),
     # Welle 4 (C2): Person über mehrere Kameras
     ("cameras", "reid_enabled", "boolean NOT NULL DEFAULT false"),
+    # PTZ (ONVIF)
+    ("cameras", "ptz_enabled", "boolean NOT NULL DEFAULT false"),
+    ("cameras", "ptz", "jsonb NOT NULL DEFAULT '{}'::jsonb"),
 ]
 
 

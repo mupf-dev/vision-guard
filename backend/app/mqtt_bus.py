@@ -129,7 +129,7 @@ class Bus:
                 return  # eigene Nachrichten
             if not message.payload:
                 return
-            if message.retain and kind in ("status", "health", "inventory") and len(parts) > 3 \
+            if message.retain and kind in ("status", "health", "inventory", "ptz") and len(parts) > 3 \
                     and parts[3].isdigit():
                 from . import registry
                 if registry.get(int(parts[3])) is None:
@@ -146,6 +146,8 @@ class Bus:
                     "type": "detections", "camera_id": cam_id, "ts": msg.get("ts"),
                     "width": msg.get("width"), "height": msg.get("height"), "objects": msg.get("objects") or [],
                 })
+                from .ptz import manager as ptz_manager   # PTZ-Verfolgung (nur Referenz speichern)
+                ptz_manager.on_detections(cam_id, msg)
             elif kind == "status":
                 cam_id = int(parts[3]) if len(parts) > 3 else int(msg.get("camera_id"))
                 state.set_camera_status(cam_id, msg)
@@ -203,6 +205,8 @@ class Bus:
                 elif kind == "health":
                     from . import health
                     health.handle(cam_id, msg)
+                    from .ptz import manager as ptz_manager   # PTZ: „verschoben“ in der Grundposition
+                    ptz_manager.on_health(cam_id, msg)
                 elif kind == "handler":
                     hkind, hmsg = msg
                     _handlers[hkind][0](cam_id, hmsg)

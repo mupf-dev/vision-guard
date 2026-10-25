@@ -16,6 +16,7 @@ import { labelColor, labelName } from "../lib/labels";
 import { fmtAgo } from "../lib/format";
 import { HealthBadge, HealthBanner } from "../components/HealthBadge";
 import { AskCameraButton } from "../components/AskCamera";
+import { PtzBadge, PtzPad, useAtHome } from "../components/PtzControls";
 
 function useStatus(cam: Camera): CameraStatus | null {
   const live = useLive((s) => s.status[cam.id]);
@@ -39,6 +40,7 @@ function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; o
   const status = useStatus(cam);
   const objects = useCameraObjects(cam.id);
   const showZones = useUi((s) => s.showZones);
+  const atHome = useAtHome(cam);   // PTZ: Zonen gelten nur in der Grundposition
   // Worker-Status betrifft die Analyse; das Live-Bild kommt direkt von go2rtc -> nur bei deaktivierter Kamera nicht abspielen.
   const offline = !cam.enabled;
   const analysing = status?.state === "online";
@@ -47,11 +49,12 @@ function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; o
   return (
     <div className={`cam-tile ${alert ? "alert" : ""}`} onClick={onOpen} role="button" tabIndex={0} aria-label={cam.name} onKeyDown={(k) => k.key === "Enter" && onOpen()}>
       <LivePlayer cameraId={cam.id} aspect={aspect} offline={offline}>
-        {(r) => <DetectionOverlay rect={r} cameraId={cam.id} zones={cam.zones} showZones={showZones} compact={compact} />}
+        {(r) => <DetectionOverlay rect={r} cameraId={cam.id} zones={cam.zones} showZones={showZones && atHome} compact={compact} />}
       </LivePlayer>
       <div className="tile-top">
         {!offline && analysing && <span className="badge live"><span className="dot" />LIVE</span>}
         <span className="tile-name">{cam.name}</span>
+        {!compact && <PtzBadge cam={cam} />}
         <span className="spacer" />
         <StatusBadge status={status} enabled={cam.enabled} />
       </div>
@@ -174,6 +177,7 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
   const status = useStatus(cam);
   const objects = useCameraObjects(cam.id);
   const { showZones, set } = useUi();
+  const atHome = useAtHome(cam);
   const offline = !cam.enabled;
   const aspect = status?.width && status?.height ? status.width / status.height : null;
   return (
@@ -188,6 +192,7 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
           <span className="badge outline"><Timer size={12} />{status.inference_ms?.toFixed(1)} ms</span>
         </>}
         {status?.last_seen && status.state !== "online" && <span className="muted">zuletzt {fmtAgo(status.last_seen)}</span>}
+        <PtzBadge cam={cam} />
         <span className="spacer" />
         {counts(objects).map(([l, n]) => (
           <span key={l} className="tile-count" style={{ ["--lc" as string]: labelColor(l), height: 30 }}><LabelIcon label={l} />{n} {labelName(l)}</span>
@@ -199,8 +204,9 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
       <div className="focus">
         <div className="focus-video">
           <LivePlayer cameraId={cam.id} aspect={aspect} offline={offline}>
-            {(r) => <DetectionOverlay rect={r} cameraId={cam.id} zones={cam.zones} showZones={showZones} />}
+            {(r) => <DetectionOverlay rect={r} cameraId={cam.id} zones={cam.zones} showZones={showZones && atHome} />}
           </LivePlayer>
+          {cam.ptz_enabled && !offline && <PtzPad cam={cam} />}
         </div>
         <div className="focus-side"><EventFeed cameraId={cam.id} onPick={onPick} collapsible={false} /></div>
       </div>

@@ -57,6 +57,9 @@ class Camera(Base):
     history_tiling: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     # Welle 4: Person über mehrere Kameras (C2, ReID) – Embeddings nur im RAM des Backends
     reid_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # PTZ (ONVIF): Konfiguration als JSON (schemas.PtzConfig), Passwort nur hier
+    ptz_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    ptz: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
 
 
 class Rule(Base):
