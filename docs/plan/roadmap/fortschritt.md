@@ -577,3 +577,71 @@ Vertragsergänzungen sind rein additiv (keine Spalten/Tabellen/Settings) und ste
 - **Offen:** Messung mit echten Vorratsfotos (Eier, Dosen, Schrank), nachts/IR und mit Cloud-Modell; keine Fragen an
   `cam_3`. Ein Zählsensor mit Nachzählen an `cam_3` (flackerndes Inventar, messungen.md §7) erzeugt höchstens
   12 Fragen/h – im Haupt-Stack nach dem Merge beobachten (`/system.sensors.vlm_calls`).
+
+## Welle 4 – Integration (2026-10-25, früher Morgen, autonom)
+
+**Ergebnis:** Beide Fach-Zweige sind per `--no-ff` im Arbeitszweig (`w4/c2-reid`, `w4/c4-vlm-modus`), Worktrees
+entfernt, Zweige gelöscht. Der Haupt-Stack (Profile `demo` + `vlm`) läuft nach `docker compose up -d --build` mit
+allen Diensten (backend/mcp healthy, keine Neustarts). Kein Feature musste zurückgenommen oder abgeschaltet werden;
+beide Funktionen sind ohnehin standardmäßig aus (ReID je Kamera, VLM-Messart je Sensor).
+
+- **Konflikte:** nur angehängte Abschnitte am Dateiende von `CONTRACT.md`, `fortschritt.md` und `messungen.md` –
+  beide Seiten erhalten. Beide Zweige hatten ihre Messung als `messungen.md` §11 nummeriert: C2 bleibt §11, die
+  C4-VLM-Messung ist jetzt **§12** (Verweise in `CONTRACT.md`, `backend/app/sensors.py`, `fortschritt.md`
+  angepasst). Code (`db.py`, `config.py`, `schemas.py`, `types.ts`, `mock.ts`, AGENTS.md) automatisch zusammengeführt.
+- **Build:** `corepack pnpm build` grün; Python-Syntaxprüfung aller Dienste ok; Logs nach dem Start ohne
+  Fehler/Tracebacks. Einzige Warnungen: `go2rtc-Sync fehlgeschlagen … 400` beim Löschen der Test-Kameras
+  (`DELETE /api/streams?src=cam_N`; Streams sind trotzdem weg; Code seit W3 unverändert, kein W4-Thema).
+
+### End-to-end im Haupt-Stack (Test-API-Key read+write, danach widerrufen)
+
+Temporär angelegt: Kamera A (`testcam cam1`, Gesichtserkennung, ReID an), Kamera B (gleicher Stream, ohne Gesicht,
+ReID an), Kamera „Regal“ (`testcam cam5`) mit zwei Bildmodell-Sensoren.
+
+| Prüfung | Ergebnis |
+|---|---|
+| Neue Endpunkte über nginx (`/presence`, `/presence/status`, `/system`, `/settings` mit `reid_*`) | 200; `POST /api/internal/reid` über nginx 403 |
+| ReID (Worker, CPU) | `reid: ready (osnet_x0_25_msmt17, CPU)`, ≈ 8,6 ms je Ausschnitt; nach ≈ 2 min 32 Anfragen, 12 verknüpft, 20 neu, 0 Fehler |
+| `presence_key` über Kameras | A/B-Tracks verknüpft; Ereignis auf B mit `identity_source:"reid"` trägt dieselbe Identität wie das zeitgleiche Ereignis auf A (1 benannt, 0 falsch, 10 ohne Namen – B ist im Test nur kurz gelaufen) |
+| Kein Embedding auf Platte | `/data/media` nur `.jpg`; in der DB nur `cameras.reid_enabled`; keine Vektoren in den Logs |
+| MCP `who_is_where` | Personen inkl. „erkannt per Wiedererkennung über Kameras“, Bild-Links signiert |
+| C4-VLM: Prüfungen | `min_count` 4, `vlm_max_age_s` 600, fehlender Artikel, `fill`+`verify_vlm` → jeweils 422 mit deutscher Meldung |
+| C4-VLM: echte Fragen (Moondream 2 INT4, `vlm`-Dienst) | Zählsensor „bottles“: Antwort `0` → `out`, 7,2 s (kalt, inkl. Lease); `fill`-Sensor: `empty` → `out`, 2,0 s; Einkaufsliste + Hinweis automatisch angelegt |
+| MCP `list_sensors` | `measure` (`count`/`fill`) und `last_answer` vorhanden |
+| SPA `/anwesenheit` | 200, Seite im Bundle |
+
+Inhaltlich (ob das Regal-Bild wirklich 0 Flaschen zeigt) wurde nicht bewertet – das Testbild war laut Sensor
+„gerade verdeckt“ (Person im Bild); die Zählqualität ist in `messungen.md` §12 gemessen.
+
+### Messwerte
+
+| Prüfung | Ergebnis |
+|---|---|
+| Lasttest 16 Kameras (`selftest … --replicate 8 --seconds 60`, unter `flock`, Haupt-Stack parallel), ohne ReID | 60,8 fps gesamt, Batch 43,0 ms, VRAM ganze GPU max. 4,40 GB |
+| … mit `--reid` (16 Kameras) | 64,5 fps gesamt, Batch 38,2 ms, VRAM max. 4,43 GB; ReID 104 Embeddings/min, 22,5 ms, 0 Fehler |
+| `cam_3` während der Lasttests (44 Status-Proben) | 4,67–5,14 fps, Ø 4,98 fps; `inference_ms` max. 20,9 |
+| VRAM Haupt-Stack in Ruhe (Inventar + Zeitmaschine an `cam_3`) | ≈ 2,9 GB |
+
+Vergleich W3: 61,2 fps / 4,46 GB → keine Verschlechterung; ReID kostet keinen VRAM (CPU).
+
+### Aufgeräumt
+
+Test-Kameras 6/7/8 samt 53 Events, 7 unbenannte Test-Gesichter, 2 Sensoren, 2 Einkaufseinträge, 2 Hinweise,
+Anwesenheits-Galerie (`DELETE /presence`); Event-Zahl wieder wie vorher (83). Test-API-Key widerrufen, Key-Datei
+gelöscht. ReID ist im Haupt-Stack an keiner Kamera aktiv (Standard), `cam_3` unverändert.
+
+### Zurückgestellt
+
+- **D3 verteilte Worker:** nicht umgesetzt – kein zweiter Rechner/Jetson vorhanden. Die W0-Vorbereitung
+  (`VG_WORKER_ID`, `worker_id` in Nachrichten) bleibt bestehen.
+- **D1b Handformen:** nicht umgesetzt (optional, geringer Nutzen, hätte die GPU zusätzlich belastet).
+
+### Offen
+
+- ReID mit echten Aufnahmen derselben Person in zwei Räumen prüfen (Schwelle 0,70 im Betrieb über
+  `/api/presence/status`, Verhältnis `linked`/`new`); Deckenkameras, Kleidungswechsel, Gruppen ungetestet.
+- C4-VLM mit echten Vorratsfotos (Eier, Dosen, Schrank) und bei Nacht/IR messen; ein Zählsensor mit Nachzählen an
+  `cam_3` kann bis zu 12 Fragen/h auslösen (`/system.sensors.vlm_calls` beobachten).
+- go2rtc-Warnung beim Löschen einer Kamera (`400` auf `DELETE /api/streams`) untersuchen.
+- `COMPOSE_PROFILES` in `.env` enthält nur `demo`; der Haupt-Stack wurde mit `--profile demo --profile vlm`
+  gestartet (`.env` nicht geändert – Nutzerentscheidung, s. W3).
