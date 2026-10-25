@@ -948,8 +948,9 @@ export interface VirtualSensor {
   kind: SensorKind;
   /** Polygon wie Zonen (normiert) */
   region: [number, number][];
-  /** je Art: brightness {threshold, invert}, blink {min_std, window_s}, inventory_count {labels, min_count},
-   * fill {low_below, out_below}, vlm {question}, reference {} */
+  /** je Art: brightness {threshold, invert}, blink {min_std, window_s}, inventory_count {labels, min_count,
+   * item? (W4: verify_vlm)}, fill {low_below, out_below}, reference {},
+   * vlm {measure?: VlmMeasure (Default yesno), question, item? (count/fill), min_count? (count, 1..3)} */
   params: Record<string, unknown>;
   state_set: SensorStateSet;
   supply: boolean;
@@ -965,10 +966,15 @@ export interface VirtualSensor {
   last_engine: "cheap" | "local" | "cloud" | null;
   snapshot_url: string | null;
   state_text: string;
+  /** W4 (C4-VLM): letzte Antwort des Bildmodells (nur im Speicher des Backends, nach Neustart null) */
+  last_answer?: string | null;
 }
 
+/** W4 (C4-VLM-Modus): Messart eines Bildmodell-Sensors */
+export type VlmMeasure = "yesno" | "count" | "fill";
+
 export type SensorInput = Omit<VirtualSensor,
-  "id" | "camera_name" | "room" | "state" | "value" | "since" | "last_eval" | "last_engine" | "snapshot_url" | "state_text">;
+  "id" | "camera_name" | "room" | "state" | "value" | "since" | "last_eval" | "last_engine" | "snapshot_url" | "state_text" | "last_answer">;
 
 export interface SensorHistoryEntry {
   ts: string;

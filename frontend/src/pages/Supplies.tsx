@@ -5,7 +5,7 @@ import { Bot, Package, Plus, ShoppingCart, Trash2, Wand2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { ShoppingItem, VirtualSensor } from "../lib/types";
 import { Empty, Loading } from "../components/ui";
-import { RegionImage, SENSOR_KIND, SensorStateBadge, fmtSensorValue } from "../components/SensorBits";
+import { RegionImage, SENSOR_KIND, SensorStateBadge, fmtSensorValue, vlmMeasure } from "../components/SensorBits";
 import { fmtAgo } from "../lib/format";
 import { toast } from "../lib/store";
 
@@ -17,10 +17,12 @@ import { toast } from "../lib/store";
 function fillShare(s: VirtualSensor): number | null {
   if (s.value === null) return null;
   if (s.kind === "fill") return Math.max(0, Math.min(1, s.value));
-  if (s.kind === "inventory_count") {
+  const m = vlmMeasure(s);
+  if (s.kind === "inventory_count" || m === "count") {
     const min = Number((s.params as { min_count?: number }).min_count ?? 1);
     return Math.max(0, Math.min(1, s.value / Math.max(1, min * 1.5)));
   }
+  if (m === "fill") return Math.max(0, Math.min(1, s.value));   // W4: Bildmodell (nur leer/nicht leer verlässlich)
   return null;
 }
 
@@ -113,7 +115,8 @@ export function SuppliesPage() {
       {!supplies.length ? (
         <div className="card"><Empty icon={<Package size={44} />} title="Noch keine Vorräte"
           text={<>Legen Sie unter <Link to="/admin/sensoren">Administration → Sensoren</Link> einen Sensor mit „Vorrat“ an – z. B. Flaschen im
-            Regal zählen oder den Füllstand einer Obstschale mit Referenzbildern „voll/halb/leer“. Knappe Vorräte landen dann automatisch auf der Einkaufsliste.</>} /></div>
+            Regal zählen, den Füllstand einer Obstschale mit Referenzbildern „voll/halb/leer“ vergleichen oder das Bildmodell kleine Mengen
+            zählen lassen („How many eggs?“). Knappe Vorräte landen dann automatisch auf der Einkaufsliste.</>} /></div>
       ) : (
         <div className="supply-grid">{supplies.map((s) => <SupplyCard key={s.id} s={s} />)}</div>
       )}
