@@ -10,6 +10,7 @@ from typing import Callable
 
 from . import settings
 from .health import HealthMonitor
+from .fullres import FullResManager
 from .identify import PETS, VEHICLES, Identifier, Job
 from .ingest import FrameSource
 from .inventory import GpuTurn, InventoryEngine
@@ -88,6 +89,9 @@ class Pipeline:
         self.detector = None
         self.detector_status = "loading"
         self.identifier = Identifier(identify_fn, self._on_identity, self._on_pending)
+        # Identitäten 07 (Paket B): Gesichtsausschnitte aus voller Auflösung (zusätzlicher Leser nur auf Anforderung)
+        self.fullres = FullResManager()
+        self.identifier.faces.fullres = self.fullres
         self.batch_hist: deque[tuple[float, int, float]] = deque(maxlen=200)   # (ts, batch size, ms)
         self.frames_total = 0
         self._wake = threading.Event()
@@ -154,6 +158,7 @@ class Pipeline:
         self.reid.stop()
         self.taps.stop()
         self.lease.stop()
+        self.fullres.stop()
         with self.lock:
             cams = list(self.cams.values())
             self.cams.clear()
@@ -184,6 +189,7 @@ class Pipeline:
                     log.info("camera %s (%s) start: %s @ %s fps", cid, cfg.get("name"), cfg["detect_url_rtsp"], cfg.get("detect_fps"))
                     rt = CameraRuntime(cfg)
                     rt.tracker.lying_grace_s = self.lying_grace_s
+                    rt.tracker.on_track_ending = self.identifier.faces.on_track_end
                     self.cams[cid] = rt
                     rt.start()
                 else:
@@ -197,6 +203,10 @@ class Pipeline:
         for c in stopped:
             threading.Thread(target=c.join, daemon=True).start()
         self.identifier.needed(list(wanted.values()))
+        try:
+            self.fullres.configure(list(wanted.values()))
+        except Exception:  # noqa: BLE001
+            log.exception("face full resolution configuration failed")
         try:
             self.inventory.configure(list(wanted.values()))
         except Exception:  # noqa: BLE001
@@ -215,6 +225,7 @@ class Pipeline:
         """Globale Settings aus GET /api/internal/settings (Inventar: confirm_n/miss_m)."""
         self.inventory.set_settings(s)
         self.pose.set_settings(s)
+        self.identifier.faces.set_settings(s)     # Identitäten 07: face_track_faces
         try:
             self.history.set_settings(s)          # W3 (B1)
         except Exception:  # noqa: BLE001
@@ -308,13 +319,11 @@ class Pipeline:
             st = tr.ids
             label = tr.label
             if cfg.get("face_recognition") and label == "person":
-                if st["face_sent"] < settings.FACE_MAX_IDENTIFY and now - st["face_last"] >= settings.FACE_INTERVAL_S \
-                        and tr.score >= float(cfg.get("min_score") or 0.5) * 0.8:
-                    # upper part of the person box (head + shoulders)
-                    crop = crop_norm(f.image, tr.bbox, margin=0.05, region=(0.0, 0.45))
-                    if crop is not None and crop.shape[0] >= 40 and crop.shape[1] >= 24:
-                        st["face_last"] = now
-                        self.identifier.submit("face", Job(c.id, tr.tid, crop, now, {"track_state": st}))
+                # Identitäten 07: über die ganze Track-Dauer sammeln (gedrosselt, ggf. aus voller Auflösung)
+                try:
+                    self.identifier.faces.dispatch(c, f, tr)
+                except Exception:  # noqa: BLE001
+                    log.exception("face dispatch camera %s failed", c.id)
             elif cfg.get("plate_recognition") and label in VEHICLES:
                 if len(st["plate_sent"]) < 3 and st["plate_tries"] < 60 and now - st["plate_last"] >= settings.PLATE_INTERVAL_S:
                     crop = crop_norm(f.image, tr.bbox, margin=0.03)
@@ -329,10 +338,13 @@ class Pipeline:
                                                       {"track_state": st, "crop_path": tr.crop_path,
                                                        "quality": round(tr.best_quality, 5)}))
 
-    def _on_identity(self, camera_id: int, track_id: int, identity, attributes):
+    def _on_identity(self, camera_id: int, track_id: int, identity, attributes, clear: bool = False):
         c = self.cams.get(camera_id)
         if c is not None:
-            c.tracker.set_identity(track_id, identity, attributes)
+            if clear:
+                c.tracker.clear_face_identity(track_id)
+            else:
+                c.tracker.set_identity(track_id, identity, attributes)
 
     def _on_pending(self, camera_id: int, track_id: int, delta: int):
         c = self.cams.get(camera_id)
@@ -415,6 +427,7 @@ class Pipeline:
     def models_status(self) -> dict:
         d = {"detector": self.detector_status}
         d.update(self.identifier.status())
+        d["face_fullres"] = self.fullres.status_text()
         d["inventory"] = self.inventory.status_text()
         d["embed"] = self.embed.status()
         d["pose"] = self.pose.status_text()
@@ -433,11 +446,11 @@ class Pipeline:
             return {"fps": 0.0, "batch_ms": 0.0, "avg_batch": 0.0, "inventory": self.inventory.perf(),
                     "health": self.health.perf(), "embed": self.embed.perf(), "pose": self.pose.perf(),
                     "taps": self.taps.perf(), "sensors": self.sensors.perf(), "history": self.history.perf(),
-                    "reid": self.reid.perf()}
+                    "reid": self.reid.perf(), "face": self.identifier.faces.perf()}
         span = max(1e-3, now - h[0][0])
         return {"fps": round(sum(b for _, b, _ in h) / span, 2),
                 "batch_ms": round(sum(m for *_, m in h) / len(h), 2),
                 "avg_batch": round(sum(b for _, b, _ in h) / len(h), 2),
                 "inventory": self.inventory.perf(), "health": self.health.perf(), "embed": self.embed.perf(),
                 "pose": self.pose.perf(), "taps": self.taps.perf(), "sensors": self.sensors.perf(),
-                "history": self.history.perf(), "reid": self.reid.perf()}
+                "history": self.history.perf(), "reid": self.reid.perf(), "face": self.identifier.faces.perf()}

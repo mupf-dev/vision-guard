@@ -26,9 +26,19 @@ Ringpuffer (Stream-Copy) für Clips und Snapshots auf Anforderung. Schnittstelle
 ### Identifikation
 
 * **Gesicht** (`face_recognition`): InsightFace `buffalo_l` (SCRFD-10G + ArcFace R100, 512-d) via onnxruntime-gpu 1.20.2 (CUDA 12 / cuDNN 9).
-  Läuft auf dem oberen Teil (45 %) der Personen-Box, alle 0,4 s pro Track. Qualität = det_score · Größe · Frontalität.
-  Erster brauchbarer Treffer (≥ 36 px) → `POST /api/internal/identify` (kind=face, normiertes Embedding, Gesichts-Crop unter `crops/`),
-  danach nur noch bei deutlich besserer Qualität (×1,3), max. 3 Aufrufe pro Track.
+  Läuft auf dem oberen Teil (45 %) der Personen-Box. Seit Identitäten 07 (Paket B, `face_track.py`) **über die ganze
+  Track-Dauer**: je Track alle 0,4 s, sobald `face_track_faces` (5) gute Gesichter da sind alle 2 s; nach den ersten
+  3 Jobs je Track global höchstens 15 Jobs/s (Rest verworfen). Die besten K Gesichter bleiben im RAM.
+  Früh `phase:"provisional"` (erstes Gesicht ≥ 0,2 Qualität, nur Zuordnung zu Bestehenden), nach 30 s und am Track-Ende
+  `phase:"final"` mit L2-normiertem Mittel der besten K (Ausreißer < 0,3 Kosinus raus) und den Einzelbildern als
+  `samples` (CONTRACT ID.F). Das Track-Ende wartet darauf (≤ 6 s).
+  Qualität (`face_quality.py`) = det_score · min(1, Größe/112) · cos²(Gier)·cos(Nicken) · (0,5 + 0,5·min(1, Schärfe/60));
+  Gier/Nicken aus den 5 Gesichtspunkten, Schärfe = Laplace-Varianz des ausgerichteten 112×112-Gesichts, dazu
+  `day_night` (Graubild = IR). `face_size` in Pixeln des Bildes, aus dem geschnitten wurde.
+  **Volle Auflösung** (`face_fullres`, `fullres.py`): zusätzlicher ffmpeg-Leser auf dem Hauptstrom (2 Bilder/s, nur
+  solange Personen da sind, 30 s Nachlauf; nicht bei Hauptstrom ≤ Analysebild) – Ausschnitt aus dem zeitgleichen
+  Vollbild (≤ 0,12 s), sonst aus dem Analysebild. Kosten je aktiver Kamera ≈ 15 % eines CPU-Kerns, ≈ 150 MB RAM
+  (Messung: `docs/plan/07-identitaeten-fortschritt.md`). Kennzahlen: `perf.face`, `models.face_fullres`.
 * **Kennzeichen** (`plate_recognition`, car/truck/bus/motorcycle): `fast-alpr` (open-image-models YOLOv9-t-384 Plate-Detektor + fast-plate-ocr `cct-xs-v2-global-model`, ONNX/CUDA).
   identify erst, wenn derselbe Text ≥ 2× gelesen wurde und die häufigste Lesung ist; `attributes.plate_text` wird gesetzt.
 * **Tier** (`pet_recognition`, dog/cat/horse/bird): DINOv2 ViT-S/14 (timm `vit_small_patch14_dinov2.lvd142m`, 224 px, fp16), L2-normiertes 384-d Embedding des besten Crops, einmal pro Track (nach 1,5 s).
@@ -176,6 +186,11 @@ Inventar-Felder lösen **keinen** ffmpeg-Neustart aus (nicht in `_STREAM_KEYS`),
 | `VG_HWACCEL` | `none` | `cuda`/`auto` = NVDEC (bei `auto` Fallback auf CPU) |
 | `VG_BUFFER_SEGMENT_S` / `VG_BUFFER_KEEP_S` / `VG_RECORDER` | `2` / `30` / `1` | |
 | `VG_FACE_MODEL` | `buffalo_l` | oder `buffalo_s` |
+| `VG_FACE_INTERVAL_S` / `VG_FACE_INTERVAL_SLOW_S` | `0.4` / `2` | Gesichts-Jobs je Track (sammeln / genug gute Gesichter) |
+| `VG_FACE_MAX_JOBS_PER_S` / `VG_FACE_FREE_JOBS` / `VG_FACE_MAX_JOBS_TRACK` | `15` / `3` / `120` | globales Budget, budgetfreie erste Jobs, Obergrenze je Track |
+| `VG_FACE_PROVISIONAL_MIN_Q` / `VG_FACE_FINAL_AFTER_S` / `VG_FACE_TRACK_OUTLIER` | `0.2` / `30` / `0.3` | vorläufig ab Qualität / erste endgültige Zuordnung / Ausreißergrenze |
+| `VG_FACE_FULLRES_FPS` / `VG_FACE_FULLRES_IDLE_S` | `2` / `30` | Vollbild-Leser: Bilder/s, Nachlauf ohne Person |
+| `VG_FACE_FULLRES_MAX_DT_S` / `VG_FACE_FULLRES_WAIT_S` / `VG_FACE_CROP_MAX_PX` | `0.12` / `1.5` / `960` | Zeitabstand Vollbild ↔ Analysebild, Wartezeit, max. Ausschnitt |
 | `VG_PLATE_DETECTOR` / `VG_PLATE_OCR` | `yolo-v9-t-384-license-plate-end2end` / `cct-xs-v2-global-model` | |
 | `VG_PET_MODEL` | `vit_small_patch14_dinov2.lvd142m` | beliebiges timm-Modell |
 | `VG_TRACK_CONFIRM_HITS` / `VG_TRACK_END_S` | `3` / `2` | |

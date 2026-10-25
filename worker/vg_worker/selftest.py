@@ -10,6 +10,11 @@
 --reid schaltet die Personen-Wiedererkennung (C2) für alle Kameras ein; /api/internal/reid beantwortet eine
 In-Memory-Galerie (Kosinus ≥ 0,70), gezählt werden Aufrufe, Verknüpfungen und neue Einträge (Lasttest W4).
 
+--face-fullres schneidet Gesichter aus dem Hauptstrom in voller Auflösung (Identitäten 07, Paket B; zusätzlicher
+Leser nur auf Anforderung); Gesichter werden je Track gesammelt (vorläufig/endgültig), der Fake beantwortet die
+Phasen wie CONTRACT ID.F (neue Identität nur ab --face-new-min-q/--face-new-min-size), z. B.
+    python -m vg_worker.selftest rtsp://testcam:8554/camhd --face-fullres --seconds 60
+
 --inventory schaltet die Inventar-Pipeline (Gegenstände) für die erste Kamera ein, z. B.
     python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 --inventory --seconds 60
 
@@ -51,6 +56,11 @@ def main():
     ap.add_argument("--history-interval", type=float, default=30.0)
     ap.add_argument("--history-tiling", action="store_true")
     ap.add_argument("--reid", action="store_true", help="Wiedererkennung über Kameras (C2) auf allen Kameras")
+    ap.add_argument("--face-fullres", action="store_true", help="Gesichter aus voller Auflösung (Identitäten 07)")
+    ap.add_argument("--face-track-faces", type=int, default=5)
+    ap.add_argument("--face-new-min-q", type=float, default=0.35)
+    ap.add_argument("--face-new-min-size", type=int, default=80)
+    ap.add_argument("--face-threshold", type=float, default=0.30)
     ap.add_argument("--vocab", help="JSON file: list of {label, name_de, prompts, min_score}")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -125,12 +135,73 @@ def main():
     db: dict[str, list[tuple[int, np.ndarray | str]]] = {"face": [], "pet": [], "plate": []}
     idc = [0]
     id_calls: Counter = Counter()
+    face_stats: Counter = Counter()          # Identitäten 07: Phasen/Entscheidungen/Quellen
+    face_vals: dict[str, list[float]] = {"size_main": [], "size_detect": [], "q_main": [], "q_detect": [],
+                                         "sharp": [], "yaw": [], "n_faces": []}
+
+    def face_identify(body: dict) -> dict:
+        """Fake von CONTRACT ID.F: Mittel der besten 3 Ähnlichkeiten je Identität, Abstand zum Zweitbesten."""
+        phase = body.get("phase") or "single"
+        emb = np.asarray(body["embedding"], dtype=np.float32)
+        assert abs(float(np.linalg.norm(emb)) - 1.0) < 1e-3, "embedding not normalized"
+        for k in ("face_size", "yaw", "pitch", "sharpness", "day_night", "source_res"):
+            assert k in body, f"{k} fehlt"
+        face_stats[f"phase_{phase}"] += 1
+        smp = body.get("samples") or []
+        if phase == "final":
+            assert 1 <= len(smp) <= a.face_track_faces and body.get("n_faces") == len(smp), body.get("n_faces")
+            face_vals["n_faces"].append(len(smp))
+        for x in (smp or [body]):
+            src = x.get("source_res") or "?"
+            face_stats[f"src_{src}"] += 1
+            if src in ("main", "detect"):
+                face_vals[f"size_{src}"].append(float(x.get("face_size") or 0))
+                face_vals[f"q_{src}"].append(float(x.get("quality") or 0))
+            if x.get("sharpness") is not None:
+                face_vals["sharp"].append(float(x["sharpness"]))
+            if x.get("yaw") is not None:
+                face_vals["yaw"].append(abs(float(x["yaw"])))
+        per: dict[int, list[float]] = {}
+        for iid, e in db["face"]:
+            per.setdefault(iid, []).append(float(np.dot(e, emb)))
+        scores = sorted(((float(np.mean(sorted(v, reverse=True)[:3])), iid) for iid, v in per.items()), reverse=True)
+        best, second = (scores[0] if scores else (-1.0, None)), (scores[1][0] if len(scores) > 1 else None)
+        thr = a.face_threshold
+        out = {"identity_id": None, "display_name": None, "name": None, "score": max(0.0, best[0]), "is_new": False,
+               "second_score": second, "threshold": thr, "learned": False, "phase": phase}
+        if best[1] is not None and best[0] >= thr:
+            if second is not None and best[0] - second < 0.05:
+                out["decision"] = "ambiguous"
+            else:
+                out.update(identity_id=best[1], display_name=f"face #{best[1]}", decision="match")
+                if phase == "final":
+                    for x in smp:
+                        if float(x.get("quality") or 0) >= 0.30:
+                            db["face"].append((best[1], np.asarray(x["embedding"], dtype=np.float32)))
+                            out["learned"] = True
+        elif phase == "provisional":
+            out["decision"] = "none"
+        else:
+            qs = [float(x.get("quality") or 0) for x in (smp or [body])]
+            ss = [float(x.get("face_size") or 0) for x in (smp or [body])]
+            if max(qs) >= a.face_new_min_q and max(ss) >= a.face_new_min_size:
+                idc[0] += 1
+                for x in (smp or [body]):
+                    db["face"].append((idc[0], np.asarray(x["embedding"], dtype=np.float32)))
+                out.update(identity_id=idc[0], display_name=f"face #{idc[0]}", decision="new", is_new=True, learned=True)
+            else:
+                out["decision"] = "none"
+        face_stats[f"{phase}_{out['decision']}"] += 1
+        return out
 
     def identify(body: dict):
         kind = body["kind"]
         with lock:
             id_calls[kind] += 1
-            assert os.path.exists(os.path.join(settings.MEDIA_DIR, body["crop_path"])), body["crop_path"]
+            if body.get("crop_path") or kind != "face":
+                assert os.path.exists(os.path.join(settings.MEDIA_DIR, body["crop_path"])), body["crop_path"]
+            if kind == "face":
+                return face_identify(body)
             if kind == "plate":
                 for iid, t in db[kind]:
                     if t == body["plate_text"]:
@@ -185,6 +256,7 @@ def main():
             cams.append({"id": cid, "name": f"test{cid}", "enabled": True, "detect_url_rtsp": u, "main_rtsp": u,
                          "detect_fps": a.fps, "labels": [], "min_score": 0.5,
                          "face_recognition": not a.no_face, "plate_recognition": not a.no_plate,
+                         "face_fullres": a.face_fullres and not a.no_face,
                          "pet_recognition": not a.no_pet,
                          "pose_enabled": a.pose or a.gestures, "gesture_enabled": a.gestures,
                          "history_enabled": a.history, "history_interval_s": a.history_interval,
@@ -204,6 +276,7 @@ def main():
                 ("plant", "Pflanze", ["potted plant"]))]
         cams[0].update({"inventory_enabled": True, "inventory_interval_s": a.inventory_interval,
                         "inventory_min_score": 0.35, "inventory_tiling": not a.no_tiling, "inventory_vocab": vocab})
+    p.set_settings({"face_track_faces": a.face_track_faces})
     p.apply_config(cams)
     p.start()
     # give identification models time to load (they load lazily in background)
@@ -267,6 +340,21 @@ def main():
     print(f"max objects/frame : {dict(max_objects)}")
     print(f"faces found       : {p.identifier.stats['face_found']}, identify calls {dict(id_calls)}, identities {[(k, len(v)) for k, v in db.items()]}")
     print(f"identify stats    : {p.identifier.stats}")
+    if not a.no_face:
+        def _q(v):
+            return (f"n={len(v)} p10/med/p90={np.percentile(v, 10):.0f}/{np.median(v):.0f}/{np.percentile(v, 90):.0f}"
+                    if v else "n=0")
+
+        def _qf(v):
+            return (f"n={len(v)} p10/med/p90={np.percentile(v, 10):.2f}/{np.median(v):.2f}/{np.percentile(v, 90):.2f}"
+                    if v else "n=0")
+        print(f"face perf         : {p.identifier.faces.perf()}  counts {dict(p.identifier.faces.counts)}  "
+              f"model avg {p.identifier.face.avg_ms:.1f} ms/job, queue dropped {p.identifier.face.dropped}")
+        print(f"face phases       : {dict(sorted(face_stats.items()))}")
+        print(f"face size main    : {_q(face_vals['size_main'])}  quality {_qf(face_vals['q_main'])}")
+        print(f"face size detect  : {_q(face_vals['size_detect'])}  quality {_qf(face_vals['q_detect'])}")
+        print(f"face sharp/|yaw|  : {_q(face_vals['sharp'])} / {_q(face_vals['yaw'])}; n_faces {_q(face_vals['n_faces'])}")
+        print(f"face identities   : {len({i for i, _ in db['face']})}")
     print(f"models            : {p.models_status()}")
     if a.pose or a.gestures:
         print(f"pose perf         : {p.pose.perf()}")
