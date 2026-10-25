@@ -1030,6 +1030,16 @@ niedriger Priorität (wartet nicht auf die Detektion, blockiert sie aber auch ni
 - WS `{"type":"pet_visit","action":"new|update","visit":PetVisit}`. MQTT extern `{prefix}/pets/{pet_slug}/{purpose}`
   (retain) `{today, last_ts}`.
 - Aufbewahrung: `pet_visits` wie Events (`retention_days_events`).
+- Ergänzungen der Umsetzung (C3, additiv): `/pets/visits` zusätzlich `label=`, `identity_id=0` = Besuche ohne
+  Identität, `purpose` kommagetrennt (unbekannter Zweck → 422). `/pets/summary` je Eintrag zusätzlich `name`, je Zweck
+  `median`, `expected_now:[lo,hi]` (Normalbereich bis zur aktuellen Uhrzeit), `status:"ok|low|high|gap|unknown"`,
+  `gap_s`, `usual_gap_s` (P95 der Pausen). Normalwert = P10/P90 der Tageszahlen der 14 Tage vor heute (mind. 7 Tage
+  Daten). Hinweise: stündlich `too_few` (heute < P10 bis jetzt − 1), `too_many` (heute > P90 + 2), `long_gap`
+  (Pause > 1,5 × P95, mind. 10 Pausen); nach Mitternacht Abschluss des Vortags mit Ganztageswerten. Besuche laufen
+  schon ab der Mindestdauer (`end_ts: null`, WS `new`), das Ende kommt per WS `update`. Fallback-Zuordnung
+  (`pet_diary_single_pet_fallback`) wird durch eine später erkannte Identität ersetzt; Merge von Identitäten nimmt
+  Besuche mit, Löschen setzt sie auf `identity: null`. Test-Seed: `python -m app.pet_diary_seed` (Zeilen mit
+  `event_id:"seed"`, `--clear`).
 
 ### W2.G Tagesbericht (B3) und LLM-Client (K2)
 
