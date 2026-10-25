@@ -138,8 +138,11 @@ docker compose run --rm --no-deps worker python -m vg_worker.selftest \
 # Inventar (Gegenstände) auf der Wohnzimmer-Kamera (2880×1616, Tischchen mit Lampe/Buch/Fernbedienung):
 docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://go2rtc:8554/cam_3 \
     --no-face --no-plate --no-pet --inventory --inventory-interval 3 --seconds 60
+# Kamera-Gesundheit mitprüfen (sonst im Selbsttest aus; Referenzbilder nur in einem temporären Ordner):
+docker compose run --rm --no-deps worker python -m vg_worker.selftest rtsp://testcam:8554/cam5 --health --seconds 40
 # Im Betrieb:
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/#' -C 20 -v
+docker compose exec mosquitto mosquitto_sub -t 'vg/internal/health/#' -C 2 -v
 docker compose exec mosquitto mosquitto_sub -t 'vg/internal/inventory/#' -C 2 -v
 ```
 
