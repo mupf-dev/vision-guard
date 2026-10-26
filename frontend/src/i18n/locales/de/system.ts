@@ -32,7 +32,7 @@ const system = {
   colLast: "Zuletzt",
   model: {
     detector: "Detektor", face: "Gesicht", plate: "Kennzeichen", pet: "Tier", inventory: "Gegenstände",
-    embed: "Exemplar-Abgleich", pose: "Haltung & Gesten", history: "Zeitmaschine", reid: "Wiedererkennung über Kameras",
+    embed: "Exemplar-Abgleich", face_fullres: "Gesichter aus voller Auflösung", pose: "Haltung & Gesten", history: "Zeitmaschine", reid: "Wiedererkennung über Kameras",
     vlm: "Frag die Kamera",
   } as Record<string, string>,
   state: { ready: "bereit", idle: "im Leerlauf", off: "aus", loading: "lädt", error: "Fehler", paused: "pausiert", disabled: "aus" },

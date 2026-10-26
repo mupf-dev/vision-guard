@@ -31,7 +31,7 @@ const system = {
   /** Modellnamen (Rohschlüssel vom Worker) */
   model: {
     detector: "Detector", face: "Face", plate: "Licence plate", pet: "Animal", inventory: "Items",
-    embed: "Instance matching", pose: "Posture & gestures", history: "Time machine", reid: "Re-identification across cameras",
+    embed: "Instance matching", face_fullres: "Faces from full resolution", pose: "Posture & gestures", history: "Time machine", reid: "Re-identification across cameras",
     vlm: "Ask the camera",
   } as Record<string, string>,
   /** Modellzustände (Präfix des Rohwerts) */
