@@ -8,8 +8,9 @@ arbeiten. Projektüberblick: [README.md](README.md). Verbindliche Schnittstellen
 1. **CONTRACT.md ist die Quelle der Wahrheit** für REST, WebSocket, MQTT-Topics, Datenmodelle, Medienpfade und
    Stream-Namen. Wer eine Schnittstelle ändert, passt zuerst CONTRACT.md an und dann **alle** betroffenen Dienste
    (Backend, Worker, Frontend inkl. `src/lib/types.ts`, `src/lib/api.ts` und Mock `src/lib/mock.ts`).
-2. **Sprache:** Oberfläche, Fehlermeldungen an Nutzer und Dokumentation auf **Deutsch**. Code-Bezeichner Englisch,
-   Kommentare dürfen Deutsch sein (wie im bestehenden Code).
+2. **Sprache:** Oberfläche, Fehlermeldungen an Nutzer und interne Dokumentation (AGENTS.md, CONTRACT.md, `docs/plan/`)
+   auf **Deutsch**. Öffentliche Doku – alle `README.md` und die GitHub-Seite (Zweig `gh-pages`) – auf **Englisch**.
+   Code-Bezeichner Englisch, Kommentare dürfen Deutsch sein (wie im bestehenden Code).
 3. **Koordinaten** sind überall normiert (0..1, x rechts, y unten). Zeit: ISO-8601 UTC in REST, Unix-Sekunden in MQTT.
 4. **Keine Daueraufzeichnung.** Video landet nur auf der Platte, wenn eine Regel einen Clip auslöst
    (RAM-Ringpuffer im Worker, tmpfs `/buffer`).

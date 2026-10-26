@@ -1,106 +1,107 @@
 # VisionGuard – Frontend
 
-React 19 + TypeScript + Vite SPA (UI auf Deutsch) mit nginx als Reverse-Proxy.
-Schnittstellen: siehe `../CONTRACT.md`.
+React 19 + TypeScript + Vite SPA (UI in German) with nginx as reverse proxy.
+Interfaces: see `../CONTRACT.md` (German).
 
 ## Stack
 
-- React 19, react-router 8, @tanstack/react-query 5, zustand (Live-Store, Toasts, UI-Präferenzen)
-- recharts (Statistik), lucide-react (Icons)
-- Plain CSS mit CSS-Variablen (`src/styles.css`), dunkles "SOC"-Design
-- go2rtc-Player vendored unter `public/vendor/` (`<video-stream>`, geladen in `index.html`)
+- React 19, react-router 8, @tanstack/react-query 5, zustand (live store, toasts, UI preferences)
+- recharts (statistics), lucide-react (icons)
+- Plain CSS with CSS variables (`src/styles.css`), dark "SOC" design
+- go2rtc player vendored under `public/vendor/` (`<video-stream>`, loaded in `index.html`)
 
-## Entwicklung
+## Development
 
 ```bash
 corepack pnpm install
-corepack pnpm dev          # Vite :5173, Proxy /api /media /go2rtc -> http://localhost:8080 (laufender Stack)
-corepack pnpm dev:mock     # ohne Backend: simulierte REST-API + WebSocket (Login admin/admin)
+corepack pnpm dev          # Vite :5173, proxy /api /media /go2rtc -> http://localhost:8080 (running stack)
+corepack pnpm dev:mock     # without backend: simulated REST API + WebSocket (login admin/admin)
 corepack pnpm build        # tsc -b && vite build -> dist/
 ```
 
-Proxy-Ziel für `pnpm dev` per `VG_PROXY_TARGET=http://host:port` änderbar.
-Im Mock-Modus (`VITE_MOCK=1`, `src/lib/mock.ts`) werden `fetch('/api/...')` und `new WebSocket('/api/ws')`
-im Browser abgefangen; Kamerabilder sind SVG-Platzhalter, Detektionen bewegen sich animiert.
+The proxy target for `pnpm dev` can be changed via `VG_PROXY_TARGET=http://host:port`.
+In mock mode (`VITE_MOCK=1`, `src/lib/mock.ts`), `fetch('/api/...')` and `new WebSocket('/api/ws')` are
+intercepted in the browser; camera images are SVG placeholders, detections move in an animation.
 
-## Produktion
+## Production
 
-Multi-Stage-`Dockerfile` (node:24-alpine Build -> nginx:alpine). `nginx.conf`:
+Multi-stage `Dockerfile` (node:24-alpine build -> nginx:alpine). `nginx.conf`:
 
-| Pfad | Ziel |
+| Path | Target |
 |---|---|
-| `/` | SPA, `index.html`-Fallback |
-| `/api/` | `backend:8000` inkl. WebSocket-Upgrade (`/api/ws`) |
+| `/` | SPA, `index.html` fallback |
+| `/api/` | `backend:8000` incl. WebSocket upgrade (`/api/ws`) |
 | `/api/internal/` | **403** |
-| `/media/` | `backend:8000/media/` (Range-Header für Clips) |
-| `/go2rtc/` | `go2rtc:1984/` mit WebSocket-Upgrade, geschützt per `auth_request` -> `/api/auth/check` |
+| `/media/` | `backend:8000/media/` (Range header for clips) |
+| `/go2rtc/` | `go2rtc:1984/` with WebSocket upgrade, protected via `auth_request` -> `/api/auth/check` |
 
-Upstreams werden über `resolver 127.0.0.11` + Variablen aufgelöst, nginx startet daher auch,
-wenn Backend/go2rtc noch nicht laufen.
+Upstreams are resolved via `resolver 127.0.0.11` + variables, so nginx starts even
+when backend/go2rtc are not yet running.
 
 ```bash
 docker compose build frontend
 docker compose up -d frontend      # http://localhost:8080
 ```
 
-## Aufbau
+## Structure
 
 ```
 src/
-  main.tsx, App.tsx          Routing, Auth-Guard (GET /api/auth/me), QueryClient
-  styles.css                 Design-System
+  main.tsx, App.tsx          Routing, auth guard (GET /api/auth/me), QueryClient
+  styles.css                 Design system
   lib/
-    api.ts                   REST-Client (credentials: include, 401 -> Login)
-    types.ts                 Typen laut CONTRACT.md
-    store.ts                 zustand: Live-Daten (detections/status/feed), Toasts, UI-Prefs (localStorage)
-    overlaySync.ts           Overlay-Synchronisation: Detektionspuffer je Kamera (nach Frame-ts), Messung der
-                             Video-Verzögerung (WebRTC: requestVideoFrameCallback, MSE: Pufferlänge),
-                             Standbild-Erkennung, Interpolation zwischen Analyse-Frames
-    useLiveSocket.ts         einziger WebSocket /api/ws, Reconnect mit Exponential-Backoff,
-                             react-query-Invalidierung bei event/identity/camera_status
-    labels.ts, format.ts     Label-Farben/-Namen (Person/Fahrzeug/Tier), Datumsformat de-DE
-    mock.ts                  Mock-Backend
+    api.ts                   REST client (credentials: include, 401 -> login)
+    types.ts                 Types as per CONTRACT.md
+    store.ts                 zustand: live data (detections/status/feed), toasts, UI prefs (localStorage)
+    overlaySync.ts           Overlay synchronization: detection buffer per camera (by frame ts), measurement of
+                             the video delay (WebRTC: requestVideoFrameCallback, MSE: buffer length),
+                             still-image detection, interpolation between analysis frames
+    useLiveSocket.ts         single WebSocket /api/ws, reconnect with exponential backoff,
+                             react-query invalidation on event/identity/camera_status
+    labels.ts, format.ts     Label colors/names (person/vehicle/animal), date format de-DE
+    mock.ts                  Mock backend
   components/
-    LivePlayer.tsx           <video-stream> imperativ, src=/go2rtc/api/ws?src=cam_N, mode webrtc,mse,mjpeg,
-                             muted, ohne Controls; berechnet Letterbox-Rechteck (object-fit: contain)
-                             und gibt es als Render-Prop an Overlays
-    DetectionOverlay.tsx     SVG-Boxen (normierte bbox -> Bildrechteck), Label/Score/Track/Identität,
-                             optionale Zonen-Polygone; zeichnet die zum Videobild passende (verzögerte)
-                             Detektion, blendet Boxen > 1,5 s ohne Detektion aus, friert sie bei hängendem
-                             Video ein („Video hängt“). Fokusansicht: „Sync“ = manuelle Overlay-Verzögerung
-    ZoneEditor.tsx           Polygon-Editor auf /api/cameras/{id}/snapshot.jpg (zeichnen, Punkte ziehen,
-                             Doppelklick auf Kante = Punkt einfügen, Rechtsklick = Punkt löschen)
-    EventBits.tsx            Feed-Eintrag, Ereignis-Detaildialog (Clip/Snapshot/Ausschnitt, Attribute, Regeln)
+    LivePlayer.tsx           <video-stream> imperatively, src=/go2rtc/api/ws?src=cam_N, mode webrtc,mse,mjpeg,
+                             muted, without controls; computes the letterbox rectangle (object-fit: contain)
+                             and passes it to overlays as a render prop
+    DetectionOverlay.tsx     SVG boxes (normalized bbox -> image rectangle), label/score/track/identity,
+                             optional zone polygons; draws the (delayed) detection matching the video frame,
+                             hides boxes > 1.5 s without detection, freezes them when the video
+                             stalls ("Video hängt" (video stalled)). Focus view: "Sync" = manual overlay delay
+    ZoneEditor.tsx           Polygon editor on /api/cameras/{id}/snapshot.jpg (draw, drag points,
+                             double-click on edge = insert point, right-click = delete point)
+    EventBits.tsx            Feed entry, event detail dialog (clip/snapshot/crop, attributes, rules)
     ui.tsx                   Dialog, Confirm, Switch, Range, ChipSelect, SearchSelect, LabelPill …
-  pages/                     (Routen siehe src/App.tsx)
+  pages/                     (routes see src/App.tsx)
     Login                    /login
-    Live                     / und /live/:id – Kachelraster, Fokusansicht, Live-Feed, „Frag die Kamera“
-    Events                   /ereignisse – Filter in der URL, Deep-Link ?ev=<id>, Quittieren von Notfällen
-    Identities               /identitaeten[/:id] – Umbenennen, Notizen, Samples, Lernsperre, Merge (auch Teil-Merge), Vorschläge
+    Live                     / and /live/:id – tile grid, focus view, live feed, "Frag die Kamera" (Ask the camera)
+    Events                   /ereignisse – filters in the URL, deep link ?ev=<id>, acknowledging emergencies
+    Identities               /identitaeten[/:id] – rename, notes, samples, learning lock, merge (incl. partial merge), suggestions
     Objects (+ ObjectChanges, MyItems)
-                             /gegenstaende – Übersicht/Suche, Veränderungen, eigene Exemplare
-    Notifications            /hinweise – Hinweise mit Bild, Push-Zustellung
-    Review                   /bestaetigen – Rückfragen (Ja/Nein/Überspringen, Tasten J/N/S), Verlauf
-    Pets                     /tiere – Haustier-Tagebuch
-    Reports                  /berichte – Tagesberichte, Vorschau
-    History                  /zeitmaschine – Bildsuche mit eigenen Worten, Filmstreifen
-    Supplies                 /vorraete – Vorrats-Sensoren und Einkaufsliste
-    Presence                 /anwesenheit – wer ist wo (auch über Kameras)
+                             /gegenstaende – overview/search, changes, own item instances
+    Notifications            /hinweise – notifications with image, push delivery
+    Review                   /bestaetigen – review questions (yes/no/skip, keys J/N/S), history
+    Pets                     /tiere – pet diary
+    Reports                  /berichte – daily reports, preview
+    History                  /zeitmaschine – image search in your own words, filmstrip
+    Supplies                 /vorraete – supply sensors and shopping list
+    Presence                 /anwesenheit – who is where (also across cameras)
     Stats                    /statistik
     admin/                   /admin/{kameras, regeln, sensoren, einstellungen, system, zugaenge}
-                             Cameras (Allgemein, Zonen, Gegenstände, Zustand), Rules (Auslöser, Bedingungen,
-                             Aktionen inkl. Push), Sensors, Settings (je Thema eine Karte *Settings.tsx, Sprungmarken),
-                             System (GPU, Modelle, Kameras), Tokens (API-Zugänge)
+                             Cameras (general, zones, items, condition), Rules (triggers, conditions,
+                             actions incl. push), Sensors, Settings (one *Settings.tsx card per topic, jump marks),
+                             System (GPU, models, cameras), Tokens (API access)
 ```
 
-Navigation (R1): fünf Hauptpunkte (Live, Ereignisse, Identitäten, Gegenstände, Hinweise), seltene Seiten unter
-„Mehr“, dann Administration; unter 1000 px ein Menü mit allen Punkten (`components/Layout.tsx`).
+Navigation (R1): five main items (Live, Ereignisse (Events), Identitäten (Identities), Gegenstände (Items),
+Hinweise (Notifications)), rarely used pages under "Mehr" (More), then administration; below 1000 px a menu with all
+items (`components/Layout.tsx`).
 
-## Hinweise
+## Notes
 
-- Live-Video läuft unabhängig vom Worker-Status (go2rtc direkt). Nur deaktivierte Kameras zeigen kein Bild.
-  Der Status-Badge (Online/Offline) zeigt den Analysezustand aus `camera.status`.
-- Der Medienfilter "nur mit Snapshot/Clip" ist im Vertrag nicht als Query-Parameter vorgesehen und wird
-  clientseitig angewendet (lädt dann bis zu 500 Ereignisse).
-- `GET /identities/{id}/events` wird als `{items,total}` erwartet, ein reines Array wird ebenfalls akzeptiert.
-- Alarm-Toasts erscheinen für neue Events mit ausgelösten Regeln (abschaltbar über die Glocke in der Navigation).
+- Live video runs independently of the worker status (go2rtc directly). Only disabled cameras show no image.
+  The status badge (Online/Offline) shows the analysis state from `camera.status`.
+- The media filter "nur mit Snapshot/Clip" (only with snapshot/clip) is not provided as a query parameter in the
+  contract and is applied client-side (then loads up to 500 events).
+- `GET /identities/{id}/events` is expected as `{items,total}`; a plain array is accepted as well.
+- Alarm toasts appear for new events with fired rules (can be turned off via the bell in the navigation).

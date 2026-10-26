@@ -1,61 +1,62 @@
-# Dienst `vlm` – „Frag die Kamera“ (Welle 3, A2)
+# Service `vlm` – "Frag die Kamera" (Ask the camera) (wave 3, A2)
 
-Lokales Bildmodell für Fragen zum aktuellen Kamerabild („Ist das Licht an?“). Vertrag: CONTRACT.md W3.E
-(Schnittstelle) und W3.C (GPU-Lease). Grundlage der Modellwahl: `docs/plan/roadmap/messungen.md` §6.
+Local vision model for questions about the current camera image ("Ist das Licht an?" – "Is the light on?"). Contract:
+CONTRACT.md (German) W3.E (interface) and W3.C (GPU lease). Basis for the model choice: `docs/plan/roadmap/messungen.md`
+(German) §6.
 
 ## Start
 
 ```bash
-docker compose --profile vlm up -d --build vlm      # optional; ohne den Dienst antwortet nur die Cloud (falls freigegeben)
+docker compose --profile vlm up -d --build vlm      # optional; without the service only the cloud answers (if allowed)
 docker compose logs -f vlm
 ```
 
-Beim ersten Start lädt der Dienst die Gewichte des eingestellten Modells ins Volume `models` (`hf/`, Moondream ≈ 2 GB,
-nur CPU/Netz, keine GPU). Das Modell selbst kommt erst mit der ersten Frage in den Grafikspeicher.
+On first start the service downloads the weights of the configured model into the volume `models` (`hf/`, Moondream ≈ 2 GB,
+CPU/network only, no GPU). The model itself only goes into graphics memory with the first question.
 
-## Ablauf
+## Flow
 
-1. Backend `POST /api/cameras/{id}/ask` holt das Bild über go2rtc und ruft `POST http://vlm:8200/infer`.
-2. Ist kein Modell geladen: Settings lesen (`GET /api/internal/settings`: `vlm_enabled`, `vlm_model`,
-   `vlm_idle_unload_s`, `vlm_need_mb`), GPU-Lease anfragen (`vg/internal/gpu/request`, höchstens 10 s, sonst 503).
-   Der Worker entlädt YOLOE (Inventar) und SigLIP (Zeitmaschine) und meldet den freien Speicher (NVML).
-3. Das Modell lädt in einem **Kindprozess** mit Speichergrenze = frei − 300 MB. Beim Entladen endet der Prozess –
-   so wird auch der CUDA-Kontext frei (gemessen: VRAM danach wieder exakt auf dem Ausgangswert).
-4. Jede Frage verlängert die Lease (`max_s` = `vlm_idle_unload_s` + 60). Nach `vlm_idle_unload_s` ohne Frage:
-   Kindprozess beenden, `release` → der Worker lädt YOLOE wieder.
-5. Meldet der Worker `released` (z. B. Ablauf), entlädt der Dienst sofort.
+1. Backend `POST /api/cameras/{id}/ask` fetches the image via go2rtc and calls `POST http://vlm:8200/infer`.
+2. If no model is loaded: read settings (`GET /api/internal/settings`: `vlm_enabled`, `vlm_model`,
+   `vlm_idle_unload_s`, `vlm_need_mb`), request a GPU lease (`vg/internal/gpu/request`, at most 10 s, otherwise 503).
+   The worker unloads YOLOE (inventory) and SigLIP (time machine) and reports the free memory (NVML).
+3. The model loads in a **child process** with memory limit = free − 300 MB. On unload the process exits –
+   this also frees the CUDA context (measured: VRAM afterwards back exactly at the initial value).
+4. Every question extends the lease (`max_s` = `vlm_idle_unload_s` + 60). After `vlm_idle_unload_s` without a question:
+   terminate the child process, `release` → the worker loads YOLOE again.
+5. If the worker reports `released` (e.g. expiry), the service unloads immediately.
 
-Bekommt der Worker nicht genug Speicher frei („zu wenig VRAM“), weicht der Dienst auf **SmolVLM-500M** aus (1,8 GB);
-reicht auch das nicht, gibt er die Lease zurück (503).
+If the worker cannot free enough memory ("zu wenig VRAM" – not enough VRAM), the service falls back to **SmolVLM-500M** (1.8 GB);
+if that is not enough either, it returns the lease (503).
 
-Grenzen: höchstens 1 laufende + 1 wartende Anfrage (sonst 429), Antwort-Zeitlimit 20 s (dann wird der Kindprozess
-beendet), Ladezeitlimit 180 s. Bilder und Fragen werden weder gespeichert noch geloggt.
+Limits: at most 1 running + 1 waiting request (otherwise 429), answer time limit 20 s (then the child process is
+terminated), load time limit 180 s. Images and questions are neither stored nor logged.
 
-## Schnittstelle (nur intern, Port 8200)
+## Interface (internal only, port 8200)
 
-| Pfad | Beschreibung |
+| Path | Description |
 |---|---|
 | `POST /infer` | `{image_b64, question, region?: [x1,y1,x2,y2], mode: "query"\|"yesno", max_tokens?}` → `{answer, yes_no, ms, model, model_ms}` |
 | `GET /health` | `{state: "off\|loading\|ready\|error: …", model, vram_mb, last_used, enabled, lease, mqtt, download, last_error, stats}` |
-| `POST /unload` | Modell sofort entladen, GPU zurückgeben (Wartung/Tests) |
+| `POST /unload` | Unload the model immediately, return the GPU (maintenance/tests) |
 
-`mode:"yesno"` hängt „Answer with yes or no first, then explain in one short sentence.“ an; `yes_no` wird aus dem
-ersten Wort gelesen (`unknown` erlaubt). Das Backend wählt `yesno` für Fragen, die mit is/are/do/can/… bzw.
-ist/sind/gibt/… beginnen.
+`mode:"yesno"` appends "Answer with yes or no first, then explain in one short sentence."; `yes_no` is read from the
+first word (`unknown` allowed). The backend chooses `yesno` for questions starting with is/are/do/can/… or
+ist/sind/gibt/….
 
-## Modelle (`vlm_model`, Revisionen gepinnt in `vg_vlm/models.py`)
+## Models (`vlm_model`, revisions pinned in `vg_vlm/models.py`)
 
-| Setting | Modell | Bedarf | Hinweis |
+| Setting | Model | Requirement | Note |
 |---|---|---|---|
-| `moondream2-int4` (Standard) | moondream/moondream-2b-2025-04-14-4bit | ≈ 2,0 GB torch + Kontext | Apache-2.0, nur Englisch gut |
-| `smolvlm-500m` | HuggingFaceTB/SmolVLM-500M-Instruct | ≈ 1,5 GB | Rückfall bei knappem VRAM |
-| `qwen25vl-3b-nf4` | Qwen/Qwen2.5-VL-3B-Instruct (NF4) | ≈ 2,6 GB | versteht Deutsch; Lizenz nur nicht-kommerziell; ≈ 7 GB Download |
+| `moondream2-int4` (default) | moondream/moondream-2b-2025-04-14-4bit | ≈ 2.0 GB torch + context | Apache-2.0, good in English only |
+| `smolvlm-500m` | HuggingFaceTB/SmolVLM-500M-Instruct | ≈ 1.5 GB | Fallback when VRAM is tight |
+| `qwen25vl-3b-nf4` | Qwen/Qwen2.5-VL-3B-Instruct (NF4) | ≈ 2.6 GB | understands German; license non-commercial only; ≈ 7 GB download |
 
-## Messwerte (25.10.2026, neben dem Haupt-Stack mit `cam_3` + Inventar, unter `flock ~/vg-gpu.lock`)
+## Measurements (2026-10-25, alongside the main stack with `cam_3` + inventory, under `flock ~/vg-gpu.lock`)
 
-- Laden inkl. Lease 4,2–4,3 s (Lease + Prozessstart ≈ 1,7 s, Modell 2,5 s), erste Antwort 6,6 s, danach **1,0–1,4 s** je Frage
-  (Bild 768×432; `cam_3` 2880×1616 laut W0 ≈ 1,5 s). Über das Backend kommt die Bildbeschaffung von go2rtc dazu
-  (`cam_3` 0,6–2 s; Demo-Kameras bis 5 s, da go2rtc auf einen Keyframe wartet).
-- VRAM gesamt: vorher 2,53 GB, Spitze **5,05 GB** (Grenze 5,6 GB), nach dem Entladen wieder 2,53 GB.
-- Detektion `cam_3` während der Lease 4,66–5,16 fps (Grenze 4,5); Inventar `paused: GPU-Lease vlm`, danach `ready`.
-- 5/5 Ja/Nein-Fragen an die Demo-Kameras richtig; 4 parallele Anfragen → 2 × 200, 2 × 429.
+- Loading incl. lease 4.2–4.3 s (lease + process start ≈ 1.7 s, model 2.5 s), first answer 6.6 s, then **1.0–1.4 s** per question
+  (image 768×432; `cam_3` 2880×1616 per W0 ≈ 1.5 s). Via the backend, image retrieval from go2rtc is added
+  (`cam_3` 0.6–2 s; demo cameras up to 5 s, since go2rtc waits for a keyframe).
+- Total VRAM: before 2.53 GB, peak **5.05 GB** (limit 5.6 GB), after unloading back at 2.53 GB.
+- Detection on `cam_3` during the lease 4.66–5.16 fps (limit 4.5); inventory `paused: GPU-Lease vlm`, then `ready`.
+- 5/5 yes/no questions to the demo cameras correct; 4 parallel requests → 2 × 200, 2 × 429.

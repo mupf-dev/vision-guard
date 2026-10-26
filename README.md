@@ -1,179 +1,183 @@
 # VisionGuard
 
-Selbst gehostete, Docker-basierte Videoanalyse für Netzwerkkameras. Kamerastreams werden **nicht dauerhaft
-aufgezeichnet**, sondern live per KI ausgewertet: Objekte, Personen, Tiere und Fahrzeuge werden erkannt, verfolgt
-und – optional – identifiziert (Gesichter, Kennzeichen, Haustiere). Dazu merkt sich VisionGuard, wo Gegenstände
-liegen („Wo ist meine Fernbedienung?“). Regeln entscheiden, was passiert: Snapshot, Videoclip aus dem
-RAM-Ringpuffer, Push aufs Handy, MQTT-Nachricht oder Webhook.
+**Website & screenshots: <https://mupf-dev.github.io/vision-guard/>**
 
-## Funktionen
+Self-hosted, Docker-based video analytics for network cameras. Camera streams are **not recorded continuously** but
+analysed live by AI: objects, people, animals and vehicles are detected, tracked and – optionally – identified (faces,
+licence plates, pets). VisionGuard also remembers where things are ("Where is my remote?"). Rules decide what happens:
+snapshot, video clip from the RAM ring buffer, push notification to your phone, MQTT message or webhook.
 
-- **Live-Kachelansicht** (1–16 Kameras) mit Bounding-Box-Overlays, Zonen und Live-Ereignis-Feed
-- **Objekterkennung** mit YOLO11 auf der NVIDIA-GPU, Batching über alle Kameras, ByteTrack-Tracking
-- **Identifikation:** Gesichter (InsightFace), Kennzeichen (fast-alpr), Haustiere (DINOv2-Embeddings).
-  Unbekannte bekommen automatisch eine ID („Person #12“) und lassen sich später benennen oder zusammenführen.
-  Gesichter werden je Track gesammelt und nach Qualität (Größe, Kopfdrehung, Schärfe) bewertet, bei Kameras über
-  1920 px aus der vollen Auflösung geschnitten; Mehrfachauswahl zum Zusammenführen/Löschen mit Verlauf und
-  „Zurücksetzen“; ein **Nachtlauf** bündelt Fragmente, kuratiert die Bildergalerie und passt Schwellen je Person an
-  (Standard: nur Probelauf mit Vorschau, Anwenden nach Freigabe in Einstellungen → Nachtlauf)
-- **Regel-Engine:** Kamera, Zone, Objektklasse, Konfidenz, Identität (bekannt/unbekannt/bestimmt),
-  Auslöser (betritt/verlässt/verweilt), Zeitplan, Cooldown → Snapshot, Clip, MQTT, Webhook
-- **Virtuelle Sensoren und Vorräte:** Bildbereiche als Schalter (Licht an/aus per Helligkeit, Blinken,
-  Referenzbilder, Gegenstände zählen, Füllstand, Frage ans Bildmodell: Ja/Nein, Anzahl bis 3 oder „leer“) – als
-  Regel-Auslöser und -Bedingung,
-  per MQTT und MCP; knappe Vorräte landen automatisch auf der Einkaufsliste
-- **Gegenstände (Inventar):** offenes Vokabular (YOLOE, 50 Alltagsgegenstände, eigene ergänzbar), Lage
-  („vermutlich auf dem Tisch“), Veränderungen seit gestern, eigene Exemplare („mein Schlüsselbund“), Suche auf Deutsch
-- **Hinweise mit Push** an ntfy oder Pushover (mit Bild, Antwort-Links), Regeln mit Bedingungen (Gegenstand
-  fehlt, Wetter, Sensor), Notfälle mit Wiederholung bis zur Quittierung
-- **Bitte bestätigen:** bei unsicheren Erkennungen fragt VisionGuard nach (Oberfläche, Push, MCP) und lernt daraus
-- **Haltung, Sturz und Gesten** (Pose-Modell): „liegt am Boden“ als Auslöser, Handzeichen als Schalter
-- **Tiere:** Haustier-Tagebuch (Fressen, Trinken, Katzenklo je Zone)
-- **Anwesenheit:** wer ist gerade wo, auch ohne Gesicht über mehrere Kameras (Wiedererkennung, nur im Speicher)
-- **Tagesbericht** (Satzbausteine, optional mit Sprachmodell über eine OpenAI-kompatible Adresse) per Push,
-  MQTT, Webhook oder Mail
-- **Frag die Kamera:** Fragen zum aktuellen Bild an ein lokales Bildmodell (Moondream, Dienst `vlm`, optional)
-- **Kamera-Gesundheit:** verdeckt, unscharf, zu dunkel, eingefroren oder verschoben – mit Hinweis
-- **Schwenk-Kameras (PTZ über ONVIF):** Steuerkreuz im Live-Bild, Positionen und Grundposition direkt dort speichern,
-  Patrouille nach Zeitplan, Verfolgen von Personen/Tieren, Regel-Aktion „Kamera schwenken“; Zonen, Gegenstände und
-  Sensoren gelten für die Grundposition und pausieren, solange die Kamera woanders hinschaut
-- **Livebild auf dem Fernseher (DLNA):** Regel-Aktion „Auf Fernseher zeigen“ (z. B. Person an der Tür → Kamera
-  60 s im Vollbild, danach zurück zum Programm), Test-Knopf in den Einstellungen, MCP `show_on_tv`; getestet mit
-  Samsung (Tizen). Der Fernseher muss VisionGuard im Heimnetz erreichen (unter WSL2: Portweiterleitung, AGENTS.md)
-- **Ereignisse** mit Filtern, Snapshots, Clips und Statistik
-- **Administration:** Kameras (mit Verbindungstest), Zonen-Editor, Regel-Editor, Einstellungen, Systemstatus/GPU
-- **MQTT** nach außen (z. B. Home Assistant): alle Ereignisse, Zähler pro Kamera und Objektklasse, Sensoren;
-  von außen nur lesend (eigener Listener, siehe unten)
-- **Zeitmaschine:** je Kamera zuschaltbar ein Bildgedächtnis (Bild-Embeddings + 256-px-Vorschau, kein Video);
-  Suche mit eigenen Worten („roter Karton im Flur“) liefert Zeiträume mit Filmstreifen – auch per MCP
+![Live view with detections](https://mupf-dev.github.io/vision-guard/img/live.webp)
 
-## Architektur
+> The user interface is currently in German; an English interface with support for further languages is in progress.
+
+## Features
+
+- **Live tile view** (1–16 cameras) with bounding-box overlays, zones and a live event feed
+- **Object detection** with YOLO11 on an NVIDIA GPU, batched across all cameras, ByteTrack tracking
+- **Identification:** faces (InsightFace), licence plates (fast-alpr), pets (DINOv2 embeddings). Unknown subjects
+  automatically get an ID ("Person #12") and can be named or merged later. Faces are collected per track and rated
+  by quality (size, head pose, sharpness); for cameras above 1920 px they are cropped from the full resolution.
+  Multi-select to merge/delete with history and undo; a **nightly run** bundles fragments, curates the image gallery
+  and adapts per-person thresholds (default: dry run with preview only, applied after approval in Settings → Nightly
+  run)
+- **Rule engine:** camera, zone, object class, confidence, identity (known/unknown/specific), trigger
+  (enter/leave/dwell/posture/gesture/time/sensor), schedule, cooldown → snapshot, clip, MQTT, webhook, push, PTZ, TV
+- **Virtual sensors and supplies:** image regions as switches (light on/off by brightness, blinking, reference
+  images, counting items, fill level, asking the vision model: yes/no, count up to 3 or "empty") – usable as rule
+  trigger and condition, via MQTT and MCP; low supplies are added to the shopping list automatically
+- **Items (inventory):** open vocabulary (YOLOE, 50 everyday objects, extendable), location ("probably on the
+  table"), changes since yesterday, your own specific items ("my key ring"), search in German
+- **Notifications with push** to ntfy or Pushover (with image and answer links), rules with conditions (item
+  missing, weather, sensor), emergencies repeated until acknowledged
+- **Please confirm:** for uncertain detections VisionGuard asks (UI, push, MCP) and learns from the answer
+- **Posture, falls and gestures** (pose model): "lying on the floor" as a trigger, hand signals as switches
+- **Pets:** pet diary (eating, drinking, litter box per zone)
+- **Presence:** who is where right now, across cameras even without a face (re-identification, kept in memory only)
+- **Daily report** (template-based, optionally written by a language model via an OpenAI-compatible endpoint) via
+  push, MQTT, webhook or e-mail
+- **Ask the camera:** questions about the current image to a local vision model (Moondream, service `vlm`, optional)
+- **Camera health:** covered, blurred, too dark, frozen or moved – with notification
+- **Pan/tilt cameras (PTZ via ONVIF):** control pad in the live view, save positions and the home position right
+  there, scheduled patrols, following people/animals, rule action "pan camera"; zones, items and sensors apply to
+  the home position and pause while the camera looks elsewhere
+- **Live view on your TV (DLNA):** rule action "show on TV" (e.g. person at the door → camera full screen for 60 s,
+  then back to the programme), test button in the settings, MCP `show_on_tv`; tested with Samsung (Tizen). The TV
+  must be able to reach VisionGuard on the home network (under WSL2: port forwarding, see AGENTS.md)
+- **Events** with filters, snapshots, clips and statistics
+- **Administration:** cameras (with connection test), zone editor, rule editor, settings, system status/GPU
+- **MQTT** to the outside (e.g. Home Assistant): all events, counters per camera and object class, sensors;
+  read-only from outside (separate listener, see below)
+- **Time machine:** per camera an optional image memory (image embeddings + 256 px preview, no video); searching in
+  your own words ("red box in the hallway") returns time ranges with a filmstrip – also via MCP
+
+## Architecture
 
 ```
- Kameras (RTSP) ──▶ go2rtc ──WebRTC/MSE──▶ Browser (React-UI, nginx)
+ Cameras (RTSP) ──▶ go2rtc ──WebRTC/MSE──▶ Browser (React UI, nginx)
                       │                         ▲  REST + WebSocket
-                      │ RTSP (Sub-Stream)       │
+                      │ RTSP (sub stream)       │
                       ▼                         │
                  worker (GPU) ──MQTT──▶ mosquitto ◀──▶ backend (FastAPI) ──▶ PostgreSQL (pgvector)
-                 YOLO11, ByteTrack,        ▲           Regeln, Events,       Medien-Volume
-                 Gesicht/Kennzeichen/Tier, │ GPU-Lease Identitäten, Inventar, (Snapshots/Clips)
-                 YOLOE-Inventar, Pose,     │           Hinweise/Push, Auth
-                 RAM-Ringpuffer für Clips  │                ▲
-                                     vlm (Bildmodell)       │ REST
-                                                        mcp (KI-Agenten, /mcp)
+                 YOLO11, ByteTrack,        ▲           rules, events,        media volume
+                 face/plate/pet,           │ GPU lease identities, items,    (snapshots/clips)
+                 YOLOE items, pose,        │           notifications, auth
+                 RAM ring buffer for clips │                ▲
+                                     vlm (vision model)     │ REST
+                                                        mcp (AI agents, /mcp)
 ```
 
-| Dienst | Verzeichnis | Technik |
+| Service | Directory | Technology |
 |---|---|---|
-| `frontend` | [`frontend/`](frontend/README.md) | React 19, TypeScript, Vite, nginx (Reverse-Proxy) |
+| `frontend` | [`frontend/`](frontend/README.md) | React 19, TypeScript, Vite, nginx (reverse proxy) |
 | `backend` | [`backend/`](backend/README.md) | Python 3.12, FastAPI, SQLAlchemy, paho-mqtt |
 | `worker` | [`worker/`](worker/README.md) | PyTorch 2.5 / CUDA 12.4, Ultralytics YOLO11, supervision, InsightFace, fast-alpr, timm |
-| `mcp` | [`mcp/`](#mcp-server-für-ki-agenten) | MCP-Server für KI-Agenten (Streamable HTTP unter `/mcp`) |
-| `vlm` | `vlm/` | lokales Bildmodell für „Frag die Kamera“ und Bild-Sensoren (Compose-Profil `vlm`, leiht sich die GPU vom Worker) |
-| `go2rtc` | `go2rtc/` | Restreaming der Kameras (eine Verbindung pro Kamera) |
-| `mosquitto` | `mosquitto/` | MQTT-Broker: intern 1883 (Docker-Netz, voller Zugriff), extern Host-Port `MQTT_PORT` → 1884 (anonym, nur lesen) |
-| `db` | – | PostgreSQL 17 |
-| `testcam` | `testcam/` | Simulierte RTSP-Kameras (Compose-Profil `demo`) |
+| `mcp` | [`mcp/`](#mcp-server-for-ai-agents) | MCP server for AI agents (Streamable HTTP at `/mcp`) |
+| `vlm` | [`vlm/`](vlm/README.md) | local vision model for "Ask the camera" and image sensors (Compose profile `vlm`, borrows the GPU from the worker) |
+| `go2rtc` | `go2rtc/` | camera restreaming (one connection per camera) |
+| `mosquitto` | `mosquitto/` | MQTT broker: internal 1883 (Docker network, full access), external host port `MQTT_PORT` → 1884 (anonymous, read-only) |
+| `db` | – | PostgreSQL 17 with pgvector |
+| `testcam` | `testcam/` | simulated RTSP cameras (Compose profile `demo`) |
 
-Alle Schnittstellen zwischen den Diensten sind in **[CONTRACT.md](CONTRACT.md)** festgelegt.
+All interfaces between the services are defined in **[CONTRACT.md](CONTRACT.md)** (German).
 
-## Voraussetzungen
+## Requirements
 
-- Docker mit Compose v2
-- NVIDIA-GPU mit [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
-  (`docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` muss funktionieren).
-  Das Worker-Image nutzt **CUDA 12.4** – der Treiber muss mindestens 550 sein.
-- Ca. 15 GB Platz für Images, ca. 400 MB für Modelle (werden beim ersten Start ins Volume `models` geladen)
+- Docker with Compose v2
+- NVIDIA GPU with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+  (`docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` must work).
+  The worker image uses **CUDA 12.4** – the driver must be at least 550.
+- About 15 GB of disk space for images and about 400 MB for models (downloaded into the `models` volume on first start)
 
-## Schnellstart
+## Quick start
 
 ```bash
-cp .env.example .env            # Admin-Passwort und SECRET_KEY anpassen (Pflicht: SECRET_KEY=$(openssl rand -hex 32))!
-./testcam/download-videos.sh    # nur für die Demo-Kameras
+cp .env.example .env            # set admin password and SECRET_KEY (required: SECRET_KEY=$(openssl rand -hex 32))!
+./testcam/download-videos.sh    # only needed for the demo cameras
 docker compose up -d --build
 ```
 
-Oberfläche: **http://localhost:8080** (Login aus `.env`, Standard `admin` / `admin`).
+User interface: **http://localhost:8080** (login from `.env`, default `admin` / `admin`).
 
-Beim ersten Start legt das Backend zwei Demo-Kameras und zwei Beispielregeln an (`DEMO_CAMERAS=1`). Ohne Demo:
-in `.env` `DEMO_CAMERAS=0` und `COMPOSE_PROFILES=` setzen.
+On first start the backend creates two demo cameras and two example rules (`DEMO_CAMERAS=1`). Without the demo:
+set `DEMO_CAMERAS=0` and `COMPOSE_PROFILES=` in `.env`.
 
-### YouTube-Livestreams
+### YouTube live streams
 
-Als URL kann auch ein YouTube-Live-Link eingetragen werden (z. B. öffentliche Stadt- oder Verkehrs-Webcams).
-Das Backend ermittelt per `yt-dlp` nur die aktuelle Stream-Adresse; das Video wird live analysiert und **nicht
-gespeichert** (Clips nur bei Regel-Auslösung, wie bei allen Kameras). Für öffentliche Webcams Gesichts- und
-Kennzeichenerkennung in der Kamera abschalten (DSGVO).
+A YouTube live link can be used as camera URL as well (e.g. public city or traffic webcams). The backend only
+resolves the current stream address with `yt-dlp`; the video is analysed live and **not stored** (clips only when a
+rule fires, as for every camera). For public webcams, switch off face and licence plate recognition for that camera
+(GDPR).
 
-### Eigene Kamera hinzufügen
+### Adding your own camera
 
-Administration → Kameras → „Kamera hinzufügen“:
+Administration → Cameras → "Kamera hinzufügen" (Add camera):
 
-- **URL**: Hauptstream für Live-Ansicht, Snapshots und Clips, z. B. Reolink
+- **URL**: main stream for live view, snapshots and clips, e.g. Reolink
   `rtsp://user:pass@IP:554/h264Preview_01_main`
-- **Detect-URL** (empfohlen): Sub-Stream mit geringer Auflösung für die KI, z. B. `.../h264Preview_01_sub`.
-  Spart bei vielen Kameras viel CPU beim Dekodieren.
+- **Detect URL** (recommended): low-resolution sub stream for the AI, e.g. `.../h264Preview_01_sub`.
+  Saves a lot of CPU for decoding when you run many cameras.
 
-## Konfiguration (`.env`)
+## Configuration (`.env`)
 
-| Variable | Standard | Bedeutung |
+| Variable | Default | Meaning |
 |---|---|---|
-| `HTTP_PORT` | `8080` | Port der Oberfläche |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `admin` | Login (schwaches Passwort → Anmeldung nur aus privaten Netzen; max. 5 Fehlversuche/min je IP) |
-| `SECRET_KEY` | `change-me-please` | Signatur der Session-Cookies, API-Key-Hashes, Medien-Links. **Pflicht:** ≥ 32 Zeichen, sonst startet das Backend nicht |
-| `POSTGRES_PASSWORD` | `vg` | Datenbank |
-| `DEMO_CAMERAS` | `1` | Demo-Kameras beim ersten Start anlegen |
-| `COMPOSE_PROFILES` | `demo` | startet den `testcam`-Dienst; `demo,vlm` startet zusätzlich das Bildmodell (sonst fehlen „Frag die Kamera“ und Bild-Sensoren nach einem Neustart) |
-| `MQTT_PORT` | `1883` | externer MQTT-Port (anonym, **nur lesen**; Schreiben nur im Docker-Netz) |
-| `VG_PUBLIC_DOCS` | `0` | `1` = API-Doku `/api/docs` ohne Anmeldung (Standard: nur mit Login oder API-Key) |
-| `BUFFER_SIZE` | `1g` | RAM (tmpfs) für den Clip-Ringpuffer |
-| `TZ` | `Europe/Berlin` | Zeitzone für Zeitpläne |
-| `MCP_ALLOWED_HOSTS` | leer | erlaubte Host-Namen für `/mcp` (kommagetrennt, z. B. `vg.example.org,localhost`); leer = keine Prüfung |
+| `HTTP_PORT` | `8080` | port of the user interface |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `admin` | login (weak password → login only from private networks; max. 5 failed attempts/min per IP) |
+| `SECRET_KEY` | `change-me-please` | signs session cookies, API key hashes and media links. **Required:** ≥ 32 characters, otherwise the backend does not start |
+| `POSTGRES_PASSWORD` | `vg` | database |
+| `DEMO_CAMERAS` | `1` | create demo cameras on first start |
+| `COMPOSE_PROFILES` | `demo` | starts the `testcam` service; `demo,vlm` also starts the vision model (otherwise "Ask the camera" and image sensors are missing after a restart) |
+| `MQTT_PORT` | `1883` | external MQTT port (anonymous, **read-only**; writing only inside the Docker network) |
+| `VG_PUBLIC_DOCS` | `0` | `1` = API docs at `/api/docs` without login (default: only with login or API key) |
+| `BUFFER_SIZE` | `1g` | RAM (tmpfs) for the clip ring buffer |
+| `TZ` | `Europe/Berlin` | time zone for schedules |
+| `MCP_ALLOWED_HOSTS` | empty | allowed host names for `/mcp` (comma-separated, e.g. `vg.example.org,localhost`); empty = no check |
 
-Weitere Worker-Variablen (Modelle, Batchgröße, NVDEC): siehe [worker/README.md](worker/README.md).
+More worker variables (models, batch size, NVDEC): see [worker/README.md](worker/README.md).
 
-## MCP-Server für KI-Agenten
+## MCP server for AI agents
 
-Der Dienst `mcp` stellt VisionGuard als [MCP](https://modelcontextprotocol.io)-Server bereit (Streamable HTTP),
-damit KI-Agenten Fragen wie „Wo ist meine Fernbedienung?“ beantworten können.
+The `mcp` service exposes VisionGuard as an [MCP](https://modelcontextprotocol.io) server (Streamable HTTP), so AI
+agents can answer questions like "Where is my remote?".
 
-- **URL:** `http://<host>:8080/mcp` (über nginx; intern `http://mcp:8100/mcp`).
-- **API-Key:** unter **Administration → API-Zugänge** erzeugen. Scope `read` genügt für alle lesenden Tools;
-  die Tools mit Wirkung (unten mit ✎) brauchen `write`. Der Key wird nur einmal angezeigt und kann dort
-  jederzeit widerrufen werden. Ohne gültigen Key antwortet `/mcp` mit 401.
-- **Tools** (23, Antworten auf Deutsch):
+- **URL:** `http://<host>:8080/mcp` (via nginx; internally `http://mcp:8100/mcp`).
+- **API key:** create one under **Administration → API-Zugänge** (API access). Scope `read` is enough for all reading
+  tools; tools with side effects (marked ✎ below) need `write`. The key is shown only once and can be revoked there at
+  any time. Without a valid key `/mcp` answers 401.
+- **Tools** (23; answers are currently in German):
 
-| Tool | Zweck |
+| Tool | Purpose |
 |---|---|
-| `find_object(query)` | Gegenstand suchen: „Fernbedienung: aktuell sichtbar in Kamera Wohnzimmer (Raum Wohnzimmer), vermutlich auf dem Tisch, seit 14:02“ |
-| `list_visible_objects(camera_id?, room?, camera_name?)` | alle gerade sichtbaren Gegenstände |
-| `get_object_history(item_id)` | Verlauf eines Gegenstands |
-| `list_cameras()` | Kameras mit Raum und Zustand |
-| `get_camera_snapshot(camera_id? \| camera_name?)` | aktuelles Kamerabild (JPEG, max. 1600 px breit) |
-| `who_is_where()` | welche Personen/Tiere gerade wo zu sehen sind |
-| `search_history(query, since?, until?, camera?, limit?, include_image?)` | Zeitmaschine: „Am Di 14:03–14:21 in Raum Flur, Übereinstimmung 71 %“ mit signierter Vorschau |
-| `what_changed(since?, until?, …)` | was ist seit … neu aufgetaucht, verschwunden, verschoben |
-| `list_notifications(since?, limit?)` | letzte Hinweise |
-| `get_camera_health(camera_id? \| camera_name?)` | Bildzustand der Kameras (verdeckt, dunkel, …) |
-| `list_alerts(active_only?)` / `acknowledge_alert(event_id)` ✎ | Notfälle (z. B. Sturz) anzeigen / quittieren |
-| `list_open_questions()` / `answer_question(id, answer)` ✎ | Rückfragen „Bitte bestätigen“ |
-| `get_pet_diary(pet?, days?)` | Haustier-Tagebuch |
-| `get_daily_report(date?)` | gespeicherter Tagesbericht bzw. Vorschau (Vorschau immer ohne Sprachmodell) |
-| `get_nightly_report(report_id?)` | Bericht des Gesichter-Nachtlaufs (Zusammenführungen, Rückfragen, Kuratierung; nur lesen) |
-| `ask_camera(question, camera_id? \| camera_name?)` | Frage zum aktuellen Bild (lokales Bildmodell; global höchstens 12 Fragen/h über API-Keys) |
-| `list_sensors(…)` / `get_sensor(…)` | virtuelle Sensoren und Vorräte |
-| `get_shopping_list()` / `add_to_shopping_list(name)` ✎ | Einkaufsliste |
-| `ptz_status(camera_id? \| camera_name?)` / `ptz_move_to(preset, camera_id? \| camera_name?, hold_s?)` ✎ | Schwenk-Kameras: Ausrichtung und Positionen / Position anfahren (danach `get_camera_snapshot`) |
-| `show_on_tv(camera_id? \| camera_name?, tv?, duration_s?)` ✎ | Livebild einer Kamera auf dem Fernseher zeigen |
+| `find_object(query)` | find an item: "remote: currently visible on camera Living room, probably on the table, since 14:02" |
+| `list_visible_objects(camera_id?, room?, camera_name?)` | all currently visible items |
+| `get_object_history(item_id)` | history of an item |
+| `list_cameras()` | cameras with room and state |
+| `get_camera_snapshot(camera_id? \| camera_name?)` | current camera image (JPEG, max. 1600 px wide) |
+| `who_is_where()` | which people/animals are visible where right now |
+| `search_history(query, since?, until?, camera?, limit?, include_image?)` | time machine: "Tue 14:03–14:21 in the hallway, 71 % match" with a signed preview |
+| `what_changed(since?, until?, …)` | what has appeared, disappeared or moved since … |
+| `list_notifications(since?, limit?)` | latest notifications |
+| `get_camera_health(camera_id? \| camera_name?)` | image health of the cameras (covered, dark, …) |
+| `list_alerts(active_only?)` / `acknowledge_alert(event_id)` ✎ | show / acknowledge emergencies (e.g. a fall) |
+| `list_open_questions()` / `answer_question(id, answer)` ✎ | "please confirm" questions |
+| `get_pet_diary(pet?, days?)` | pet diary |
+| `get_daily_report(date?)` | stored daily report or a preview (the preview never uses a language model) |
+| `get_nightly_report(report_id?)` | report of the nightly face run (merges, questions, curation; read-only) |
+| `ask_camera(question, camera_id? \| camera_name?)` | ask about the current image (local vision model; at most 12 questions/h via API keys in total) |
+| `list_sensors(…)` / `get_sensor(…)` | virtual sensors and supplies |
+| `get_shopping_list()` / `add_to_shopping_list(name)` ✎ | shopping list |
+| `ptz_status(camera_id? \| camera_name?)` / `ptz_move_to(preset, camera_id? \| camera_name?, hold_s?)` ✎ | PTZ cameras: orientation and positions / move to a position (then `get_camera_snapshot`) |
+| `show_on_tv(camera_id? \| camera_name?, tv?, duration_s?)` ✎ | show a camera's live image on the TV |
 
-Beispiel Claude Code:
+Example for Claude Code:
 
 ```bash
 claude mcp add --transport http visionguard http://localhost:8080/mcp \
   --header "Authorization: Bearer $VG_API_KEY"
 ```
 
-Beispiel für Clients mit JSON-Konfiguration (`mcpServers`):
+Example for clients with a JSON configuration (`mcpServers`):
 
 ```json
 {
@@ -187,31 +191,37 @@ Beispiel für Clients mit JSON-Konfiguration (`mcpServers`):
 }
 ```
 
-Selbsttest im Container: `docker compose exec -e VG_API_KEY=vgt_… mcp python selftest.py`
-(prüft 401 ohne Key, ob alle Tools angeboten werden, und ruft u. a. `list_cameras`, `find_object`,
-`list_visible_objects`, `who_is_where`, `what_changed`, `list_alerts` und `search_history` auf).
+Self-test in the container: `docker compose exec -e VG_API_KEY=vgt_… mcp python selftest.py`
+(checks 401 without a key and that all tools are offered, and calls `list_cameras`, `find_object`,
+`list_visible_objects`, `who_is_where`, `what_changed`, `list_alerts` and `search_history`, among others).
 
-**Zugriff von außen:** Port 8080 nicht direkt ins Internet freigeben, sondern einen Reverse-Proxy mit TLS
-(z. B. Caddy, Traefik, nginx mit Let's Encrypt) oder einen Tunnel (z. B. Cloudflare Tunnel, Tailscale Funnel)
-davorsetzen. Dann `MCP_ALLOWED_HOSTS` auf den öffentlichen Host-Namen setzen und unter Einstellungen
-`public_base_url` (z. B. `https://vg.example.org`) eintragen, damit Bild-Links in den Antworten absolut sind.
-API-Keys nur über HTTPS verwenden, für Agenten eigene Keys mit Scope `read` anlegen und nicht mehr benötigte
-widerrufen. Auch ein Key mit `write` kann Push-Ziele, LLM-Adresse, Standort, Berichtsversand und
-`public_base_url` nicht ändern (nur mit Anmeldung im Browser) und sieht diese Werte nicht. Hinweis: Kamerabilder und Gegenstands-Crops gehen dabei an den Anbieter des KI-Modells.
+**Access from outside:** do not expose port 8080 directly to the internet; put a reverse proxy with TLS (e.g. Caddy,
+Traefik, nginx with Let's Encrypt) or a tunnel (e.g. Cloudflare Tunnel, Tailscale Funnel) in front of it. Then set
+`MCP_ALLOWED_HOSTS` to the public host name and enter `public_base_url` (e.g. `https://vg.example.org`) in the
+settings so that image links in answers are absolute. Use API keys over HTTPS only, create separate keys with scope
+`read` for agents and revoke keys you no longer need. Even a key with `write` cannot change push targets, the LLM
+address, location, report delivery or `public_base_url` (browser login only) and cannot see these values. Note:
+camera images and item crops are sent to the provider of the AI model you use.
 
-## Leistung (gemessen, RTX 4080 Laptop)
+## Performance (measured, RTX 4080 Laptop)
 
-16 Kameras × 5 Bilder/s: 80 Bilder/s gesamt, GPU-Last 20–35 %, 1,9 GB Grafikspeicher, ca. 4,3 GB RAM.
-Bei hochauflösenden Kameras ist das Dekodieren auf der CPU der Engpass → Sub-Stream als Detect-URL nutzen.
+16 cameras × 5 frames/s: 80 frames/s in total, GPU load 20–35 %, 1.9 GB of video memory, about 4.3 GB of RAM.
+With high-resolution cameras, CPU decoding is the bottleneck → use a sub stream as detect URL.
 
-## Datenschutz und Lizenzen
+## Privacy and licences
 
-- Gesichtserkennung verarbeitet **biometrische Daten** (DSGVO Art. 9). Identifikation pro Kamera abschaltbar,
-  Aufbewahrungsfristen unter Administration → Einstellungen.
-- Die InsightFace-Gewichte `buffalo_l` sind **nur für nicht-kommerzielle Nutzung** freigegeben.
-- Ultralytics YOLO11 steht unter **AGPL-3.0**.
-- Testvideos: Intel IoT DevKit sample-videos (CC BY 4.0).
+- Face recognition processes **biometric data** (GDPR Art. 9). Identification can be switched off per camera;
+  retention periods under Administration → Settings.
+- The InsightFace weights `buffalo_l` are licensed for **non-commercial use only**.
+- Ultralytics YOLO11 is licensed under **AGPL-3.0**.
+- Test videos: Intel IoT DevKit sample-videos (CC BY 4.0).
 
-## Entwicklung
+## Licence
 
-Hinweise für Entwickler und KI-Agenten: [AGENTS.md](AGENTS.md).
+VisionGuard is free software under the **GNU Affero General Public License v3.0** – see [LICENSE](LICENSE). If you
+run a modified version as a network service, you must offer its source code to its users. Model weights and test
+videos are not part of this licence (see above).
+
+## Development
+
+Notes for developers and AI agents: [AGENTS.md](AGENTS.md) (German). Interfaces: [CONTRACT.md](CONTRACT.md) (German).

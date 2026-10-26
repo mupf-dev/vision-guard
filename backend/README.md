@@ -1,72 +1,72 @@
 # VisionGuard – Backend
 
-FastAPI-Dienst (Python 3.12) für REST-API, WebSocket, MQTT-Bus, Regel-Engine und Identitätsabgleich.
-Schnittstellen: siehe `../CONTRACT.md` (verbindlich).
+FastAPI service (Python 3.12) for the REST API, WebSocket, MQTT bus, rule engine and identity matching.
+Interfaces: see `../CONTRACT.md` (German, binding).
 
-## Aufbau (`app/`)
+## Structure (`app/`)
 
-| Datei | Aufgabe |
+| File | Purpose |
 |---|---|
-| `main.py` | App, Lifespan (DB anlegen, Demo-Daten, MQTT, go2rtc-Sync, 1-s-Tick, stündliches Aufräumen), `/api/ws`, `/media` |
-| `config.py` | Env-Variablen (`VG_*`, `TZ`), Standard-Settings |
-| `db.py`, `models.py` | SQLAlchemy 2 (sync, psycopg3), `create_all` beim Start |
-| `schemas.py`, `serializers.py` | Pydantic-v2-Eingaben, JSON-Ausgaben laut Contract |
-| `auth.py`, `routers/auth.py` | Admin aus Env, JWT im httpOnly-Cookie `vg_session` (7 Tage) |
-| `routers/*.py` | cameras, rules, events, identities, misc (settings/stats/system), internal (Worker) |
-| `go2rtc.py` | Stream-Sync `cam_N` / `cam_N_detect`, `frame.jpeg`-Proxy, URL-Probe über temporären Stream `probe_<hex>` |
-| `mqtt_bus.py` | paho-mqtt 2, abonniert `vg/internal/#`, LWT `{prefix}/available` |
-| `events.py` | Track → Event (ein Track = ein Event), Regel-Auswertung, Aktionen, Zähler `{prefix}/{kamera_slug}/{label}` |
-| `rules.py` | Bedingungen (Zeitplan inkl. über Mitternacht, Identität, Zonen, Dwell), Registry für Trigger/Bedingungen, Zeit-Trigger-Fälligkeit, Templates, Webhooks |
-| `rule_conditions.py` | Auswertung `conditions`: Gegenstand da/weg, unberührt, Regen, kam aus Zone (A1) |
-| `weather.py` | Regenwahrscheinlichkeit von Open-Meteo (ohne Key, Cache 30 min, `VG_WEATHER_URL` für Tests) |
-| `identity.py` | Kosinus-Abgleich (numpy, In-Memory-Cache) für face/pet, Levenshtein für Kennzeichen |
-| `reid.py`, `routers/presence.py` | C2: RAM-Galerie (presence_key ↔ Embeddings/Tracks/Identität), `POST /api/internal/reid`, `GET/DELETE /api/presence`, WS `presence` |
-| `retention.py` | Events älter `retention_days_events`, Dateien in snapshots/crops/clips älter `retention_days_media` |
-| `ws.py`, `state.py`, `registry.py` | WebSocket-Hub, flüchtiger Status, Kamera-Cache |
+| `main.py` | App, lifespan (create DB, demo data, MQTT, go2rtc sync, 1-s tick, hourly cleanup), `/api/ws`, `/media` |
+| `config.py` | Env variables (`VG_*`, `TZ`), default settings |
+| `db.py`, `models.py` | SQLAlchemy 2 (sync, psycopg3), `create_all` at startup |
+| `schemas.py`, `serializers.py` | Pydantic v2 inputs, JSON outputs as per the contract |
+| `auth.py`, `routers/auth.py` | Admin from env, JWT in the httpOnly cookie `vg_session` (7 days) |
+| `routers/*.py` | cameras, rules, events, identities, misc (settings/stats/system), internal (worker) |
+| `go2rtc.py` | Stream sync `cam_N` / `cam_N_detect`, `frame.jpeg` proxy, URL probe via temporary stream `probe_<hex>` |
+| `mqtt_bus.py` | paho-mqtt 2, subscribes to `vg/internal/#`, LWT `{prefix}/available` |
+| `events.py` | Track → event (one track = one event), rule evaluation, actions, counters `{prefix}/{kamera_slug}/{label}` |
+| `rules.py` | Conditions (schedule incl. across midnight, identity, zones, dwell), registry for triggers/conditions, time-trigger due check, templates, webhooks |
+| `rule_conditions.py` | Evaluation of `conditions`: item present/gone, untouched, rain, came from zone (A1) |
+| `weather.py` | Rain probability from Open-Meteo (no key, 30 min cache, `VG_WEATHER_URL` for tests) |
+| `identity.py` | Cosine matching (numpy, in-memory cache) for face/pet, Levenshtein for license plates |
+| `reid.py`, `routers/presence.py` | C2: RAM gallery (presence_key ↔ embeddings/tracks/identity), `POST /api/internal/reid`, `GET/DELETE /api/presence`, WS `presence` |
+| `retention.py` | Events older than `retention_days_events`, files in snapshots/crops/clips older than `retention_days_media` |
+| `ws.py`, `state.py`, `registry.py` | WebSocket hub, volatile status, camera cache |
 
-## Verhalten (Kurzfassung)
+## Behavior (summary)
 
-- **Demo**: `VG_DEMO_CAMERAS=1` und leere Kameratabelle beim ersten Start → „Demo Eingang“, „Demo Straße“
-  und zwei Beispielregeln. Einmalig (Flag `seeded` in Tabelle `kv`).
-- **go2rtc**: Sync beim Start (wartet auf go2rtc), bei jeder Kamera-Änderung und alle 30 s
-  (falls go2rtc neu gestartet wurde und die per API angelegten Streams verloren hat).
-- **Regeln**: `enter`/`dwell` feuern höchstens einmal pro Track und Regel, `leave` einmal.
-  Cooldown pro Regel+Kamera. Dwell wird bei Updates und jede Sekunde geprüft.
-  Snapshot: Auftrag an Worker (`vg/internal/cmd/{id}`); ohne Antwort nach 5 s holt das Backend
-  selbst ein Bild von go2rtc. Clip: höchstens ein Auftrag pro Event.
-- **Hinweise (A1)**: Regeln mit `conditions` prüfen diese erst `condition_delay_s` nach dem Auslösen (eigener
-  Thread-Pool, nie im Track-Thread); erfüllt → Aktionen + Notification. Zeit-Regeln (`trigger=time`) prüft der
-  Tick alle 20 s; der letzte Lauf steht in `kv.rule_time_runs`, verpasste Zeitpunkte werden bis 15 min nachgeholt.
-  `POST /api/rules/check` prüft einen Entwurf sofort (UI „Jetzt prüfen“).
-- **Virtuelle Sensoren (A3/C4)** (`sensors.py`): Zustandsautomat im Speicher (DB wird im Effekt-Thread
-  nachgezogen). Ein abweichender Rohzustand braucht `confirm_n` Messungen in Folge; verdeckte Messungen zählen nicht.
-  `inventory_count` zählt `present`-Gegenstände im Bereich (Tick je `interval_s`), `vlm` fragt `vlm.ask` (A2) nur bei
-  Bildänderung, offenem Kandidaten oder nach `vlm_max_age_s`; `verify_vlm` lässt einen billigen Wechsel vom
-  Bildmodell bestätigen. C4-VLM (W4, `vlm_measure.py`): `vlm` mit `params.measure` `count` (Anzahl, `min_count` ≤ 3)
-  bzw. `fill` (nur ok/leer); `inventory_count` mit `verify_vlm` lässt Wechsel vom Bildmodell nachzählen (≤ 1×/5 min).
-  Messwerkzeug: `scripts/vlm_supply_bench.py`. Bestätigter Wechsel → `sensor_history`, Standbild (go2rtc, ≤ 1/min), WS `sensor`, MQTT
-  `{prefix}/sensor/{slug}` (+ `/attributes`), Regeln mit `trigger: sensor` (nur zwischen bekannten Zuständen).
-  Vorräte (`supply`) → Einkaufsliste (`shopping.py`, `shopping_list_auto`) und Hinweis `source: sensor`.
-  Ohne Messwerte seit `max(5 × interval_s, 120 s)` → `unknown`.
-- **Identitäten**: neue unbenannte → „Person #N“ / „Tier #N“ (Zähler je Art), „Kennzeichen <Text>“.
-  Max. 20 Samples je Identität (beste Qualität bleibt), Crops werden nach `identities/<id>/` kopiert.
-  `identify` mit `camera_id`+`track_id` verknüpft die Identität direkt mit dem aktiven Event.
-- **Anwesenheit (C2)**: Track-Hook für Personen/Hunde/Katzen, jeder Track gehört genau einem `presence_key`.
-  ReID-Embeddings (nur `reid_enabled`-Kameras) werden gegen die Galerie abgeglichen (Kosinus, Maximum je Eintrag,
-  Schwelle `reid_match_threshold`), nur gegen Einträge ohne gleichzeitig aktiven Track. Gesicht hat Vorrang: eine
-  eigene Identität benennt den Eintrag bzw. löst einen per ReID verknüpften Track heraus. Identität wird per ReID nur
-  ab Schwelle + 0,1 weitergegeben. Alles nur im RAM, Verfall nach `reid_ttl_min`, Neustart = leer.
-- Aktive Events aus einem früheren Lauf werden beim Start beendet; Tracks ohne Lebenszeichen
-  (60 s) werden automatisch beendet.
+- **Demo**: `VG_DEMO_CAMERAS=1` and an empty camera table on first start → "Demo Eingang" (Demo entrance),
+  "Demo Straße" (Demo street) and two example rules. Once only (flag `seeded` in table `kv`).
+- **go2rtc**: sync at startup (waits for go2rtc), on every camera change and every 30 s
+  (in case go2rtc was restarted and lost the streams created via the API).
+- **Rules**: `enter`/`dwell` fire at most once per track and rule, `leave` once.
+  Cooldown per rule+camera. Dwell is checked on updates and every second.
+  Snapshot: request to the worker (`vg/internal/cmd/{id}`); if there is no answer after 5 s, the backend
+  fetches a frame from go2rtc itself. Clip: at most one request per event.
+- **Notifications (A1)**: rules with `conditions` check them only `condition_delay_s` after firing (separate
+  thread pool, never in the track thread); fulfilled → actions + notification. Time rules (`trigger=time`) are checked
+  by the tick every 20 s; the last run is stored in `kv.rule_time_runs`, missed times are caught up for up to 15 min.
+  `POST /api/rules/check` checks a draft immediately (UI "Jetzt prüfen" (Check now)).
+- **Virtual sensors (A3/C4)** (`sensors.py`): in-memory state machine (the DB is updated in the effect
+  thread). A differing raw state needs `confirm_n` consecutive measurements; occluded measurements do not count.
+  `inventory_count` counts `present` items in the region (tick per `interval_s`), `vlm` asks `vlm.ask` (A2) only on
+  image change, an open candidate or after `vlm_max_age_s`; `verify_vlm` has a cheap state change confirmed by the
+  vision model. C4-VLM (W4, `vlm_measure.py`): `vlm` with `params.measure` `count` (number, `min_count` ≤ 3)
+  or `fill` (only ok/empty); `inventory_count` with `verify_vlm` has changes recounted by the vision model (≤ 1×/5 min).
+  Measurement tool: `scripts/vlm_supply_bench.py`. Confirmed change → `sensor_history`, still image (go2rtc, ≤ 1/min), WS `sensor`, MQTT
+  `{prefix}/sensor/{slug}` (+ `/attributes`), rules with `trigger: sensor` (only between known states).
+  Supplies (`supply`) → shopping list (`shopping.py`, `shopping_list_auto`) and notification `source: sensor`.
+  No measurements for `max(5 × interval_s, 120 s)` → `unknown`.
+- **Identities**: new unnamed ones → "Person #N" / "Tier #N" (Animal #N) (counter per kind), "Kennzeichen <Text>" (License plate <text>).
+  Max. 20 samples per identity (best quality is kept), crops are copied to `identities/<id>/`.
+  `identify` with `camera_id`+`track_id` links the identity directly to the active event.
+- **Presence (C2)**: track hook for persons/dogs/cats, every track belongs to exactly one `presence_key`.
+  ReID embeddings (only `reid_enabled` cameras) are matched against the gallery (cosine, maximum per entry,
+  threshold `reid_match_threshold`), only against entries without a concurrently active track. Face takes precedence:
+  an own identity names the entry or detaches a track linked via ReID. An identity is passed on via ReID only
+  from threshold + 0.1. Everything in RAM only, expiry after `reid_ttl_min`, restart = empty.
+- Active events from a previous run are ended at startup; tracks without a sign of life
+  (60 s) are ended automatically.
 
-## Lokal testen
+## Testing locally
 
 ```bash
 docker compose up -d --build db mosquitto go2rtc backend
 docker compose exec backend python -c "import httpx;print(httpx.get('http://localhost:8000/api/health').json())"
-# Worker simulieren
+# Simulate the worker
 docker compose exec mosquitto mosquitto_pub -t vg/internal/track/1 -q 1 -m \
  '{"type":"start","camera_id":1,"track_id":1,"label":"person","score":0.9,"ts":1761300000,"first_seen":1761300000,"zones":[],"entered_zones":[],"left_zones":[],"identity":null,"attributes":{},"crop_path":null,"best_score":0.9}'
 ```
 
-API-Doku: `/api/docs` (Swagger).
+API docs: `/api/docs` (Swagger).
