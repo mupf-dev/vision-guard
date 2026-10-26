@@ -1,3 +1,4 @@
+import { lang } from "../i18n";
 import type {
   Camera, CameraInput, CameraTestResult, Identity, IdentityKind, Paged, Rule, RuleInput,
   Sample, Settings, Stats, SystemInfo, VGEvent, IdentitySuggestion, MergeInput,
@@ -56,7 +57,7 @@ async function request<T>(method: string, path: string, body?: unknown, q?: Quer
   const res = await fetch(`/api${path}${qs(q)}`, {
     method,
     credentials: "include",
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    headers: { "Accept-Language": lang(), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401 && !path.startsWith("/auth/")) onUnauthorized?.();
@@ -85,7 +86,7 @@ const del = <T = void>(p: string) => request<T>("DELETE", p);
 
 /** W2 B4: Datei-Upload (multipart) – gleiche Fehlerbehandlung wie request() */
 async function upload<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(`/api${path}`, { method: "POST", credentials: "include", body: form });
+  const res = await fetch(`/api${path}`, { method: "POST", credentials: "include", body: form, headers: { "Accept-Language": lang() } });
   if (res.status === 401) onUnauthorized?.();
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;

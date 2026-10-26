@@ -118,10 +118,37 @@ def vocab_map(vocab: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def display_name(label: str, vocab: Optional[dict[str, dict[str, Any]]] = None) -> str:
+    """Deutscher Anzeigename (`name_de`) – bleibt für das API-Feld `name_de` und die deutsche Suche."""
     e = (vocab or {}).get(label)
     if e and e.get("name_de"):
         return str(e["name_de"])
     return label.replace("_", " ")
+
+
+def localized_name(label: str, vocab: Optional[dict[str, dict[str, Any]]] = None, lang: Optional[str] = None) -> str:
+    """Anzeigename in Sprache `lang` (Standard: Sprache der Anfrage bzw. Systemsprache), CONTRACT I18N.C:
+    `names[lang]` → (de: `name_de`) → `names.en` → erster Prompt → Label."""
+    from . import i18n
+    lg = i18n.normalize(lang) or i18n.current()
+    e = (vocab or {}).get(label) or {}
+    names = e.get("names") if isinstance(e.get("names"), dict) else {}
+    if names.get(lg):
+        return str(names[lg])
+    if lg == "de" and e.get("name_de"):
+        return str(e["name_de"])
+    if names.get("en"):
+        return str(names["en"])
+    prompts = e.get("prompts") or []
+    if prompts:
+        p = str(prompts[0])
+        return p[:1].upper() + p[1:]
+    return label.replace("_", " ")
+
+
+def vocab_name(label: str, lang: Optional[str] = None) -> str:
+    """`localized_name` mit dem Vokabular aus den Settings (für Module ohne eigenes Vokabular)."""
+    from . import settings_store
+    return localized_name(label, vocab_map(settings_store.get().get("inventory_vocabulary") or []), lang)
 
 
 def synonyms_for(label: str, custom: Optional[dict[str, list[str]]] = None) -> list[str]:

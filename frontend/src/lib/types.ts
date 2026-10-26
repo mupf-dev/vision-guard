@@ -594,6 +594,10 @@ export interface Settings {
   nightly_curate: boolean;
   nightly_thresholds: boolean;
   nightly_cleanup_days: number;
+  // Sprachen (CONTRACT I18N.B): Systemsprache für Hinweise/Push, Bericht, MQTT, MCP
+  language: string;
+  /** read-only: im Backend verfügbare Sprachen */
+  languages_available?: { code: string; name: string }[];
   // Fernseher (CONTRACT TV.A) – nur mit Anmeldung im Browser änderbar, für API-Keys ausgeblendet
   tv_targets: TvTarget[];
   tv_stream_base_url: string | null;
@@ -605,6 +609,8 @@ export interface InventoryVocabEntry {
   group: string;
   prompts: string[];
   min_score: number | null;
+  /** Anzeigename je Sprachcode (CONTRACT I18N.C), z. B. { en: "Remote control" } */
+  names?: Record<string, string>;
 }
 
 export interface DetObject {
@@ -714,6 +720,8 @@ export interface InventoryRelation {
 }
 
 export interface InventoryItem {
+  /** Anzeigename in der Sprache der Anfrage (CONTRACT I18N.C); name_de bleibt */
+  name?: string;
   id: number;
   camera_id: number;
   camera_name: string;

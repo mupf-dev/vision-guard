@@ -640,11 +640,12 @@ input[type="datetime-local"].input, input[type="time"].input { color-scheme: dar
   display: flex; flex-direction: column; gap: 2px;
   background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--radius); box-shadow: var(--shadow-lg);
 }
-.nav-menu a {
+.nav-menu a, .nav-menu button {
   display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; color: var(--text-2); font-weight: 500;
 }
-.nav-menu a:hover { background: var(--bg-3); color: var(--text-1); text-decoration: none; }
-.nav-menu a.active { background: var(--accent-soft); color: var(--accent); }
+.nav-menu button { background: none; border: 0; font: inherit; cursor: pointer; text-align: left; }
+.nav-menu a:hover, .nav-menu button:hover { background: var(--bg-3); color: var(--text-1); text-decoration: none; }
+.nav-menu a.active, .nav-menu button.active { background: var(--accent-soft); color: var(--accent); }
 .nav-menu a.active::after { display: none; }
 .nav-mobile { display: none; position: relative; flex: 1; min-width: 0; }
 .nav-mobile .nav-more-btn { max-width: 100%; }

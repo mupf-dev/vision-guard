@@ -1,0 +1,21 @@
+{
+  "language_name": "Deutsch",
+  "decimal_sep": ",",
+  "date_format": "%d.%m.%Y",
+  "never": "nie",
+  "just_now": "gerade eben",
+  "ago_s": "vor {n} s",
+  "ago_min": "vor {n} min",
+  "ago_h": "vor {n} h",
+  "ago_d": {"one": "vor 1 Tag", "other": "vor {n} Tagen"},
+  "yes": "ja",
+  "no": "nein",
+  "unknown": "unbekannt",
+  "labels": {
+    "person": "Person", "car": "Auto", "truck": "LKW", "bicycle": "Fahrrad", "motorcycle": "Motorrad",
+    "bus": "Bus", "dog": "Hund", "cat": "Katze", "bird": "Vogel", "horse": "Pferd", "sheep": "Schaf", "cow": "Kuh"
+  },
+  "kind": {"face": "Person", "plate": "Kennzeichen", "pet": "Tier", "item": "Gegenstand"},
+  "weekdays": ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
+  "weekdays_short": ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+}

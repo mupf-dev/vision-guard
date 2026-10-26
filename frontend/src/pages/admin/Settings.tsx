@@ -8,6 +8,7 @@ import { toast } from "../../lib/store";
 import { InventorySettingsCard } from "./InventorySettings";
 import { NotificationSettingsCard, targetProblem } from "./NotificationSettings";
 import { TvSettingsCard, tvProblem } from "./TvSettings";
+import { LanguageSettingsCard } from "./LanguageSettings";
 import { ReviewSettingsCard } from "./ReviewSettings";
 import { PersonSettingsCard } from "./PersonSettings";
 import { ReidSettingsCard } from "./ReidSettings";
@@ -21,7 +22,7 @@ import { FaceSettingsCard, NightlySettingsCard } from "./FaceSettings";
 
 // R1: Sprungmarken der langen Einstellungsseite (Reihenfolge wie die Karten)
 const SECTIONS: [string, string][] = [
-  ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gesichter", "Gesichter"], ["s-nachtlauf", "Nachtlauf"],
+  ["s-sprache", "Sprache"], ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gesichter", "Gesichter"], ["s-nachtlauf", "Nachtlauf"],
   ["s-gegenstaende", "Gegenstände"],
   ["s-benachrichtigungen", "Benachrichtigungen"], ["s-fernseher", "Fernseher"], ["s-rueckfragen", "Rückfragen"], ["s-haltung", "Haltung & Gesten"],
   ["s-reid", "Über Kameras"], ["s-tiere", "Tiere"], ["s-bericht", "Tagesbericht"], ["s-ki", "KI-Sprachmodell"],
@@ -68,6 +69,9 @@ export function SettingsPage() {
         {SECTIONS.map(([id, label]) => <a key={id} href={`#${id}`} onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{label}</a>)}
       </nav>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div id="s-sprache" className="settings-anchor">
+          <LanguageSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
+        </div>
         <div className="card" id="s-aufbewahrung">
           <div className="card-head"><Archive size={18} color="var(--accent)" /><h3>Aufbewahrung</h3></div>
           <div className="card-body form-grid">

@@ -1,6 +1,21 @@
-const dtf = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const tf = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const df = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+import { intlLocale, msgs } from "../i18n";
+
+// Formatierer je Sprache (Intl, aktuelle Sprache aus dem i18n-Modul)
+const fmtCache = new Map<string, Intl.DateTimeFormat>();
+function dateFmt(kind: "dt" | "t" | "d"): Intl.DateTimeFormat {
+  const loc = intlLocale();
+  const key = `${loc}|${kind}`;
+  let f = fmtCache.get(key);
+  if (!f) {
+    const opt: Intl.DateTimeFormatOptions = kind === "dt"
+      ? { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }
+      : kind === "t" ? { hour: "2-digit", minute: "2-digit", second: "2-digit" }
+      : { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
+    f = new Intl.DateTimeFormat(loc, opt);
+    fmtCache.set(key, f);
+  }
+  return f;
+}
 
 export function parseTs(v: string | number | null | undefined): Date | null {
   if (v === null || v === undefined || v === "") return null;
@@ -11,21 +26,23 @@ export function parseTs(v: string | number | null | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-export const fmtDateTime = (v?: string | null) => { const d = parseTs(v); return d ? dtf.format(d) : "–"; };
-export const fmtTime = (v?: string | null) => { const d = parseTs(v); return d ? tf.format(d) : "–"; };
-export const fmtShort = (v?: string | null) => { const d = parseTs(v); return d ? df.format(d) : "–"; };
+export const fmtDateTime = (v?: string | null) => { const d = parseTs(v); return d ? dateFmt("dt").format(d) : "–"; };
+export const fmtTime = (v?: string | null) => { const d = parseTs(v); return d ? dateFmt("t").format(d) : "–"; };
+export const fmtShort = (v?: string | null) => { const d = parseTs(v); return d ? dateFmt("d").format(d) : "–"; };
 
+/** „vor 5 min“ / "5 min ago" (Intl.RelativeTimeFormat der aktuellen Sprache) */
 export function fmtAgo(v?: string | null): string {
   const d = parseTs(v);
-  if (!d) return "nie";
+  if (!d) return msgs().common.never;
   const s = Math.round((Date.now() - d.getTime()) / 1000);
-  if (s < 10) return "gerade eben";
-  if (s < 60) return `vor ${s} s`;
+  if (s < 10) return msgs().common.justNow;
+  const rtf = new Intl.RelativeTimeFormat(intlLocale(), { numeric: "always", style: "short" });
+  if (s < 60) return rtf.format(-s, "second");
   const m = Math.round(s / 60);
-  if (m < 60) return `vor ${m} min`;
+  if (m < 60) return rtf.format(-m, "minute");
   const h = Math.round(m / 60);
-  if (h < 48) return `vor ${h} h`;
-  return `vor ${Math.round(h / 24)} Tagen`;
+  if (h < 48) return rtf.format(-h, "hour");
+  return rtf.format(-Math.round(h / 24), "day");
 }
 
 export function fmtDuration(a?: string | null, b?: string | null): string {
@@ -35,11 +52,11 @@ export function fmtDuration(a?: string | null, b?: string | null): string {
   const s = Math.max(0, Math.round((db.getTime() - da.getTime()) / 1000));
   if (s < 60) return `${s} s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} min ${s % 60} s`;
-  return `${Math.floor(m / 60)} h ${m % 60} min`;
+  if (m < 60) return msgs().common.durMin(m, s % 60);
+  return msgs().common.durHour(Math.floor(m / 60), m % 60);
 }
 
-export const pct = (v: number) => `${Math.round(v * 100)} %`;
+export const pct = (v: number) => new Intl.NumberFormat(intlLocale(), { style: "percent", maximumFractionDigits: 0 }).format(v);
 
 /** datetime-local (lokale Zeit) -> ISO UTC */
 export function localToIso(v: string): string | undefined {

@@ -40,6 +40,8 @@ def _is_token(request: Request) -> bool:
 def _out(data: dict, request: Request | None = None) -> dict:
     """Push-Zugangsdaten nur als "***"; dazu read-only, ob LLM-Schlüssel per Env gesetzt sind (W2)."""
     out = mask_settings(data)
+    from .. import i18n
+    out["languages_available"] = i18n.languages()   # read-only (CONTRACT „Nachträge: Sprachen“)
     out["llm_key_configured"] = {"openai_compat": bool(config.llm_api_key),
                                  "anthropic": bool(config.anthropic_api_key)}
     if request is not None and _is_token(request):

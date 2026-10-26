@@ -6,6 +6,13 @@ import "./styles.css";
 import { App } from "./App";
 import { installMock, isMock } from "./lib/mock";
 import { ApiError } from "./lib/api";
+import { useLang } from "./i18n";
+
+/** Sprachwechsel baut die Oberfläche neu auf (alle Texte, Formatierer); Daten im Query-Cache bleiben. */
+function Root() {
+  const lang = useLang();
+  return <App key={lang} />;
+}
 
 if (isMock) installMock();
 
@@ -23,7 +30,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <BrowserRouter>
-        <App />
+        <Root />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

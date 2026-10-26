@@ -453,6 +453,18 @@ class InventoryVocabEntry(BaseModel):
     group: str = Field("", max_length=60)
     prompts: list[str] = Field(min_length=1, max_length=8)
     min_score: Optional[float] = Field(None, ge=0.05, le=0.95)
+    names: dict[str, str] = Field(default_factory=dict)   # CONTRACT I18N.C: Anzeigename je Sprachcode
+
+    @field_validator("names")
+    @classmethod
+    def _names(cls, v: dict[str, str]) -> dict[str, str]:
+        out = {}
+        for k, n in (v or {}).items():
+            k = str(k).strip().lower()[:8]
+            n = str(n).strip()[:60]
+            if k and n:
+                out[k] = n
+        return out
 
     @field_validator("prompts")
     @classmethod
@@ -667,6 +679,8 @@ class SettingsModel(BaseModel):
     nightly_curate: bool = True
     nightly_thresholds: bool = True
     nightly_cleanup_days: int = Field(3, ge=0, le=365)
+    # Sprachen (CONTRACT „Nachträge: Sprachen“): Systemsprache für Hinweise/Push, Bericht, MQTT, MCP
+    language: str = Field("en", min_length=2, max_length=8)
     # Fernseher (DLNA), CONTRACT TV.A
     tv_targets: list[TvTarget] = Field(default_factory=list, max_length=10)
     tv_stream_base_url: Optional[str] = Field(None, max_length=300)
@@ -775,6 +789,15 @@ class SettingsModel(BaseModel):
             raise ValueError(f"{info.field_name} muss mit http:// oder https:// beginnen")
         return v
 
+    @field_validator("language")
+    @classmethod
+    def _language(cls, v: str) -> str:
+        from . import i18n
+        code = i18n.normalize(v)
+        if code is None:
+            raise ValueError(f"Unbekannte Sprache: {v} (verfügbar: {', '.join(i18n.available())})")
+        return code
+
     @field_validator("tv_targets")
     @classmethod
     def _tv_unique(cls, v: list[TvTarget]) -> list[TvTarget]:
@@ -877,6 +900,7 @@ class SettingsPatch(BaseModel):
     nightly_cleanup_days: Optional[int] = None
     tv_targets: Optional[list[dict[str, Any]]] = None
     tv_stream_base_url: Optional[str] = None   # "" → null
+    language: Optional[str] = None
 
 
 class PushTestIn(BaseModel):

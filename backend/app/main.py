@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
-from . import go2rtc, registry, retention, settings_store, state
+from . import go2rtc, i18n, registry, retention, settings_store, state
 from .auth import require_user, ws_user
 from .config import DEFAULT_LABELS, VERSION, config, secret_key_problem, weak_admin_password
 from .db import SessionLocal, init_db
@@ -193,6 +193,7 @@ app = FastAPI(title="VisionGuard", version=VERSION, lifespan=lifespan,
               docs_url="/api/docs" if PUBLIC_DOCS else None,
               openapi_url="/api/openapi.json" if PUBLIC_DOCS else None, redoc_url=None)
 app.add_middleware(media_router.SignedUrlsMiddleware)   # ?signed=1 → signierte Medien-URLs
+app.add_middleware(i18n.LanguageMiddleware)              # Accept-Language → Sprache der Anfrage
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

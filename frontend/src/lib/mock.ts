@@ -184,6 +184,8 @@ let settings: Settings = {
   nightly_mode: "preview", nightly_time: "03:00", nightly_auto_merge_min: 0.55, nightly_auto_merge_margin: 0.08,
   nightly_review_min: 0.4, nightly_review_max_per_day: 5, nightly_curate: true, nightly_thresholds: true,
   nightly_cleanup_days: 3,
+  language: "en",
+  languages_available: [{ code: "en", name: "English" }, { code: "de", name: "Deutsch" }],
   tv_targets: [{ id: "wohnzimmer", name: "Fernseher Wohnzimmer", enabled: true, type: "dlna", description_url: "http://192.168.1.50:9197/dmr" }],
   tv_stream_base_url: "http://192.168.1.10:8090",
   llm_key_configured: { openai_compat: false, anthropic: false },

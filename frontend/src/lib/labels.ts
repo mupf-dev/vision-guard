@@ -1,4 +1,5 @@
 import type { IdentityKind } from "./types";
+import { msgs } from "../i18n";
 
 export type LabelGroup = "person" | "vehicle" | "animal" | "other";
 
@@ -12,10 +13,6 @@ const GROUP: Record<string, LabelGroup> = {
   dog: "animal", cat: "animal", bird: "animal", horse: "animal", sheep: "animal", cow: "animal",
 };
 
-const DE: Record<string, string> = {
-  person: "Person", car: "Auto", truck: "LKW", bicycle: "Fahrrad", motorcycle: "Motorrad", bus: "Bus",
-  dog: "Hund", cat: "Katze", bird: "Vogel", horse: "Pferd", sheep: "Schaf", cow: "Kuh",
-};
 
 export const GROUP_COLOR: Record<LabelGroup, string> = {
   person: "#3b9cff",
@@ -32,10 +29,18 @@ const LABEL_COLOR: Record<string, string> = {
 };
 
 export const labelGroup = (l: string): LabelGroup => GROUP[l] ?? "other";
-export const labelName = (l: string): string => DE[l] ?? l;
+/** Anzeigename einer Objektklasse in der aktuellen Sprache (i18n `common.labels`). */
+export const labelName = (l: string): string => msgs().common.labels[l] ?? l;
 export const labelColor = (l: string): string => LABEL_COLOR[l] ?? GROUP_COLOR[labelGroup(l)];
 
-export const KIND_NAME: Record<IdentityKind, string> = { face: "Person", plate: "Kennzeichen", pet: "Tier", item: "Gegenstand" };
-export const KIND_PLURAL: Record<IdentityKind, string> = { face: "Personen", plate: "Kennzeichen", pet: "Tiere", item: "Gegenstände" };
-
-export const DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+// Sprachabhängig (i18n `common`): lesen bei jedem Zugriff die aktuelle Sprache.
+export const KIND_NAME = new Proxy({} as Record<IdentityKind, string>, {
+  get: (_t, k) => msgs().common.kind[k as IdentityKind],
+});
+export const KIND_PLURAL = new Proxy({} as Record<IdentityKind, string>, {
+  get: (_t, k) => msgs().common.kindPlural[k as IdentityKind],
+});
+/** Wochentage kurz, Montag zuerst (Index 0 = Mo) */
+export const DAYS: readonly string[] = new Proxy(Array.from({ length: 7 }, () => ""), {
+  get: (t, p, r) => (typeof p === "string" && /^\d+$/.test(p) ? msgs().common.daysShort[Number(p)] : Reflect.get(t, p, r)),
+});

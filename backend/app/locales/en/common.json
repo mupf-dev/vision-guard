@@ -1,0 +1,21 @@
+{
+  "language_name": "English",
+  "decimal_sep": ".",
+  "date_format": "%d/%m/%Y",
+  "never": "never",
+  "just_now": "just now",
+  "ago_s": "{n} s ago",
+  "ago_min": "{n} min ago",
+  "ago_h": "{n} h ago",
+  "ago_d": {"one": "1 day ago", "other": "{n} days ago"},
+  "yes": "yes",
+  "no": "no",
+  "unknown": "unknown",
+  "labels": {
+    "person": "Person", "car": "Car", "truck": "Truck", "bicycle": "Bicycle", "motorcycle": "Motorcycle",
+    "bus": "Bus", "dog": "Dog", "cat": "Cat", "bird": "Bird", "horse": "Horse", "sheep": "Sheep", "cow": "Cow"
+  },
+  "kind": {"face": "Person", "plate": "Licence plate", "pet": "Animal", "item": "Item"},
+  "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  "weekdays_short": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+}

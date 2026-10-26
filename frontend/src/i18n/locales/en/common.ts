@@ -1,0 +1,65 @@
+/** Gemeinsame Texte: Knöpfe, Zustände, Objektklassen, Arten, Wochentage, relative Zeiten. */
+const common = {
+  appTagline: "Security ops",
+  loading: "Loading …",
+  checkingLogin: "Checking login …",
+  save: "Save",
+  saving: "Saving …",
+  saved: "Saved",
+  cancel: "Cancel",
+  close: "Close",
+  delete: "Delete",
+  edit: "Edit",
+  add: "Add",
+  remove: "Remove",
+  apply: "Apply",
+  confirm: "Confirm",
+  back: "Back",
+  yes: "Yes",
+  no: "No",
+  skip: "Skip",
+  search: "Search",
+  searchPlaceholder: "Search …",
+  all: "All",
+  none: "None",
+  on: "on",
+  off: "off",
+  active: "active",
+  inactive: "inactive",
+  enabled: "enabled",
+  disabled: "disabled",
+  online: "Online",
+  offline: "Offline",
+  starting: "Starting",
+  unknown: "Unknown",
+  never: "never",
+  dash: "–",
+  error: "Error",
+  errorUnknown: "unknown error",
+  retry: "Retry",
+  refresh: "Refresh",
+  more: "More",
+  details: "Details",
+  seconds: "s",
+  minutes: "min",
+  hours: "h",
+  days: "days",
+  /** Objektklassen (Detektions-Labels) */
+  labels: {
+    person: "Person", car: "Car", truck: "Truck", bicycle: "Bicycle", motorcycle: "Motorcycle", bus: "Bus",
+    dog: "Dog", cat: "Cat", bird: "Bird", horse: "Horse", sheep: "Sheep", cow: "Cow",
+  } as Record<string, string>,
+  /** Identitätsarten */
+  kind: { face: "Person", plate: "Licence plate", pet: "Animal", item: "Item" },
+  kindPlural: { face: "People", plate: "Licence plates", pet: "Animals", item: "Items" },
+  /** Wochentage, Montag zuerst */
+  daysShort: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  /** relative Zeit (fmtAgo) */
+  justNow: "just now",
+  /** Dauer (fmtDuration) */
+  durMin: (m: number, s: number) => `${m} min ${s} s`,
+  durHour: (h: number, m: number) => `${h} h ${m} min`,
+};
+
+export type CommonMessages = typeof common;
+export default common;

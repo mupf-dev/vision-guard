@@ -2233,3 +2233,50 @@ Unter WSL2 (NAT) braucht es dafür eine Windows-Portweiterleitung auf `127.0.0.1
   Regel nicht; Zeitfenster/Sperrzeit über `schedule`/`cooldown_s` der Regel.
 - MCP `show_on_tv` (write): `camera_id?`/`camera_name?`, `tv: str?` (id oder Name; leer = einziger/erster aktiver),
   `duration_s: int = 60` → `TvStatus`.
+
+## Nachträge: Sprachen (i18n)
+
+Verbindlich wie der Rest. **Englisch ist Standard und Rückfall**, Deutsch ist vollständig übersetzt; weitere Sprachen
+kommen über Sprachdateien dazu, ohne Code zu ändern. Pfade der Oberfläche (`/ereignisse` …), API-Felder, MQTT-Topics
+und Schlüssel bleiben unverändert (z. B. `name_de` bleibt als Feld bestehen).
+
+### I18N.A Frontend (`frontend/src/i18n/`)
+
+- `locales/<code>/<namensbereich>.ts` je Sprache, `locales/<code>/index.ts` fasst die Namensbereiche zusammen,
+  `locales/index.ts` (`LOCALES`) listet die Sprachen `{code, name, intl, messages}` – Englisch zuerst.
+- Zugriff typsicher: `const m = useMsgs(); m.<namensbereich>.<schlüssel>`; Texte mit Parametern sind Funktionen
+  (`m.events.count(n)`); außerhalb von Komponenten `msgs()`. `de` muss vollständig sein (`satisfies` gegen `en`), neue
+  Sprachen dürfen unvollständig sein (Rückfall Englisch).
+- Sprache: `localStorage["vg.lang"]` → Browsersprache → `en`; Wahl in der Kopfzeile (Globus). Ein Wechsel baut die App
+  neu auf. Datum/Zahlen über `Intl` mit `intlLocale()` (`en` → `en-GB`, 24-h-Uhr). Jede API-Anfrage schickt
+  `Accept-Language: <code>`.
+- Namensbereiche gehören je einem Bereich (eine Datei je Sprache); gemeinsame Texte in `common`, Kopfzeile in `nav`.
+
+### I18N.B Backend (`backend/app/i18n.py`, `backend/app/locales/<code>/<namensbereich>.json`)
+
+- `i18n.t("<ns>.<key>", lang=None, **params)`; Platzhalter `{name}`, Mehrzahl `{"one": …, "other": …}` über `n`.
+  Rückfall Englisch, dann der Schlüssel (mit Log-Warnung). Helfer `label()`, `fmt_num()`, `fmt_time()`, `fmt_date()`,
+  `fmt_ago()`, `use_lang()`.
+- **Sprache:** in HTTP-Anfragen aus `Accept-Language` (`LanguageMiddleware`, auch in Thread-Pool-Endpunkten);
+  sonst die **Systemsprache** = neues Setting `language` (`"en"` Standard; nur verfügbare Codes, sonst 422).
+  `GET /settings` liefert zusätzlich read-only `languages_available: [{code, name}]`.
+- Systemsprache gilt für alles ohne Anfrage: Hinweise/Push, Tagesbericht, Rückfragen, MQTT-Texte, WebSocket-Texte
+  (z. B. `status_text`, `state_text` in Broadcasts) und MCP-Antworten. REST-Antworten berechnen Texte in der Sprache
+  der Anfrage (Fehlermeldungen `detail`, `status_text`, `answer`, `state_text`, `display_name` unbenannter
+  Identitäten, Lagebeziehungen, Gesundheits-Texte). Bereits gespeicherte Texte (alte Hinweise, Berichte, Fragen)
+  bleiben in ihrer Sprache.
+- Neue Sprache im Backend: Ordner `locales/<code>/` mit denselben JSON-Dateien; wird automatisch erkannt
+  (`common.language_name`).
+
+### I18N.C Gegenstands-Vokabular
+
+- Vokabular-Eintrag zusätzlich optional `names: {"<code>": "<Name>"}`. Anzeigename in Sprache L =
+  `names[L]` → (L = `de`: `name_de`) → `names.en` → erster Prompt. Das Default-Vokabular bekommt `names.en`.
+- `InventoryItem`, `GET /inventory/labels` und Rückfragen liefern zusätzlich `name` (Anzeigename in der Sprache der
+  Anfrage); `name_de` bleibt unverändert. Die Suche (`/inventory/search`) findet Namen und Synonyme aller Sprachen
+  und versteht englische Füllwörter („where is my …“).
+
+### I18N.D MCP
+
+- Tool-Beschreibungen englisch; Antworttexte in der Systemsprache (`GET /settings` → `language`, 60 s gecacht);
+  eigene Sprachdateien `mcp/locales/<code>.json`.
