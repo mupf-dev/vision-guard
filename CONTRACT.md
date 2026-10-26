@@ -2190,8 +2190,8 @@ vorherigen Quelle zurück (Samsung). Kein Bild-im-Bild.
   "tv_targets": [ { "id": "wohnzimmer",          // ^[a-z0-9_-]{1,40}$, eindeutig; max. 10
       "name": "Fernseher Wohnzimmer", "enabled": true,
       "type": "dlna",
-      "description_url": "http://10.10.100.245:9197/dmr" } ],   // UPnP-Gerätebeschreibung; nur IP → Samsung-Standard :9197/dmr
-  "tv_stream_base_url": null }   // Adresse, unter der Fernseher VisionGuard erreichen (z. B. "http://10.10.100.158:8090",
+      "description_url": "http://192.168.1.50:9197/dmr" } ],   // UPnP-Gerätebeschreibung; nur IP → Samsung-Standard :9197/dmr
+  "tv_stream_base_url": null }   // Adresse, unter der Fernseher VisionGuard erreichen (z. B. "http://192.168.1.10:8090",
                                  // ohne / am Ende); PUT "" → null. Ohne Wert zeigt keine Aktion etwas an.
 ```
 Unter WSL2 (NAT) braucht es dafür eine Windows-Portweiterleitung auf `127.0.0.1:8080`, die nur der Fernseher nutzen darf

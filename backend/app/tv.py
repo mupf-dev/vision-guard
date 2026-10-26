@@ -162,7 +162,7 @@ def transport_state(description_url: str) -> Optional[str]:
 # ------------------------------------------------------------------ Fernseher aus den Settings, Anzeigen/Stoppen
 
 def normalize_description_url(v: str) -> str:
-    """'10.10.100.245' → 'http://10.10.100.245:9197/dmr' (Samsung-Standard); sonst http(s)-URL unverändert."""
+    """'192.168.1.50' → 'http://192.168.1.50:9197/dmr' (Samsung-Standard); sonst http(s)-URL unverändert."""
     v = (v or "").strip()
     if re.fullmatch(r"[A-Za-z0-9.-]+(:\d{1,5})?", v):
         host, _, port = v.partition(":")
