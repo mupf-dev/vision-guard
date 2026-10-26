@@ -1,47 +1,50 @@
 import { CircleHelp } from "lucide-react";
 import type { Settings } from "../../lib/types";
 import { Range, Switch } from "../../components/ui";
+import { fmtNum, useMsgs } from "../../i18n";
 
 /** Einstellungen → Rückfragen & Exemplare (W2, Gerüst K2 – Ausbau D2/B4). */
 export function ReviewSettingsCard({ f, patch }: { f: Settings; patch: (p: Partial<Settings>) => void }) {
+  const all = useMsgs();
+  const m = all.settings.review;
   return (
     <div className="card">
-      <div className="card-head"><CircleHelp size={18} color="var(--accent)" /><h3>Rückfragen &amp; eigene Gegenstände</h3></div>
+      <div className="card-head"><CircleHelp size={18} color="var(--accent)" /><h3>{m.title}</h3></div>
       <div className="card-body form-grid">
-        <div className="field"><label>Rückfragen</label>
+        <div className="field"><label>{m.enabled}</label>
           <div style={{ height: 38, display: "flex", alignItems: "center" }}>
-            <Switch checked={f.review_enabled} onChange={(v) => patch({ review_enabled: v })} label={f.review_enabled ? "bei unsicheren Erkennungen nachfragen" : "aus"} />
+            <Switch checked={f.review_enabled} onChange={(v) => patch({ review_enabled: v })} label={f.review_enabled ? m.enabledOn : all.common.off} />
           </div>
         </div>
-        <div className="field"><label>Höchstens neue Fragen pro Tag</label>
+        <div className="field"><label>{m.maxPerDay}</label>
           <Range value={f.review_max_per_day} min={0} max={50} step={1} format={(v) => `${v}`} onChange={(v) => patch({ review_max_per_day: v })} />
         </div>
-        <div className="field"><label>Offene Fragen verfallen nach</label>
+        <div className="field"><label>{m.expire}</label>
           <Range value={f.review_expire_h} min={1} max={168} step={1} format={(v) => `${v} h`} onChange={(v) => patch({ review_expire_h: v })} />
-          <span className="hint">So lange gelten auch die Antwort-Links in Push-Nachrichten.</span>
+          <span className="hint">{m.expireHint}</span>
         </div>
-        <div className="field"><label>Höchstens offene Fragen</label>
+        <div className="field"><label>{m.maxOpen}</label>
           <Range value={f.review_max_open} min={1} max={100} step={1} format={(v) => `${v}`} onChange={(v) => patch({ review_max_open: v })} />
         </div>
-        <div className="field"><label>Unsicherheits-Band unter der Schwelle</label>
+        <div className="field"><label>{m.band}</label>
           <Range value={f.review_band} min={0.02} max={0.3} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => patch({ review_band: v })} />
-          <span className="hint">Gegenstände mit einer Konfidenz knapp unter (bzw. knapp über) der Schwelle werden nachgefragt.</span>
+          <span className="hint">{m.bandHint}</span>
         </div>
-        <div className="field"><label>Schwellen nachführen</label>
+        <div className="field"><label>{m.autoTune}</label>
           <div style={{ height: 38, display: "flex", alignItems: "center" }}>
-            <Switch checked={f.review_auto_tune} onChange={(v) => patch({ review_auto_tune: v })} label={f.review_auto_tune ? "aus Antworten lernen (je Kamera und Gegenstand)" : "aus"} />
+            <Switch checked={f.review_auto_tune} onChange={(v) => patch({ review_auto_tune: v })} label={f.review_auto_tune ? m.autoTuneOn : all.common.off} />
           </div>
-          <span className="hint">Ab 3 Antworten, höchstens 0,05 je Antwort; Werte in Administration → Kameras → Gegenstände.</span>
+          <span className="hint">{m.autoTuneHint(fmtNum(0.05, 2))}</span>
         </div>
-        <div className="field"><label>Exemplar-Schwelle (Kosinus-Ähnlichkeit)</label>
+        <div className="field"><label>{m.itemThreshold}</label>
           <Range value={f.item_match_threshold} min={0.3} max={0.9} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => patch({ item_match_threshold: v })} />
-          <span className="hint">Eigene Gegenstände: darunter (bis 0,15 tiefer) wird nachgefragt statt zugeordnet.</span>
+          <span className="hint">{m.itemThresholdHint(fmtNum(0.15, 2))}</span>
         </div>
-        <div className="field"><label>Mindestgröße für eigene Gegenstände</label>
+        <div className="field"><label>{m.itemMinPx}</label>
           <Range value={f.item_min_px} min={0} max={300} step={10} format={(v) => `${v} px`} onChange={(v) => patch({ item_min_px: v })} />
-          <span className="hint">Kleinere Gegenstände im Kamerabild werden nie automatisch zugeordnet (Messung: erst ab ≈ 90 px zuverlässig).</span>
+          <span className="hint">{m.itemMinPxHint}</span>
         </div>
-        <div className="field span-2"><span className="hint">Push für Rückfragen (mit Ja/Nein-Knöpfen bei ntfy): Einstellungen → Benachrichtigungen, Quelle „Rückfragen“. Die Knöpfe brauchen eine öffentliche Adresse (public_base_url).</span></div>
+        <div className="field span-2"><span className="hint">{m.pushHint}</span></div>
       </div>
     </div>
   );

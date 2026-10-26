@@ -16,6 +16,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
+from . import i18n
 from .config import config
 from .db import SessionLocal
 from .models import Rule
@@ -157,23 +158,23 @@ def validate_rule_parts(trigger: str, options: dict[str, Any], conditions: list[
     """Prüft trigger/trigger_options/conditions gegen die Registry (für schemas.RuleIn). ValueError → 422."""
     spec = TRIGGERS.get(trigger)
     if spec is None:
-        raise ValueError(f"Unbekannter Trigger: {trigger} (erlaubt: {', '.join(TRIGGERS)})")
+        raise ValueError(i18n.t("errors.rule_unknown_trigger", trigger=trigger, allowed=", ".join(TRIGGERS)))
     try:
         opts = spec.options_model(**(options or {})).model_dump(mode="json")
     except ValidationError as e:
-        raise ValueError(f"trigger_options für {trigger}: {_first_error(e)}") from None
+        raise ValueError(i18n.t("errors.rule_trigger_options", trigger=trigger, error=_first_error(e))) from None
     out: list[dict[str, Any]] = []
     for i, c in enumerate(conditions or []):
         typ = (c or {}).get("type") if isinstance(c, dict) else None
         cs = CONDITIONS.get(str(typ))
         if cs is None:
-            raise ValueError(f"Bedingung {i + 1}: unbekannter Typ {typ!r} (erlaubt: {', '.join(CONDITIONS)})")
+            raise ValueError(i18n.t("errors.rule_condition_unknown", index=i + 1, type=repr(typ), allowed=", ".join(CONDITIONS)))
         if cs.track_only and not spec.track_based:
-            raise ValueError(f"Bedingung {i + 1} ({typ}) geht nur mit Track-Triggern, nicht mit {trigger}")
+            raise ValueError(i18n.t("errors.rule_condition_track_only", index=i + 1, type=typ, trigger=trigger))
         try:
             out.append(cs.model(**c).model_dump(mode="json"))
         except ValidationError as e:
-            raise ValueError(f"Bedingung {i + 1} ({typ}): {_first_error(e)}") from None
+            raise ValueError(i18n.t("errors.rule_condition_invalid", index=i + 1, type=typ, error=_first_error(e))) from None
     return opts, out
 
 
@@ -194,13 +195,13 @@ def evaluate_conditions(rule: dict[str, Any], ctx: CondContext, *, all_details: 
         spec = CONDITIONS.get(typ)
         if spec is None or spec.evaluate is None:
             log.warning("Regel '%s': Bedingung %s ohne Auswertung – gilt als nicht erfüllt", rule.get("name"), typ)
-            r = CondResult(ok=False, reason=f"{typ}: nicht verfügbar")
+            r = CondResult(ok=False, reason=i18n.t("rules.cond.unavailable", type=typ))
         else:
             try:
                 r = spec.evaluate(c, ctx)
             except Exception:
                 log.exception("Regel '%s': Bedingung %s fehlgeschlagen", rule.get("name"), typ)
-                r = CondResult(ok=False, reason=f"{typ}: Fehler bei der Auswertung")
+                r = CondResult(ok=False, reason=i18n.t("rules.cond.failed", type=typ))
         total.details.append({"type": typ, "ok": bool(r.ok), "reason": r.reason})
         if not r.ok:
             if first_fail is None:
@@ -279,8 +280,11 @@ SENSOR_STATE_DE = {"on": "an", "off": "aus", "ok": "ok", "low": "knapp", "out": 
 
 
 def sensor_state_de(state: Optional[str]) -> str:
-    """W3: Platzhalter {sensor_state} (deutsch)."""
-    return SENSOR_STATE_DE.get(state or "unknown", state or "")
+    """W3: Platzhalter {sensor_state} – in der aktuellen Sprache (Anfrage bzw. Systemsprache)."""
+    st = state or "unknown"
+    if st not in SENSOR_STATE_DE:
+        return state or ""
+    return i18n.t(f"rules.sensor_state.{st}")
 
 
 # W3 (A3): virtueller Sensor – Regel ohne Event (events.processor.sensor_changed); Bedingung in rule_conditions.py

@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
+from .. import i18n
 from ..auth import (bearer_key, check_credentials, client_ip, create_token, current_principal, current_user,
                     login_failed, login_is_local, login_retry_after, login_succeeded, require_user)
 from ..config import config, weak_admin_password
@@ -24,16 +25,16 @@ def login(body: LoginIn, request: Request, response: Response):
     wait = login_retry_after(ip)
     if wait:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
-                            f"Zu viele Fehlversuche – bitte in {wait} s erneut versuchen",
+                            i18n.t("errors.login_too_many_attempts", wait=wait),
                             headers={"Retry-After": str(wait)})
     if not check_credentials(body.username, body.password):
         login_failed(ip)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Benutzername oder Passwort falsch")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, i18n.t("errors.login_invalid"))
     if weak_admin_password() and not login_is_local(request):
         # Standard-/Schwachpasswort: nur im eigenen Netz; von außen nur API-Keys
         login_failed(ip)
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "Anmeldung von außen gesperrt: Das Admin-Passwort ist zu schwach (ADMIN_PASSWORD ändern)")
+                            i18n.t("errors.login_weak_password_external"))
     login_succeeded(ip)
     secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(
@@ -47,7 +48,7 @@ def login(body: LoginIn, request: Request, response: Response):
 def logout(request: Request, response: Response):
     # Nur mit Session-Cookie: ein API-Key kann sich nicht „abmelden“
     if not current_user(request) and bearer_key(request.headers):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Nur mit Anmeldung im Browser")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, i18n.t("errors.browser_login_only"))
     response.delete_cookie(config.cookie_name, path="/")
     response.status_code = 204
     return response

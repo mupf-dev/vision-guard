@@ -1,0 +1,371 @@
+{
+  "common": {
+    "language_name": "Deutsch",
+    "decimal_sep": ",",
+    "date_format": "%d.%m.%Y",
+    "day_month_format": "%d.%m.",
+    "weekdays_short": [
+      "Mo",
+      "Di",
+      "Mi",
+      "Do",
+      "Fr",
+      "Sa",
+      "So"
+    ],
+    "auth_error": "API-Key ungültig oder ohne Berechtigung.",
+    "write_error": "API-Key ohne Schreibrecht.",
+    "key_missing": "API-Key fehlt (Authorization: Bearer vgt_…)",
+    "backend_unreachable": "VisionGuard-Backend ist nicht erreichbar.",
+    "backend_error": "Backend-Fehler: {detail}",
+    "not_found": "Nicht gefunden.",
+    "none": "keine",
+    "camera": "Kamera {name}",
+    "room": "Raum {name}",
+    "where": "Kamera {camera}",
+    "where_room": "Kamera {camera} (Raum {room})",
+    "zone": "Zone {zones}",
+    "since": "seit {time}",
+    "image": "Bild: {url}",
+    "quoted": "„{text}“",
+    "newest": ", die neuesten {n}:",
+    "unknown_time": "zu unbekannter Zeit",
+    "just_now": "gerade eben",
+    "ago_min": "vor {n} min",
+    "ago_h": "vor {n} h",
+    "ago_d": {
+      "one": "vor {n} Tag",
+      "other": "vor {n} Tagen"
+    },
+    "camera_unknown_id": "Kamera {id} ist unbekannt.",
+    "camera_required": "Bitte camera_id oder camera_name angeben.",
+    "camera_unknown_name": "Kamera „{name}“ ist unbekannt. Vorhanden: {names}.",
+    "camera_ambiguous": "Kamera „{name}“ ist nicht eindeutig. Vorhanden: {names}.",
+    "labels": {
+      "person": "Person",
+      "dog": "Hund",
+      "cat": "Katze"
+    }
+  },
+  "inventory": {
+    "item": "Gegenstand",
+    "visible_in": "{name}: aktuell sichtbar in {place}",
+    "last_seen_in": "{name}: zuletzt gesehen {ago} ({time}) in {place}",
+    "stale_suffix": " – Kamera liefert derzeit keine Daten",
+    "missing_suffix": " – derzeit nicht sichtbar",
+    "query_required": "Bitte einen Suchbegriff angeben, z. B. „Fernbedienung“.",
+    "not_known": "Kein Gegenstand „{query}“ bekannt.",
+    "hits": "Treffer:",
+    "none_visible": "Derzeit sind keine Gegenstände sichtbar{scope}.",
+    "n_visible": {
+      "one": "{n} Gegenstand sichtbar{scope}:",
+      "other": "{n} Gegenstände sichtbar{scope}:"
+    },
+    "unknown_id": "Gegenstand {id} ist unbekannt.",
+    "history_head": {
+      "one": "Verlauf ({n} Eintrag, neueste zuerst):",
+      "other": "Verlauf ({n} Einträge, neueste zuerst):"
+    },
+    "no_history": "Kein Verlauf für {name} gespeichert.",
+    "state": {
+      "present": "sichtbar",
+      "missing": "nicht sichtbar",
+      "stale": "keine Daten"
+    }
+  },
+  "cameras": {
+    "none": "Keine Kameras eingerichtet.",
+    "n_cameras": {
+      "one": "{n} Kamera:",
+      "other": "{n} Kameras:"
+    },
+    "line": "- {name} (id {id}, Raum {room}): {state}",
+    "inventory_on": ", Gegenstandserkennung an",
+    "unknown": "Kamera {name} ist unbekannt.",
+    "snapshot": "{where}, Aufnahme {time}",
+    "snapshot_unavailable": "Kamerabild nicht verfügbar (Kamera offline?).",
+    "state": {
+      "online": "online",
+      "offline": "offline",
+      "starting": "starting",
+      "disabled": "disabled",
+      "unknown": "unbekannt"
+    }
+  },
+  "people": {
+    "unknown": "Unbekannt ({label})",
+    "last_seen": "zuletzt gesehen {ago} ({time}), {place}",
+    "recognized_by": " – erkannt per {source}",
+    "nobody": "Derzeit ist niemand zu sehen, und in den letzten {minutes} min wurde niemand erfasst.",
+    "n_visible": "{n} gerade sichtbar:",
+    "nobody_now": "Gerade ist niemand zu sehen.",
+    "last_seen_head": "Zuletzt gesehen (letzte {minutes} min):",
+    "source": {
+      "face": "Gesicht",
+      "pet": "Tiererkennung",
+      "reid": "Wiedererkennung über Kameras"
+    }
+  },
+  "notifications": {
+    "bad_time": "Unbekannte Zeitangabe „{value}“ – erlaubt: ISO-Zeit, 3h, 90m, 2d, today, morning, yesterday.",
+    "bad_source": "Unbekannte Quelle {bad} – erlaubt: {allowed}.",
+    "none": "Keine Hinweise{scope}.",
+    "n_items": {
+      "one": "{n} Hinweis{scope}",
+      "other": "{n} Hinweise{scope}"
+    },
+    "level": {
+      "alarm": "Alarm",
+      "warning": "Warnung",
+      "info": "Hinweis"
+    },
+    "source": {
+      "rule": "Regel",
+      "health": "Kamera-Zustand",
+      "pet": "Tiere",
+      "review": "Rückfrage",
+      "report": "Bericht",
+      "sensor": "Sensor"
+    }
+  },
+  "changes": {
+    "no_data": "Keine Angaben.",
+    "truncated": "(nur die ersten {shown} von {total} Änderungen; limit erhöhen für mehr)",
+    "type": {
+      "appeared": "neu",
+      "disappeared": "weg",
+      "moved": "verschoben",
+      "uncertain": "unklar",
+      "transient": "zwischendurch"
+    }
+  },
+  "health": {
+    "n_problems": {
+      "one": "{n} Kamera hat ein Problem.",
+      "other": "{n} Kameras haben ein Problem."
+    },
+    "all_ok": "Alle geprüften Kamerabilder sind in Ordnung.",
+    "single_head": "Kamerazustand:",
+    "state": {
+      "ok": "in Ordnung",
+      "warn": "Problem",
+      "unknown": "Zustand unbekannt (kein aktuelles Prüfbild)",
+      "off": "Prüfung abgeschaltet",
+      "disabled": "Kamera deaktiviert"
+    }
+  },
+  "alerts": {
+    "object": "Objekt",
+    "sentence": "seit {time} ({ago}) an Kamera {camera} – Regel „{rule}“",
+    "n_repeats": {
+      "one": "{n} Wiederholung",
+      "other": "{n} Wiederholungen"
+    },
+    "acknowledged": "quittiert {time}",
+    "ended_unacknowledged": "beendet (nicht quittiert)",
+    "not_acknowledged": "NICHT quittiert",
+    "none_open": "Keine offenen Notfälle.",
+    "none_stored": "Keine Notfälle gespeichert.",
+    "n_open": {
+      "one": "{n} offener Notfall",
+      "other": "{n} offene Notfälle"
+    },
+    "n_alerts": {
+      "one": "{n} Notfall",
+      "other": "{n} Notfälle"
+    },
+    "bad_event_id": "Ungültige event_id.",
+    "unknown_event": "Ereignis {id} ist unbekannt.",
+    "acknowledged_at": "Quittiert um {time}: {text}",
+    "posture": {
+      "lying": "liegt",
+      "sitting": "sitzt",
+      "standing": "steht"
+    }
+  },
+  "review": {
+    "none": "Keine offenen Rückfragen.",
+    "n_open": {
+      "one": "{n} offene Rückfrage (heute {asked}/{max} gefragt):",
+      "other": "{n} offene Rückfragen (heute {asked}/{max} gefragt):"
+    },
+    "bad_answer": "Antwort muss yes, no oder skip sein.",
+    "unknown": "Rückfrage {id} ist unbekannt.",
+    "saved": "Gespeichert: „{question}“ – {answer}.",
+    "not_open": "Rückfrage {id} ist nicht mehr offen (schon beantwortet oder abgelaufen).",
+    "kind": {
+      "inventory_label": "Gegenstand",
+      "inventory_identity": "eigener Gegenstand",
+      "identity_match": "Person/Tier"
+    },
+    "answer": {
+      "yes": "Ja",
+      "no": "Nein",
+      "skip": "Überspringen"
+    }
+  },
+  "pets": {
+    "animal": "Tier",
+    "normal_range": "(normal {lo}–{hi})",
+    "normal_value": "(normal {value})",
+    "last": "zuletzt {time}",
+    "unknown": "Kein Tier „{pet}“ im Tagebuch. Bekannt: {known}.",
+    "empty": "Noch keine Besuche im Haustier-Tagebuch. Zonen mit Zweck Napf/Wasser/Klo anlegen.",
+    "no_visits": "keine Besuche",
+    "line_today": "- {name} ({kind}) heute: {body}",
+    "line_days": "- {name} ({kind}): {body}",
+    "purpose_days": "{purpose} {total}× in {days} Tagen (heute {today}×)",
+    "last_visit": "Letzter Besuch: {name} {purpose} ({zone}, {ago}).",
+    "head": "Haustier-Tagebuch:",
+    "purpose": {
+      "food": "Napf",
+      "water": "Wasser",
+      "litter": "Klo"
+    },
+    "status": {
+      "low": "weniger als normal",
+      "high": "mehr als normal",
+      "gap": "ungewöhnlich lange Pause",
+      "ok": "normal",
+      "unknown": "noch kein Normalwert (mind. 7 Tage nötig)"
+    }
+  },
+  "reports": {
+    "bad_date": "Unbekanntes Datum „{value}“ (erlaubt: YYYY-MM-DD, today, yesterday, heute, gestern)",
+    "not_sent": "nicht versendet",
+    "channel_ok": "{name} ok",
+    "channel_failed": "{name} fehlgeschlagen ({error})",
+    "future": "Für zukünftige Tage gibt es keinen Bericht.",
+    "not_found": "Bericht nicht gefunden.",
+    "stored_note": "(Tagesbericht vom {time}; Text: {generator}; Versand: {delivery})",
+    "preview_note": "(Vorschau – für diesen Tag ist kein Tagesbericht gespeichert; Text: {generator})",
+    "channel": {
+      "mqtt": "MQTT",
+      "push": "Push",
+      "webhook": "Webhook",
+      "mail": "Mail"
+    }
+  },
+  "ask": {
+    "please_wait": " – bitte etwas warten",
+    "question_required": "Bitte eine Frage angeben.",
+    "question_too_long": "Die Frage ist zu lang (max. 300 Zeichen).",
+    "bad_region": "region muss [x1, y1, x2, y2] mit Werten 0..1 sein (x2 > x1, y2 > y1).",
+    "engine_cloud": "Cloud",
+    "engine_local": "lokal",
+    "answer": "{where}, Frage „{question}“: {answer}",
+    "no_answer": "(keine Antwort)",
+    "yes_no": "[Ja/Nein: {value}]",
+    "yn": {
+      "yes": "ja",
+      "no": "nein",
+      "unknown": "unklar"
+    }
+  },
+  "sensors": {
+    "pieces": "({n} Stück)",
+    "supply_suffix": ", Vorrat",
+    "none": "Keine virtuellen Sensoren gefunden.",
+    "n_sensors": {
+      "one": "{n} Sensor:",
+      "other": "{n} Sensoren:"
+    },
+    "id_required": "Bitte sensor_id oder name angeben.",
+    "not_found_name": "Kein Sensor „{name}“ gefunden.",
+    "ambiguous": "Mehrere Sensoren passen: {names}",
+    "not_found_id": "Sensor {id} nicht gefunden.",
+    "head": "Sensor {name} ({kind}, {place}): {state}",
+    "last_checked": "zuletzt geprüft {ago}",
+    "last_answer": "Letzte Antwort des Bildmodells: „{answer}“",
+    "history": "Verlauf (neueste zuerst): {changes}",
+    "shopping_empty": "Die Einkaufsliste ist leer.",
+    "shopping_head": {
+      "one": "Einkaufsliste – {n} offener Eintrag:",
+      "other": "Einkaufsliste – {n} offene Einträge:"
+    },
+    "done_prefix": "[erledigt] ",
+    "item_required": "Bitte einen Artikel angeben.",
+    "item_too_long": "Name höchstens 100, Notiz höchstens 300 Zeichen.",
+    "added": "„{name}“ steht jetzt auf der Einkaufsliste.",
+    "already_listed": "„{name}“ stand schon auf der Einkaufsliste.",
+    "state": {
+      "on": "an",
+      "off": "aus",
+      "ok": "ok",
+      "low": "knapp",
+      "out": "leer",
+      "unknown": "unklar"
+    },
+    "kind": {
+      "brightness": "Helligkeit",
+      "blink": "Blinken",
+      "reference": "Referenzbilder",
+      "inventory_count": "Gegenstände zählen",
+      "fill": "Füllstand",
+      "vlm": "Bildmodell"
+    },
+    "shopping_source": {
+      "auto": "automatisch",
+      "manual": "von Hand",
+      "mcp": "per KI-Assistent"
+    }
+  },
+  "history": {
+    "today": "heute",
+    "on_day": "am {weekday} {date}",
+    "until": "bis {time}",
+    "place_room": "Raum {room} (Kamera {camera})",
+    "query_required": "Bitte einen Suchtext angeben.",
+    "nothing": "Zu „{query}“ nichts im Bildgedächtnis gefunden (Zeitmaschine aktiv? Zeitraum zu eng?).",
+    "head": {
+      "one": "Zeitmaschine – „{query}“ ({n} Zeitraum, beste zuerst):",
+      "other": "Zeitmaschine – „{query}“ ({n} Zeiträume, beste zuerst):"
+    },
+    "line": "{span} in {place}, Übereinstimmung {score} %",
+    "note": "Hinweis: Übereinstimmung ist eine Bild-Text-Ähnlichkeit, keine sichere Erkennung."
+  },
+  "ptz": {
+    "off": "{name}: PTZ aus",
+    "home": "Grundposition",
+    "position": "Position „{name}“",
+    "free": "freie Ausrichtung",
+    "moving": " (fährt gerade)",
+    "none": "Keine schwenkbare Kamera (PTZ) eingerichtet.",
+    "positions": "Positionen: {names}",
+    "not_ptz": "Kamera {name} ist nicht schwenkbar (PTZ aus).",
+    "unknown_preset": "Position „{preset}“ gibt es an {camera} nicht. Vorhanden: {names}.",
+    "mode": {
+      "idle": "in Ruhe",
+      "manual": "Handsteuerung",
+      "rule": "durch Regel ausgerichtet",
+      "follow": "verfolgt ein Ziel",
+      "patrol": "Patrouille",
+      "error": "nicht verbunden"
+    }
+  },
+  "nightly": {
+    "global": "global",
+    "skipped": "übersprungen ({reason})",
+    "none": "Es gibt noch keinen Nachtlauf-Bericht.",
+    "not_found": "Nachtlauf-Bericht {id} nicht gefunden.",
+    "preview": "Probelauf",
+    "run": "Nachtlauf",
+    "head": "{kind} {id} vom {time}: {text}",
+    "more": {
+      "one": "… und {n} weitere Aktion",
+      "other": "… und {n} weitere Aktionen"
+    },
+    "type": {
+      "merge": "Zusammenführen",
+      "review": "Rückfrage",
+      "curate": "Galerie kuratieren",
+      "threshold": "Schwelle je Person",
+      "cleanup": "Aufräumen"
+    }
+  },
+  "tv": {
+    "none": "Kein aktiver Fernseher eingerichtet (Einstellungen → Fernseher).",
+    "unknown": "Fernseher „{tv}“ unbekannt. Vorhanden: {names}.",
+    "showing": "{tv} zeigt jetzt {camera} für {seconds} s."
+  }
+}

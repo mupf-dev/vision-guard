@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
-from .. import ptz
+from .. import i18n, ptz
 from ..auth import require_user
 from ..db import get_db
 from ..models import Camera
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/cameras/{cam_id}/ptz", tags=["ptz"], dependencie
 def _camera(db: Session, cam_id: int) -> Camera:
     c = db.get(Camera, cam_id)
     if c is None:
-        raise HTTPException(404, "Kamera nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.camera_not_found"))
     return c
 
 
@@ -28,7 +28,7 @@ def _controller(db: Session, cam_id: int) -> ptz.Controller:
     c = _camera(db, cam_id)
     ctl = ptz.manager.get(cam_id)
     if not c.ptz_enabled or ctl is None:
-        raise HTTPException(409, "PTZ ist für diese Kamera nicht eingeschaltet")
+        raise HTTPException(409, i18n.t("errors.ptz_not_enabled"))
     return ctl
 
 
@@ -102,7 +102,7 @@ async def ptz_save_preset(cam_id: int, body: PtzPresetIn, db: Session = Depends(
 async def ptz_set_home(cam_id: int, body: PtzPresetIn | None = None, db: Session = Depends(get_db)):
     """Aktuelle Ausrichtung als Grundposition speichern (PTZ.C) → {token, name, state}."""
     ctl = _controller(db, cam_id)
-    res = await _do(ctl.set_home_here, (body.name.strip() if body else "") or "Grundposition")
+    res = await _do(ctl.set_home_here, (body.name.strip() if body else "") or i18n.t("ptz.home_name"))
     c = _camera(db, cam_id)
     c.ptz = {**dict(c.ptz or {}), "home_preset": res["token"]}
     db.commit()
@@ -115,9 +115,9 @@ async def ptz_delete_preset(cam_id: int, token: str, db: Session = Depends(get_d
     ctl = _controller(db, cam_id)
     cfg = ptz.merged_config(_camera(db, cam_id).ptz)
     if token == cfg.get("home_preset"):
-        raise HTTPException(409, "Das ist die Grundposition – erst eine andere Grundposition wählen")
+        raise HTTPException(409, i18n.t("errors.ptz_preset_is_home"))
     if any(str(s.get("preset")) == token for s in cfg["patrol"].get("steps") or []):
-        raise HTTPException(409, "Position wird in der Patrouille benutzt – erst dort entfernen")
+        raise HTTPException(409, i18n.t("errors.ptz_preset_in_patrol"))
     await _do(ctl.remove_preset, token)
     return Response(status_code=204)
 

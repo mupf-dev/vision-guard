@@ -29,9 +29,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import inventory_names as names
-from . import settings_store
+from . import i18n, settings_store
 from .config import config
-from .inventory import _bbox, _center_dist, _media, camera_info, compute_relation, item_json, local_time_text
+from .inventory import (_bbox, _center_dist, _media, camera_info, compute_relation, item_json, local_time_text,
+                        relation_text_of, zones_text)
 from .models import Camera, InventoryHistory, InventoryItem
 from .schemas import iso
 
@@ -57,6 +58,7 @@ _KEYWORDS = {
     "now": "now", "jetzt": "now",
     "today": "today", "heute": "today",
     "morning": "morning", "heute morgen": "morning", "heute früh": "morning", "seit heute morgen": "morning",
+    "this morning": "morning", "since this morning": "morning",
     "yesterday": "yesterday", "gestern": "yesterday",
 }
 MORNING = dtime(6, 0)
@@ -71,7 +73,7 @@ def parse_when(value: Optional[str], now: Optional[datetime] = None) -> datetime
     now = now or datetime.now(timezone.utc)
     raw = (value or "").strip()
     if not raw:
-        raise WhenError("Zeitangabe fehlt")
+        raise WhenError(i18n.t("inventory.err_when_missing"))
     v = raw.lower()
     tz = config.tz
     kw = _KEYWORDS.get(v)
@@ -94,8 +96,7 @@ def parse_when(value: Optional[str], now: Optional[datetime] = None) -> datetime
     try:
         dt = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
     except ValueError:
-        raise WhenError(f"Unbekannte Zeitangabe „{raw}“ (erlaubt: ISO-8601, 3h, 90m, 2d, today, morning, "
-                        "yesterday)") from None
+        raise WhenError(i18n.t("inventory.err_when_unknown", value=raw)) from None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=tz)
     return dt.astimezone(timezone.utc)
@@ -234,31 +235,27 @@ def classify(points: list[tuple[datetime, str]], since: datetime, until: datetim
 # ---------------------------------------------------------------- Texte
 
 
-def _dative(label: str, name: str) -> str:
-    return names._DATIVE.get(label) or f"„{name}“"
-
-
-def _from_to(rel: Optional[dict], prefix: str) -> Optional[str]:
-    """„vom Tisch“ / „zum Sofa“ für `on`-Beziehungen."""
+def _from_to(rel: Optional[dict], case: str) -> Optional[str]:
+    """„vom Tisch“ / „zum Sofa“ (case `from`/`to`) für `on`-Beziehungen."""
     if not rel or rel.get("type") != "on":
         return None
-    d = _dative(rel.get("label") or "", rel.get("name_de") or "")
-    if d.startswith("dem "):
-        return ("vom " if prefix == "von" else "zum ") + d[4:]
-    return f"{prefix} {d}"
+    label = rel.get("label") or ""
+    return names.surface_phrase(label, names.vocab_name(label) if label else rel.get("name_de"), case)
 
 
 def _plain_rel(rel: Optional[dict]) -> Optional[str]:
-    t = (rel or {}).get("text")
-    return t.replace("vermutlich ", "", 1) if t else None
+    """„auf dem Tisch“ / "on the table" (ohne „vermutlich“)."""
+    if not rel or not rel.get("label") or rel.get("type") not in ("on", "near"):
+        return None
+    return names.relation_text(rel["type"], rel["label"], names.vocab_name(rel["label"]), plain=True)
 
 
 def _place(cam: dict[str, Any], zone_names: list[str]) -> str:
     base = cam.get("room") or cam.get("name") or "?"
     if cam.get("room") and cam.get("name") and cam["name"] != cam["room"]:
-        base = f"{cam['room']}, Kamera {cam['name']}"
+        base = i18n.t("inventory.place_room_camera", room=cam["room"], camera=cam["name"])
     if zone_names:
-        base += ", " + ("Zone " if len(zone_names) == 1 else "Zonen ") + ", ".join(zone_names)
+        base += ", " + zones_text(zone_names)
     return base
 
 
@@ -371,10 +368,10 @@ def compute_changes(db: Session, since: datetime, until: Optional[datetime] = No
     until = min(until or now, now)
     since = _utc(since)
     if since >= until:
-        raise ChangesError("„since“ muss vor „until“ bzw. vor jetzt liegen")
+        raise ChangesError(i18n.t("inventory.err_since_after_until"))
     keep_days = int(st.get("retention_days_inventory") or 30)
     if since < now - timedelta(days=keep_days):
-        raise ChangesError("Zeitraum außerhalb der Aufbewahrung")
+        raise ChangesError(i18n.t("inventory.err_out_of_retention"))
     if min_s is None:
         min_s = float(st.get("inventory_change_min_s") if st.get("inventory_change_min_s") is not None else 120)
     vocab = names.vocab_map(st.get("inventory_vocabulary") or [])
@@ -566,43 +563,45 @@ def _zone_names(r: Optional[_Row], cam: dict[str, Any]) -> list[str]:
 def _change_text(c: _Change, cam: dict[str, Any], name: str, now: datetime) -> str:
     zb, za = _zone_names(c.before, cam), _zone_names(c.after, cam)
     if c.type == "appeared":
-        t = f"{name}: neu aufgetaucht ({_place(cam, za)})"
+        t = i18n.t("inventory.change_appeared", name=name, place=_place(cam, za))
         if c.rel_after:
-            t += f", {c.rel_after['text']}"
+            t += f", {relation_text_of(c.rel_after)}"
         return t
     if c.type == "disappeared":
-        t = f"{name}: verschwunden ({_place(cam, zb)})"
+        t = i18n.t("inventory.change_disappeared", name=name, place=_place(cam, zb))
         if c.rel_before:
-            t += f", zuvor {c.rel_before['text']}"
+            t += ", " + i18n.t("inventory.change_previously", relation=relation_text_of(c.rel_before))
         return t
     if c.type == "moved":
-        f, to = _from_to(c.rel_before, "von"), _from_to(c.rel_after, "zu")
+        f, to = _from_to(c.rel_before, "from"), _from_to(c.rel_after, "to")
         rb, ra = (c.rel_before or {}).get("label"), (c.rel_after or {}).get("label")
         if f and to and rb != ra:
-            how = f"vermutlich {f} {to} verschoben"
+            how = i18n.t("inventory.moved_from_to", **{"from": f, "to": to})
         elif (c.rel_before or c.rel_after) and (c.rel_before or {}).get("text") != (c.rel_after or {}).get("text"):
-            how = (f"vermutlich verschoben – vorher {_plain_rel(c.rel_before) or 'anderswo'}, "
-                   f"jetzt {_plain_rel(c.rel_after) or 'an anderer Stelle'}")
+            how = i18n.t("inventory.moved_relation",
+                         before=_plain_rel(c.rel_before) or i18n.t("inventory.moved_elsewhere_before"),
+                         after=_plain_rel(c.rel_after) or i18n.t("inventory.moved_elsewhere_after"))
         elif zb != za and (zb or za):
-            how = (f"vermutlich verschoben von {'Zone ' + ', '.join(zb) if zb else 'außerhalb der Zonen'} "
-                   f"nach {'Zone ' + ', '.join(za) if za else 'außerhalb der Zonen'}")
+            outside = i18n.t("inventory.outside_zones")
+            how = i18n.t("inventory.moved_zones", **{"from": zones_text(zb) if zb else outside,
+                                                       "to": zones_text(za) if za else outside})
         else:
-            how = "vermutlich an eine andere Stelle verschoben"
-        return f"{name}: {how} ({_short_place(cam)})"
+            how = i18n.t("inventory.moved_other")
+        return i18n.t("inventory.change_moved", name=name, how=how, place=_short_place(cam))
     if c.type == "uncertain":
-        return (f"{name}: Stand unklar – Kamera {cam.get('name') or '?'} liefert seit {local_time_text(c.at, now)} "
-                f"keine Gegenstandsanalyse")
+        return i18n.t("inventory.change_uncertain", name=name, camera=cam.get("name") or "?",
+                      time=local_time_text(c.at, now))
     if c.type == "transient":
         first, last = c.extra.get("first") or c.at, c.extra.get("last") or c.at
         span = local_time_text(first, now)
         if last and abs((last - first).total_seconds()) >= 60:
             span += f"–{local_time_text(last, now).split(' ')[-1]}"
-        return f"{name}: zwischendurch da, inzwischen wieder weg ({span}, {_place(cam, za)})"
+        return i18n.t("inventory.change_transient", name=name, span=span, place=_place(cam, za))
     return name
 
 
 def _change_json(c: _Change, cam: dict[str, Any], vocab: dict[str, dict], now: datetime) -> dict[str, Any]:
-    name = names.display_name(c.item.label, vocab)
+    name = names.localized_name(c.item.label, vocab)
     return {"type": c.type, "at": iso(c.at), "item": item_json(c.item, vocab=vocab, cam=cam),
             "before": _snap(c.before, cam), "after": _snap(c.after, cam),
             "text": _change_text(c, cam, name, now)}
@@ -610,9 +609,10 @@ def _change_json(c: _Change, cam: dict[str, Any], vocab: dict[str, dict], now: d
 
 def _summary(changes: list[_Change], since: datetime, until: datetime, now: datetime, cam, vocab) -> str:
     if (now - until).total_seconds() < 60:
-        head = f"Seit {local_time_text(since, now)}"
+        head = i18n.t("inventory.summary_since", time=local_time_text(since, now))
     else:
-        head = f"Zwischen {local_time_text(since, now)} und {local_time_text(until, now)}"
+        head = i18n.t("inventory.summary_between", since=local_time_text(since, now),
+                      until=local_time_text(until, now))
     by: dict[str, list[_Change]] = {t: [] for t in TYPE_ORDER}
     for c in sorted(changes, key=lambda c: -c.at.timestamp()):
         by[c.type].append(c)
@@ -620,11 +620,11 @@ def _summary(changes: list[_Change], since: datetime, until: datetime, now: date
     def names_of(lst: list[_Change], fmt) -> str:
         parts = [fmt(c) for c in lst[:SUMMARY_NAMES]]
         if len(lst) > SUMMARY_NAMES:
-            parts.append(f"+{len(lst) - SUMMARY_NAMES} weitere")
+            parts.append(i18n.t("inventory.summary_more", n=len(lst) - SUMMARY_NAMES))
         return ", ".join(parts)
 
     def nm(c: _Change) -> str:
-        return names.display_name(c.item.label, vocab)
+        return names.localized_name(c.item.label, vocab)
 
     def with_place(c: _Change) -> str:
         return f"{nm(c)} ({_short_place(cam(c.item.camera_id))})"
@@ -632,22 +632,17 @@ def _summary(changes: list[_Change], since: datetime, until: datetime, now: date
     def moved_fmt(c: _Change) -> str:
         rb, ra = c.rel_before, c.rel_after
         if rb and ra and rb.get("label") != ra.get("label"):
-            return f"{nm(c)}: {rb.get('name_de')} → {ra.get('name_de')}"
+            return (f"{nm(c)}: {names.localized_name(rb.get('label') or '', vocab)} → "
+                    f"{names.localized_name(ra.get('label') or '', vocab)}")
         return with_place(c)
 
     parts = []
-    if by["appeared"]:
-        parts.append(f"{len(by['appeared'])} neu ({names_of(by['appeared'], with_place)})")
-    if by["disappeared"]:
-        parts.append(f"{len(by['disappeared'])} weg ({names_of(by['disappeared'], with_place)})")
-    if by["moved"]:
-        parts.append(f"{len(by['moved'])} verschoben ({names_of(by['moved'], moved_fmt)})")
-    if by["transient"]:
-        parts.append(f"{len(by['transient'])} zwischendurch da ({names_of(by['transient'], nm)})")
-    text = f"{head}: " + (", ".join(parts) if parts else "keine Veränderungen") + "."
+    for typ, fmt in (("appeared", with_place), ("disappeared", with_place), ("moved", moved_fmt),
+                     ("transient", nm)):
+        if by[typ]:
+            parts.append(i18n.t(f"inventory.summary_{typ}", n=len(by[typ]), names=names_of(by[typ], fmt)))
+    text = f"{head}: " + (", ".join(parts) if parts else i18n.t("inventory.summary_none")) + "."
     if by["uncertain"]:
         cams_ = sorted({cam(c.item.camera_id).get("name") or "?" for c in by["uncertain"]})
-        n = len(by["uncertain"])
-        text += (f" Bei {n} {'Gegenstand' if n == 1 else 'Gegenständen'} ist der Stand unklar (Kamera "
-                 f"{', '.join(cams_)} liefert keine Gegenstandsanalyse).")
+        text += " " + i18n.t("inventory.summary_uncertain", n=len(by["uncertain"]), cameras=", ".join(cams_))
     return text

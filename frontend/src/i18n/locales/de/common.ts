@@ -49,6 +49,7 @@ const common = {
     person: "Person", car: "Auto", truck: "LKW", bicycle: "Fahrrad", motorcycle: "Motorrad", bus: "Bus",
     dog: "Hund", cat: "Katze", bird: "Vogel", horse: "Pferd", sheep: "Schaf", cow: "Kuh",
   } as Record<string, string>,
+  vocabGroups: {} as Record<string, string>,
   kind: { face: "Person", plate: "Kennzeichen", pet: "Tier", item: "Gegenstand" },
   kindPlural: { face: "Personen", plate: "Kennzeichen", pet: "Tiere", item: "Gegenstände" },
   daysShort: ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],

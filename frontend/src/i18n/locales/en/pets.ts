@@ -1,5 +1,34 @@
-/** Namensbereich (Englisch = Quelle). Texte mit Parametern als Funktion, z. B. count: (n: number) => `${n} items`. */
+/** Namensbereich „pets“: Haustier-Tagebuch (pages/Pets.tsx). Englisch = Quelle. */
 const pets = {
+  purpose: { food: "Bowl", water: "Water", litter: "Litter box" },
+  status: { ok: "normal", low: "less than usual", high: "more than usual", gap: "long gap", unknown: "still learning" },
+  unknownPet: (label: string) => `${label} (unknown)`,
+  running: "ongoing",
+  noVisits: "no visits",
+  today: "today",
+  normalPerDay: (r: string) => `normal ${r} per day`,
+  soFar: (r: string) => `so far ${r}`,
+  normalAfter7: "Normal range after 7 days of data",
+  lastAt: (t: string, ago: string) => `last ${t} (${ago})`,
+  never: "never",
+  usualGap: (g: string) => `usually max. ${g} gap`,
+  showVisits: "Show visits of this pet",
+  identity: "Identity",
+  todayDay: "Today",
+  yesterday: "Yesterday",
+  title: "Pets",
+  subtitle: "Pet diary: bowl, water and litter box – today compared with the last 14 days",
+  barsPeriod: "Period of the bars",
+  nDays: (n: number) => `${n} days`,
+  noVisitsYet: "No visits yet",
+  emptyText: "In camera management, create a zone and set its purpose to “Bowl”, “Water” or “Litter box”. Visits by dogs and cats in these zones will then appear here (Settings → Pet diary).",
+  visits: "Visits",
+  visitsOf: (name: string) => `Visits – ${name}`,
+  total: (n: number) => `${n} in total`,
+  allPets: "all pets",
+  allPurposes: "all purposes",
+  noVisitsList: "No visits.",
+  loadMore: "Load more",
 };
 
 export type PetsMessages = typeof pets;

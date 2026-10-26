@@ -1,1 +1,78 @@
-{}
+{
+  "aborted_restart": "Abgebrochen (Neustart des Backends)",
+  "notify_title": "Nachtlauf (Gesichter)",
+  "err": {
+    "running": "Es läuft bereits ein Nachtlauf",
+    "report_not_found": "Bericht nicht gefunden",
+    "only_done_preview": "Nur ein fertiger Probelauf kann angewandt werden",
+    "already_applied": "Dieser Probelauf wurde bereits angewandt"
+  },
+  "skip": {
+    "target_gone": "Ziel existiert nicht mehr",
+    "target_locked": "Ziel hat Lernsperre (nur per Rückfrage)",
+    "source_gone": "Quelle existiert nicht mehr",
+    "source_named": "Quelle inzwischen benannt",
+    "source_locked": "Quelle inzwischen gesperrt",
+    "pair_rejected": "Paar wurde mit „Nein“ beantwortet",
+    "source_no_features": "Quelle ohne Gesichtsmerkmale",
+    "score_now": "Ähnlichkeit jetzt {score} (unter {min})",
+    "direct_now": "Ähnlichkeit zum Ziel jetzt {score}",
+    "target_locked_now": "Ziel inzwischen gesperrt",
+    "source_named_or_locked": "Quelle {id} inzwischen benannt oder gesperrt",
+    "pair_rejected_ids": "Paar {src}/{dst} wurde mit „Nein“ beantwortet",
+    "both_named": "Beide inzwischen benannt",
+    "identity_gone": "Identität existiert nicht mehr",
+    "review_not_created": "Rückfragen aus, Limit erreicht oder Paar schon gefragt",
+    "locked": "Lernsperre aktiv",
+    "samples_changed": "Bilder inzwischen geändert",
+    "no_longer_named": "Nicht mehr benannt",
+    "cleanup_changed": "Inzwischen benannt, gesperrt, gesehen oder mit Ereignissen",
+    "error": "Fehler: {error}"
+  },
+  "text": {
+    "preview": {
+      "prefix": "Probelauf: {parts}.",
+      "merges": {
+        "one": "1 Fragment würde zusammengeführt",
+        "other": "{n} Fragmente würden zusammengeführt"
+      },
+      "reviews": {
+        "one": "1 Rückfrage würde gestellt",
+        "other": "{n} Rückfragen würden gestellt"
+      },
+      "curated": "Galerie von {names} würde aktualisiert",
+      "thresholds": {
+        "one": "1 Schwelle je Person würde angepasst",
+        "other": "{n} Schwellen je Person würden angepasst"
+      },
+      "cleanup": {
+        "one": "1 altes Einzelbild-Fragment würde gelöscht",
+        "other": "{n} alte Einzelbild-Fragmente würden gelöscht"
+      }
+    },
+    "done": {
+      "prefix": "Nachtlauf: {parts}.",
+      "merges": {
+        "one": "1 Fragment zusammengeführt",
+        "other": "{n} Fragmente zusammengeführt"
+      },
+      "reviews": {
+        "one": "1 Rückfrage",
+        "other": "{n} Rückfragen"
+      },
+      "curated": "Galerie von {names} aktualisiert",
+      "thresholds": {
+        "one": "1 Schwelle je Person angepasst",
+        "other": "{n} Schwellen je Person angepasst"
+      },
+      "cleanup": {
+        "one": "1 altes Einzelbild-Fragment gelöscht",
+        "other": "{n} alte Einzelbild-Fragmente gelöscht"
+      }
+    },
+    "merge_targets": " (u. a. zu {names})",
+    "nothing": "nichts zu tun",
+    "skipped": "{n} übersprungen",
+    "aborted_suffix": " (abgebrochen)"
+  }
+}

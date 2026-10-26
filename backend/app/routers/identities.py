@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import embed_client, item_identity, settings_store
 from .. import identity as ident_svc
 from ..auth import require_user
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/api/identities", tags=["identities"], dependencies=[
 def _get(db: Session, iid: int) -> Identity:
     i = db.get(Identity, iid)
     if i is None:
-        raise HTTPException(404, "Identität nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.identity_not_found"))
     return i
 
 
@@ -53,7 +54,7 @@ def create_identity(body: IdentityCreateIn, db: Session = Depends(get_db)):
     """W2 (B4): eigenes Exemplar anlegen (nur `kind:"item"`); Fotos danach über `/samples`."""
     vocab = {e.get("label") for e in (settings_store.get().get("inventory_vocabulary") or [])}
     if body.item_label not in vocab:
-        raise HTTPException(422, f"Unbekannter Gegenstand: {body.item_label}")
+        raise HTTPException(422, i18n.t("errors.unknown_item", item=body.item_label))
     now = utcnow()
     i = Identity(kind="item", item_label=body.item_label, name=body.name.strip() or None,
                  auto_number=ident_svc._next_number(db, "item"), first_seen=now, last_seen=now, notes="")
@@ -76,7 +77,7 @@ def _bulk_call(fn, *args, **kw):
     except identity_bulk.BulkError as e:
         raise HTTPException(e.status, e.detail) from None
     except NotImplementedError:
-        raise HTTPException(501, "Noch nicht umgesetzt") from None
+        raise HTTPException(501, i18n.t("errors.not_implemented")) from None
 
 
 @router.post("/bulk-delete")
@@ -109,9 +110,9 @@ def _parse_bbox(v: Optional[str]) -> Optional[list[float]]:
     try:
         b = [float(x) for x in v.split(",")]
     except ValueError:
-        raise HTTPException(422, "bbox muss \"x1,y1,x2,y2\" (normiert) sein") from None
+        raise HTTPException(422, i18n.t("errors.bbox_format_csv")) from None
     if len(b) != 4 or not all(0.0 <= x <= 1.0 for x in b) or b[2] <= b[0] or b[3] <= b[1]:
-        raise HTTPException(422, "bbox muss \"x1,y1,x2,y2\" (normiert) sein")
+        raise HTTPException(422, i18n.t("errors.bbox_format_csv"))
     return b
 
 
@@ -119,9 +120,9 @@ def _sample_call(fn, db: Session, i: Identity, *args):
     try:
         out = fn(db, i, *args)
     except embed_client.EmbedUnavailable as e:
-        raise HTTPException(503, "Analyse-Dienst nicht erreichbar" if "ausgelastet" not in str(e) else str(e)) from None
+        raise HTTPException(503, str(e) or i18n.t("errors.analysis_unreachable")) from None
     except embed_client.EmbedError as e:
-        raise HTTPException(422, f"Bild nicht auswertbar: {e}") from None
+        raise HTTPException(422, i18n.t("errors.image_not_analysable", error=e)) from None
     except item_identity.SampleError as e:
         raise HTTPException(422, str(e)) from None
     db.refresh(i)
@@ -145,7 +146,7 @@ def sample_from_inventory(iid: int, body: SampleFromInventoryIn, db: Session = D
     i = _get(db, iid)
     item = db.get(InventoryItem, body.inventory_item_id)
     if item is None:
-        raise HTTPException(404, "Gegenstand nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.item_not_found"))
     return _sample_call(item_identity.add_inventory_sample, db, i, item)
 
 
@@ -197,11 +198,11 @@ def delete_identity(iid: int, db: Session = Depends(get_db)):
 @router.post("/{iid}/merge")
 def merge_identity(iid: int, body: MergeIn, db: Session = Depends(get_db)):
     if body.into_id == iid:
-        raise HTTPException(422, "Quelle und Ziel sind identisch")
+        raise HTTPException(422, i18n.t("errors.merge_same"))
     src = _get(db, iid)
     dst = _get(db, body.into_id)
     if src.kind != dst.kind:
-        raise HTTPException(422, "Nur Identitäten gleicher Art können zusammengeführt werden")
+        raise HTTPException(422, i18n.t("errors.merge_kind_mismatch"))
     try:
         dst, src_deleted = ident_svc.merge(db, src, dst, body.sample_ids)
     except ident_svc.MergeError as e:
@@ -248,7 +249,7 @@ def delete_sample(iid: int, sid: int, db: Session = Depends(get_db)):
     i = _get(db, iid)
     smp = db.get(IdentitySample, sid)
     if smp is None or smp.identity_id != iid:
-        raise HTTPException(404, "Sample nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.sample_not_found"))
     path = smp.image_path
     db.delete(smp)
     db.commit()

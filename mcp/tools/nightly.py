@@ -12,11 +12,9 @@ from typing import Any, Optional
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
-from .common import READ_ONLY, BackendError, api, fail, ok
+from .common import READ_ONLY, BackendError, api, fail, fmt_datetime, mapped, ok, t
 
 MAX_ACTIONS = 30
-TYPE_DE = {"merge": "Zusammenführen", "review": "Rückfrage", "curate": "Galerie kuratieren",
-           "threshold": "Schwelle je Person", "cleanup": "Aufräumen"}
 
 
 def _action(a: dict[str, Any]) -> dict[str, Any]:
@@ -31,43 +29,45 @@ def _action(a: dict[str, Any]) -> dict[str, Any]:
 
 
 def _line(a: dict[str, Any]) -> str:
-    t = TYPE_DE.get(a.get("type", ""), a.get("type", ""))
+    kind = mapped("nightly.type", a.get("type", ""))
     if a.get("type") in ("merge", "review"):
-        s = f"{t}: {a.get('src_display_name')} → {a.get('into_display_name')} ({float(a.get('score') or 0):.2f})"
+        s = f"{kind}: {a.get('src_display_name')} → {a.get('into_display_name')} ({float(a.get('score') or 0):.2f})"
     elif a.get("type") == "threshold":
-        s = f"{t}: {a.get('display_name')} {a.get('old') if a.get('old') is not None else 'global'} → {a.get('new')}"
+        old = a.get("old") if a.get("old") is not None else t("nightly.global")
+        s = f"{kind}: {a.get('display_name')} {old} → {a.get('new')}"
     else:
-        s = f"{t}: {a.get('display_name')}"
+        s = f"{kind}: {a.get('display_name')}"
     if a.get("skipped_reason"):
-        s += f" – übersprungen ({a['skipped_reason']})"
+        s += " – " + t("nightly.skipped", reason=a["skipped_reason"])
     return s
 
 
 def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def get_nightly_report(ctx: Context, report_id: Optional[int] = None) -> CallToolResult:
-        """Bericht des nächtlichen Gesichter-Trainings („Nachtlauf“) von VisionGuard: welche unbenannten
-        Gesichts-Fragmente zusammengeführt wurden bzw. im Probelauf würden, welche Rückfragen gestellt, welche
-        Galerien kuratiert und welche Schwellen je Person angepasst wurden. Ohne `report_id` der neueste Bericht.
-        Nur lesen – Anwenden eines Probelaufs geht nur in der Oberfläche."""
+        """Report of VisionGuard's nightly face training ("nightly run"): which unnamed face fragments were merged
+        (or would be, in a preview run), which questions were asked, which galleries were curated and which
+        per-person thresholds were adjusted. Without `report_id` the newest report.
+        Read only – applying a preview run is only possible in the web interface."""
         try:
             rid = report_id
             if rid is None:
                 lst = await api(ctx, "/nightly/reports", {"limit": 1})
                 if not lst.get("items"):
-                    return ok("Es gibt noch keinen Nachtlauf-Bericht.", {"report": None})
+                    return ok(t("nightly.none"), {"report": None})
                 rid = lst["items"][0]["id"]
             r = await api(ctx, f"/nightly/reports/{int(rid)}", {"signed": 1},
-                          not_found=f"Nachtlauf-Bericht {rid} nicht gefunden.")
+                          not_found=t("nightly.not_found", id=rid))
         except BackendError as e:
             return fail(str(e))
         actions = r.get("actions") or []
         data = {"report": {k: r.get(k) for k in ("id", "mode", "trigger", "status", "started_at", "finished_at",
                                                   "error", "applied_at", "applied_report_id", "summary", "text")},
                 "actions": [_action(a) for a in actions[:MAX_ACTIONS]], "actions_total": len(actions)}
-        kind = "Probelauf" if r.get("mode") == "preview" else "Nachtlauf"
-        lines = [f"{kind} {r.get('id')} vom {r.get('started_at')}: {r.get('error') or r.get('text')}"]
+        kind = t("nightly.preview") if r.get("mode") == "preview" else t("nightly.run")
+        lines = [t("nightly.head", kind=kind, id=r.get("id"), time=fmt_datetime(r.get("started_at")),
+                   text=r.get("error") or r.get("text"))]
         lines += [f"- {_line(a)}" for a in actions[:MAX_ACTIONS]]
         if len(actions) > MAX_ACTIONS:
-            lines.append(f"… und {len(actions) - MAX_ACTIONS} weitere Aktionen")
+            lines.append(t("nightly.more", n=len(actions) - MAX_ACTIONS))
         return ok("\n".join(lines), data)

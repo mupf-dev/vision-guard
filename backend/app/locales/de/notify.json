@@ -1,1 +1,14 @@
-{}
+{
+  "daily_limit": "Tageslimit erreicht ({limit} Pushes je Regel)",
+  "secret_reuse": "Server oder Art des Push-Ziels geändert – Zugangsdaten (Token/Topic/Schlüssel) bitte neu eingeben",
+  "open_in": "In VisionGuard öffnen",
+  "push_unknown_type": "Unbekannter Push-Typ: {type}",
+  "push_disabled": "Ziel deaktiviert",
+  "push_unknown_error": "unbekannter Fehler",
+  "push_connection_failed": "Verbindung fehlgeschlagen ({error})",
+  "push_error": "Fehler ({error})",
+  "test_title": "VisionGuard – Test",
+  "test_message": "Test-Benachrichtigung: Push funktioniert.",
+  "action_yes": "Ja",
+  "action_no": "Nein"
+}

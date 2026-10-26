@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import rules as rules_mod
 from ..auth import require_user
 from ..db import get_db
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/api/rules", tags=["rules"], dependencies=[Depends(re
 def _get(db: Session, rule_id: int) -> Rule:
     r = db.get(Rule, rule_id)
     if r is None:
-        raise HTTPException(404, "Regel nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.rule_not_found"))
     return r
 
 
@@ -54,7 +55,7 @@ def check_rule(body: RuleIn):
     for d in res.details:
         spec = rules_mod.CONDITIONS.get(d["type"])
         if spec is not None and spec.track_only:
-            d = {**d, "ok": None, "reason": "wird erst beim Auslösen geprüft (Weg des Tracks)"}
+            d = {**d, "ok": None, "reason": i18n.t("rules.check.track_only")}
         details.append(d)
     ok = all(d["ok"] is not False for d in details)
     ph = {"items": "", "item_place": "", "weather": "", **{k: v for k, v in res.ctx.items()

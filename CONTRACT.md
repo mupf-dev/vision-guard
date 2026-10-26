@@ -2254,7 +2254,7 @@ und Schlüssel bleiben unverändert (z. B. `name_de` bleibt als Feld bestehen).
 
 ### I18N.B Backend (`backend/app/i18n.py`, `backend/app/locales/<code>/<namensbereich>.json`)
 
-- `i18n.t("<ns>.<key>", lang=None, **params)`; Platzhalter `{name}`, Mehrzahl `{"one": …, "other": …}` über `n`.
+- `i18n.t("<ns>.<key>", lang=None, /, **params)` (Schlüssel und Sprache nur positional, Platzhalter dürfen beliebig heißen); Platzhalter `{name}`, Mehrzahl `{"one": …, "other": …}` über `n`.
   Rückfall Englisch, dann der Schlüssel (mit Log-Warnung). Helfer `label()`, `fmt_num()`, `fmt_time()`, `fmt_date()`,
   `fmt_ago()`, `use_lang()`.
 - **Sprache:** in HTTP-Anfragen aus `Accept-Language` (`LanguageMiddleware`, auch in Thread-Pool-Endpunkten);
@@ -2275,6 +2275,13 @@ und Schlüssel bleiben unverändert (z. B. `name_de` bleibt als Feld bestehen).
 - `InventoryItem`, `GET /inventory/labels` und Rückfragen liefern zusätzlich `name` (Anzeigename in der Sprache der
   Anfrage); `name_de` bleibt unverändert. Die Suche (`/inventory/search`) findet Namen und Synonyme aller Sprachen
   und versteht englische Füllwörter („where is my …“).
+- Ergänzungen der Umsetzung (additiv): `relation` hat zusätzlich `name` (Fläche in der Sprache der Anfrage), `text`
+  wird bei der Ausgabe neu gebildet. Rückfragen (`ReviewRequest`) und `/review/thresholds` liefern zusätzlich `name`.
+  Tagesbericht-`facts`: `name_de`/`purpose_de`/`source_de` bleiben, zusätzlich `name`, `purpose_name`,
+  `source_name` (Systemsprache) und `inventory_error_code`. Vokabular-Gruppen (`group`) sind Daten; die Oberfläche
+  übersetzt nur die fünf Standard-Gruppen zur Anzeige. MQTT-Topics unbenannter Tiere bleiben sprachunabhängig
+  (`tier_<n>` wie bisher).
+- `POST /settings/push_test`: `title`/`message` optional (Standard in der Sprache der Anfrage).
 
 ### I18N.D MCP
 

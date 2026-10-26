@@ -31,6 +31,8 @@ const LABEL_COLOR: Record<string, string> = {
 export const labelGroup = (l: string): LabelGroup => GROUP[l] ?? "other";
 /** Anzeigename einer Objektklasse in der aktuellen Sprache (i18n `common.labels`). */
 export const labelName = (l: string): string => msgs().common.labels[l] ?? l;
+/** Anzeigename einer Vokabulargruppe: Standard-Gruppen übersetzt, eigene unverändert. */
+export const groupName = (g: string): string => msgs().common.vocabGroups[g] ?? g;
 export const labelColor = (l: string): string => LABEL_COLOR[l] ?? GROUP_COLOR[labelGroup(l)];
 
 // Sprachabhängig (i18n `common`): lesen bei jedem Zugriff die aktuelle Sprache.

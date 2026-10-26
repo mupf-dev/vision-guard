@@ -3,7 +3,7 @@
 Vertrag (CONTRACT.md „Nachträge: Welle 3“, W3.H):
     search_history(query, since=None, until=None, camera=None, limit=5, include_image=False)
         → {query, items:[{camera_name, room, start_ts, end_ts, best_ts, score, thumb_url}]} aus GET /history/search?signed=1
-Text deutsch („Am Di 14:03–14:21 im Flur, Übereinstimmung 71 %“), Medien-URLs signiert, optional das
+Text in der Systemsprache (z. B. „Am Di 14:03–14:21 im Flur, Übereinstimmung 71 %“), Medien-URLs signiert, optional das
 Vorschaubild des besten Treffers als ImageContent.
 """
 
@@ -18,10 +18,8 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .common import (LOCAL_TZ, READ_ONLY, BackendError, _auth_header, _parse_ts, api, cameras, fail, find_camera,
-                     http, n_de, ok)
+                     http, ok, t, t_list)
 from .notifications import parse_since
-
-DAYS_DE = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
 
 def _span(start: Any, end: Any) -> str:
@@ -30,20 +28,23 @@ def _span(start: Any, end: Any) -> str:
         return "?"
     la = a.astimezone(LOCAL_TZ)
     today = datetime.now(LOCAL_TZ).date()
-    day = "heute" if la.date() == today else f"am {DAYS_DE[la.weekday()]} {la:%d.%m.}"
+    days = t_list("common.weekdays_short") or ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    dm = t("common.day_month_format")
+    day = t("history.today") if la.date() == today else t("history.on_day", weekday=days[la.weekday()],
+                                                           date=la.strftime(dm))
     text = f"{day} {la:%H:%M}"
     if b is not None:
         lb = b.astimezone(LOCAL_TZ)
         if (lb - la).total_seconds() >= 60:
-            text += f"–{lb:%H:%M}" if lb.date() == la.date() else f" bis {lb:%d.%m. %H:%M}"
+            text += f"–{lb:%H:%M}" if lb.date() == la.date() else " " + t("history.until", time=lb.strftime(dm + " %H:%M"))
     return text
 
 
 def _place(it: dict) -> str:
     cam, room = it.get("camera_name"), it.get("room")
     if room and room != cam:
-        return f"Raum {room} (Kamera {cam})"
-    return f"Kamera {cam}"
+        return t("history.place_room", room=room, camera=cam)
+    return t("common.camera", name=cam)
 
 
 async def _thumb(ctx: Context, url: str) -> Optional[bytes]:
@@ -63,16 +64,16 @@ def register(mcp: MCPServer) -> None:
     async def search_history(ctx: Context, query: str, since: Optional[str] = None, until: Optional[str] = None,
                              camera: Optional[str] = None, limit: int = 5,
                              include_image: bool = False) -> CallToolResult:
-        """Durchsucht das Bildgedächtnis der Kameras („Zeitmaschine“) nach einer Beschreibung, z. B. „roter Karton
-        im Flur“, „Person mit Rucksack“, „Hund auf dem Sofa“ (deutsch oder englisch; kurze, gegenständliche
-        Beschreibungen funktionieren am besten). Liefert Zeiträume je Kamera mit Übereinstimmung (0–100) und
-        signiertem Vorschaubild (256 px). Nur Kameras mit eingeschalteter Zeitmaschine; kleine Gegenstände
-        werden eher in Kameras mit Kacheln gefunden. `since`/`until`: ISO-8601 oder relativ („3h“, „2d“, „today“,
-        „yesterday“). `camera`: Kamera- oder Raumname. `include_image`: Vorschau des besten Treffers mitsenden."""
+        """Search the cameras' image memory ("time machine") for a description, e.g. "red box in the hallway",
+        "person with a backpack", "dog on the sofa" (English or German; short, concrete descriptions work best).
+        Returns time spans per camera with a match score (0–100) and a signed preview image (256 px). Only
+        cameras with the time machine enabled; small objects are found more reliably on cameras with tiling.
+        `since`/`until`: ISO-8601 or relative ("3h", "2d", "today", "yesterday"). `camera`: camera or room name.
+        `include_image`: also send the preview of the best match."""
         try:
             q = (query or "").strip()
             if not q:
-                return fail("Bitte einen Suchtext angeben.")
+                return fail(t("history.query_required"))
             try:
                 t_since, t_until = parse_since(since), parse_since(until)
             except ValueError as e:
@@ -96,16 +97,15 @@ def register(mcp: MCPServer) -> None:
             structured = {"query": q, "queries": data.get("queries") or [q], "model": data.get("model"),
                           "items": items}
             if not items:
-                return ok(f"Zu „{q}“ nichts im Bildgedächtnis gefunden (Zeitmaschine aktiv? Zeitraum zu eng?).",
-                          structured)
-            lines = [f"Zeitmaschine – „{q}“ ({n_de(len(items), 'Zeitraum', 'Zeiträume')}, beste zuerst):"]
+                return ok(t("history.nothing", query=q), structured)
+            lines = [t("history.head", query=q, n=len(items))]
             for it in items:
-                line = (f"- {_span(it['start_ts'], it['end_ts']).capitalize()} in {_place(it)}, "
-                        f"Übereinstimmung {it['score']} %")
+                span = _span(it["start_ts"], it["end_ts"])
+                line = "- " + t("history.line", span=span[:1].upper() + span[1:], place=_place(it), score=it["score"])
                 if it.get("thumb_url"):
-                    line += f" Bild: {it['thumb_url']}"
+                    line += " " + t("common.image", url=it["thumb_url"])
                 lines.append(line)
-            lines.append("Hinweis: Übereinstimmung ist eine Bild-Text-Ähnlichkeit, keine sichere Erkennung.")
+            lines.append(t("history.note"))
             content: list = [TextContent(type="text", text="\n".join(lines))]
             if include_image and items[0].get("thumb_url"):
                 img = await _thumb(ctx, items[0]["thumb_url"])

@@ -1,4 +1,4 @@
-"""Zeitmaschine (B1): deutsche Suchanfragen zusätzlich ins Englische übertragen.
+"""Zeitmaschine (B1): deutsche Suchanfragen zusätzlich ins Englische übertragen (englische bleiben unverändert).
 
 SigLIP 2 versteht Deutsch, ist mit englischen Anfragen aber messbar besser (messungen.md §5: +0,13 mAP). Ohne
 LLM (kostenpflichtig, standardmäßig aus) übersetzt dieses Modul Wort für Wort mit einem kleinen eingebauten
@@ -87,6 +87,24 @@ _WORDS = {
 
 _ADJ_ENDINGS = ("es", "er", "en", "em", "e")
 
+# Typisch englische Funktionswörter: überwiegen sie, ist die Anfrage schon englisch und bleibt unverändert
+_EN_HINTS = {
+    "the", "a", "of", "with", "on", "at", "is", "are", "were", "where", "when", "my", "his", "her",
+    "someone", "somebody", "people", "front", "next", "to", "from", "near", "under", "behind", "and", "or",
+    "red", "blue", "green", "yellow", "black", "white", "grey", "gray", "brown", "box", "car", "dog", "cat",
+    "woman", "child", "kitchen", "hallway", "door", "window", "room", "bag", "parcel", "package",
+    "lying", "sitting", "standing", "walking", "carrying", "holding", "wearing", "show", "me", "any",
+}
+# Eindeutig deutsche Wörter (Funktionswörter aus _DROP/_GLUE ohne Überschneidung mit dem Englischen)
+_DE_HINTS = (_DROP | set(_GLUE)) - {"in", "an", "es", "mal", "bus", "am"}
+
+
+def looks_english(words: list[str]) -> bool:
+    """Grobe Spracherkennung für kurze Suchanfragen (normalisierte Wörter)."""
+    en = sum(1 for w in words if w in _EN_HINTS)
+    de = sum(1 for w in words if w in _DE_HINTS)
+    return en > 0 and en > de
+
 
 def _vocab_words(vocab: Iterable[dict[str, Any]], custom: Optional[dict[str, list[str]]]) -> dict[str, str]:
     """Normalisierte deutsche Namen/Synonyme → englischer Prompt aus dem Inventar-Vokabular."""
@@ -123,7 +141,7 @@ def to_english(query: str, vocab: Iterable[dict[str, Any]] = (),
                custom: Optional[dict[str, list[str]]] = None) -> Optional[str]:
     """Englische Fassung oder None (nichts übersetzbar bzw. Anfrage schon englisch)."""
     words = normalize(query).split()
-    if not words:
+    if not words or looks_english(words):
         return None
     vw = _vocab_words(vocab, custom)
     out: list[str] = []

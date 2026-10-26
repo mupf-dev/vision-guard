@@ -67,9 +67,9 @@ const INV_OFF = {
 
 // PTZ-Mock: Kamera 1 schwenkbar, Zustand im Speicher
 const tvShowing: Record<string, { camera_id: number; camera_name: string | null; since: string; until: string; source: string } | undefined> = {};
-const ptzPresets = [{ token: "1", name: "Grundposition" }, { token: "2", name: "Tor" }];
+const ptzPresets = [{ token: "1", name: "Home position" }, { token: "2", name: "Gate" }];
 let ptzState: PtzState = {
-  mode: "idle", view: "home", moving: false, preset: "1", preset_name: "Grundposition", until: null,
+  mode: "idle", view: "home", moving: false, preset: "1", preset_name: "Home position", until: null,
   patrol_step: null, target: null, paused_until: null, error: null, updated_at: new Date().toISOString(),
 };
 function ptzSet(p: Partial<PtzState>): PtzState {
@@ -78,38 +78,38 @@ function ptzSet(p: Partial<PtzState>): PtzState {
 }
 
 const cameras: Camera[] = [
-  { id: 1, name: "Einfahrt", url: "rtsp://testcam:8554/cam1", detect_url: null, enabled: true, detect_fps: 5,
+  { id: 1, name: "Driveway", url: "rtsp://testcam:8554/cam1", detect_url: null, enabled: true, detect_fps: 5,
     labels: ["person", "car", "truck", "bicycle", "dog", "cat"], min_score: 0.5,
     face_recognition: true, plate_recognition: true, pet_recognition: true,
-    zones: [{ id: "z1", name: "Tor", color: "#ff9800", polygon: [[0.28, 0.6], [0.58, 0.58], [0.82, 0.98], [0.22, 0.98]] }],
-    ...INV_OFF, room: "Außen",
+    zones: [{ id: "z1", name: "Gate", color: "#ff9800", polygon: [[0.28, 0.6], [0.58, 0.58], [0.82, 0.98], [0.22, 0.98]] }],
+    ...INV_OFF, room: "Outdoors",
     ptz_enabled: true, ptz: { ...INV_OFF.ptz, home_preset: "1" },
     status: { state: "online", fps: 4.9, width: 1280, height: 720, inference_ms: 11.8, last_seen: now(), health: { state: "ok", problems: [] } } },
-  { id: 2, name: "Garten", url: "rtsp://testcam:8554/cam2", detect_url: null, enabled: true, detect_fps: 5,
+  { id: 2, name: "Garden", url: "rtsp://testcam:8554/cam2", detect_url: null, enabled: true, detect_fps: 5,
     labels: ["person", "dog", "cat", "bird"], min_score: 0.55,
     face_recognition: true, plate_recognition: false, pet_recognition: true,
-    zones: [{ id: "z2", name: "Terrasse", color: "#22c55e", purpose: "water", polygon: [[0.6, 0.55], [0.95, 0.55], [0.95, 0.95], [0.6, 0.95]] }],
-    ...INV_OFF, room: "Garten",
+    zones: [{ id: "z2", name: "Patio", color: "#22c55e", purpose: "water", polygon: [[0.6, 0.55], [0.95, 0.55], [0.95, 0.95], [0.6, 0.95]] }],
+    ...INV_OFF, room: "Garden",
     status: { state: "online", fps: 5.0, width: 1280, height: 720, inference_ms: 12.6, last_seen: now(),
-      health: { state: "warn", problems: [{ type: "blur", since: ago(3700), text: "Unscharf seit 13:02" }] } } },
-  { id: 3, name: "Wohnzimmer", url: "rtsp://192.168.1.40/stream1", detect_url: "rtsp://192.168.1.40/stream2", enabled: true, detect_fps: 4,
+      health: { state: "warn", problems: [{ type: "blur", since: ago(3700), text: "Blurry since 13:02" }] } } },
+  { id: 3, name: "Living room", url: "rtsp://192.168.1.40/stream1", detect_url: "rtsp://192.168.1.40/stream2", enabled: true, detect_fps: 4,
     labels: ["person", "dog", "cat"], min_score: 0.5, face_recognition: true, plate_recognition: false, pet_recognition: true,
-    zones: [], ...INV_OFF, room: "Wohnzimmer", inventory_enabled: true,
+    zones: [], ...INV_OFF, room: "Living room", inventory_enabled: true,
     status: { state: "online", fps: 4, width: 2880, height: 1616, inference_ms: 14.1, last_seen: now(), health: { state: "ok", problems: [] } } },
 ];
 
 const identities: Identity[] = [
-  { id: 1, kind: "face", name: "Anna", display_name: "Anna", plate_text: null, notes: "Bewohnerin", sample_count: 14, cover_url: faceSvg(1), first_seen: ago(86400 * 20), last_seen: ago(400), event_count: 120, learning_locked: true },
-  { id: 2, kind: "face", name: "Paketbote", display_name: "Paketbote", plate_text: null, notes: "", sample_count: 5, cover_url: faceSvg(2), first_seen: ago(86400 * 9), last_seen: ago(7200), event_count: 11, learning_locked: false },
+  { id: 1, kind: "face", name: "Anna", display_name: "Anna", plate_text: null, notes: "Resident", sample_count: 14, cover_url: faceSvg(1), first_seen: ago(86400 * 20), last_seen: ago(400), event_count: 120, learning_locked: true },
+  { id: 2, kind: "face", name: "Delivery driver", display_name: "Delivery driver", plate_text: null, notes: "", sample_count: 5, cover_url: faceSvg(2), first_seen: ago(86400 * 9), last_seen: ago(7200), event_count: 11, learning_locked: false },
   { id: 12, kind: "face", name: null, display_name: "Person #12", plate_text: null, notes: "", sample_count: 7, cover_url: faceSvg(12), first_seen: ago(86400), last_seen: ago(1800), event_count: 23, learning_locked: false },
   { id: 13, kind: "face", name: null, display_name: "Person #13", plate_text: null, notes: "", sample_count: 2, cover_url: faceSvg(13), first_seen: ago(5000), last_seen: ago(4000), event_count: 3, learning_locked: false },
-  { id: 20, kind: "plate", name: "Familienauto", display_name: "Familienauto", plate_text: "B-VG 120", notes: "", sample_count: 9, cover_url: faceSvg(20, "plate"), first_seen: ago(86400 * 30), last_seen: ago(3600), event_count: 54, learning_locked: false },
-  { id: 21, kind: "plate", name: null, display_name: "Kennzeichen M-XY 421", plate_text: "M-XY 421", notes: "", sample_count: 3, cover_url: faceSvg(21, "plate"), first_seen: ago(9000), last_seen: ago(8000), event_count: 2, learning_locked: false },
+  { id: 20, kind: "plate", name: "Family car", display_name: "Family car", plate_text: "B-VG 120", notes: "", sample_count: 9, cover_url: faceSvg(20, "plate"), first_seen: ago(86400 * 30), last_seen: ago(3600), event_count: 54, learning_locked: false },
+  { id: 21, kind: "plate", name: null, display_name: "Plate M-XY 421", plate_text: "M-XY 421", notes: "", sample_count: 3, cover_url: faceSvg(21, "plate"), first_seen: ago(9000), last_seen: ago(8000), event_count: 2, learning_locked: false },
   // Identitäten 07 (Paket A): weitere Fragmente zum Testen der Mehrfachauswahl (14–16 ähneln Anna, 17 dem Paketboten)
   ...[14, 15, 16, 17, 18, 19].map((id, k): Identity => ({ id, kind: "face", name: null, display_name: `Person #${id}`, plate_text: null, notes: "",
     sample_count: 1 + (k % 3), cover_url: faceSvg(id), first_seen: ago(3600 * (k + 2)), last_seen: ago(900 * (k + 1)), event_count: k % 4, learning_locked: false })),
-  { id: 30, kind: "pet", name: "Bello", display_name: "Bello", plate_text: null, notes: "Hund der Nachbarn", sample_count: 11, cover_url: faceSvg(30, "pet"), first_seen: ago(86400 * 5), last_seen: ago(600), event_count: 31, learning_locked: false },
-  { id: 31, kind: "pet", name: null, display_name: "Tier #3", plate_text: null, notes: "", sample_count: 4, cover_url: faceSvg(31, "pet"), first_seen: ago(86400 * 2), last_seen: ago(20000), event_count: 6, learning_locked: false },
+  { id: 30, kind: "pet", name: "Bello", display_name: "Bello", plate_text: null, notes: "Neighbours' dog", sample_count: 11, cover_url: faceSvg(30, "pet"), first_seen: ago(86400 * 5), last_seen: ago(600), event_count: 31, learning_locked: false },
+  { id: 31, kind: "pet", name: null, display_name: "Animal #3", plate_text: null, notes: "", sample_count: 4, cover_url: faceSvg(31, "pet"), first_seen: ago(86400 * 2), last_seen: ago(20000), event_count: 6, learning_locked: false },
 ];
 
 /** Mock-Vorschläge: benannte Identitäten gleicher Art, Score deterministisch aus den IDs */
@@ -134,14 +134,14 @@ for (const i of identities) {
 }
 
 let rules: Rule[] = [
-  { id: 1, name: "Person an Einfahrt nachts", enabled: true, camera_ids: [1], zone_ids: ["z1"], labels: ["person"], min_score: 0.6,
+  { id: 1, name: "Person at driveway at night", enabled: true, camera_ids: [1], zone_ids: ["z1"], labels: ["person"], min_score: 0.6,
     identity: { mode: "unknown", identity_ids: [] }, trigger: "enter", min_dwell_s: 0,
     schedule: { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" }, cooldown_s: 30, trigger_options: {}, conditions: [], condition_delay_s: 0,
     actions: [{ type: "snapshot" }, { type: "clip", pre_s: 5, post_s: 10 }, { type: "mqtt", topic: "visionguard/alarm/{camera}", payload: null, retain: false }] },
-  { id: 2, name: "Familienauto kommt an", enabled: true, camera_ids: [1], zone_ids: [], labels: ["car"], min_score: 0.5,
+  { id: 2, name: "Family car arrives", enabled: true, camera_ids: [1], zone_ids: [], labels: ["car"], min_score: 0.5,
     identity: { mode: "specific", identity_ids: [20] }, trigger: "enter", min_dwell_s: 0, schedule: null, cooldown_s: 120, trigger_options: {}, conditions: [], condition_delay_s: 0,
     actions: [{ type: "webhook", url: "http://homeassistant:8123/api/webhook/auto", method: "POST", headers: {}, body: null }] },
-  { id: 3, name: "Hund lungert auf Terrasse", enabled: false, camera_ids: [2], zone_ids: ["z2"], labels: ["dog"], min_score: 0.5,
+  { id: 3, name: "Dog loitering on patio", enabled: false, camera_ids: [2], zone_ids: ["z2"], labels: ["dog"], min_score: 0.5,
     identity: { mode: "any", identity_ids: [] }, trigger: "dwell", min_dwell_s: 30, schedule: null, cooldown_s: 300, trigger_options: {}, conditions: [], condition_delay_s: 0,
     actions: [{ type: "snapshot" }] },
 ];
@@ -150,16 +150,16 @@ let settings: Settings = {
   retention_days_events: 30, retention_days_media: 7, face_match_threshold: 0.45, pet_match_threshold: 0.8,
   plate_max_distance: 1, mqtt_prefix: "visionguard", publish_all_events: true,
   inventory_vocabulary: [
-    { label: "keys", name_de: "Schlüssel", group: "Persönliches", prompts: ["keys", "key ring"], min_score: null },
-    { label: "remote", name_de: "Fernbedienung", group: "Elektronik", prompts: ["remote control"], min_score: null },
-    { label: "book", name_de: "Buch", group: "Sonstiges", prompts: ["book"], min_score: null },
-    { label: "lamp", name_de: "Lampe", group: "Möbel & Einrichtung", prompts: ["lamp"], min_score: null },
-    { label: "table", name_de: "Tisch", group: "Möbel & Einrichtung", prompts: ["table", "dining table"], min_score: null },
+    { label: "keys", name_de: "Schlüssel", names: { en: "Keys" }, group: "Personal", prompts: ["keys", "key ring"], min_score: null },
+    { label: "remote", name_de: "Fernbedienung", names: { en: "Remote control" }, group: "Electronics", prompts: ["remote control"], min_score: null },
+    { label: "book", name_de: "Buch", names: { en: "Book" }, group: "Other", prompts: ["book"], min_score: null },
+    { label: "lamp", name_de: "Lampe", names: { en: "Lamp" }, group: "Furniture & decor", prompts: ["lamp"], min_score: null },
+    { label: "table", name_de: "Tisch", names: { en: "Table" }, group: "Furniture & decor", prompts: ["table", "dining table"], min_score: null },
   ],
   inventory_synonyms: {}, inventory_confirm_n: 2, inventory_miss_m: 3, retention_days_inventory: 30,
   media_link_ttl_h: 24, public_base_url: null,
   push_targets: [
-    { id: "handy", type: "ntfy", name: "Handy (ntfy)", enabled: true, server: "https://ntfy.sh", topic: "vg-mock-topic", token: "***", user_key: null, app_token: null },
+    { id: "handy", type: "ntfy", name: "Phone (ntfy)", enabled: true, server: "https://ntfy.sh", topic: "vg-mock-topic", token: "***", user_key: null, app_token: null },
   ],
   notify_routes: { health: ["handy"], pet: [], review: [], report: [], sensor: [] },
   push_max_per_rule_per_day: 3, weather_location: { lat: 50.11, lon: 8.68 }, retention_days_notifications: 30,
@@ -186,7 +186,7 @@ let settings: Settings = {
   nightly_cleanup_days: 3,
   language: "en",
   languages_available: [{ code: "en", name: "English" }, { code: "de", name: "Deutsch" }],
-  tv_targets: [{ id: "wohnzimmer", name: "Fernseher Wohnzimmer", enabled: true, type: "dlna", description_url: "http://192.168.1.50:9197/dmr" }],
+  tv_targets: [{ id: "wohnzimmer", name: "Living room TV", enabled: true, type: "dlna", description_url: "http://192.168.1.50:9197/dmr" }],
   tv_stream_base_url: "http://192.168.1.10:8090",
   llm_key_configured: { openai_compat: false, anthropic: false },
 };
@@ -195,28 +195,28 @@ let settings: Settings = {
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 let presence: Presence[] = [
   { presence_key: "p-1a2b3c4d5e", label: "person", identity: { id: 12, kind: "face", display_name: "Anna", name: "Anna" },
-    source: "reid", confidence: 0.83, camera_id: 3, camera_name: "Wohnzimmer", room: "Wohnzimmer", zones: [], zone_names: [],
+    source: "reid", confidence: 0.83, camera_id: 3, camera_name: "Living room", room: "Living room", zones: [], zone_names: [],
     active: true, since: minsAgo(4), last_seen: minsAgo(0), event_id: null, thumb_url: faceSvg(12),
     trail: [
-      { camera_id: 3, camera_name: "Wohnzimmer", since: minsAgo(4), last_seen: minsAgo(0), active: true, event_id: null, via: "reid" },
-      { camera_id: 1, camera_name: "Einfahrt", since: minsAgo(9), last_seen: minsAgo(6), active: false, event_id: null, via: "face" },
+      { camera_id: 3, camera_name: "Living room", since: minsAgo(4), last_seen: minsAgo(0), active: true, event_id: null, via: "reid" },
+      { camera_id: 1, camera_name: "Driveway", since: minsAgo(9), last_seen: minsAgo(6), active: false, event_id: null, via: "face" },
     ] },
-  { presence_key: "p-9f8e7d6c5b", label: "person", identity: null, source: "none", confidence: 0, camera_id: 1, camera_name: "Einfahrt",
-    room: "Außen", zones: ["z1"], zone_names: ["Tor"], active: false, since: minsAgo(25), last_seen: minsAgo(21), event_id: null,
-    thumb_url: faceSvg(31), trail: [{ camera_id: 1, camera_name: "Einfahrt", since: minsAgo(25), last_seen: minsAgo(21), active: false, event_id: null, via: "track" }] },
+  { presence_key: "p-9f8e7d6c5b", label: "person", identity: null, source: "none", confidence: 0, camera_id: 1, camera_name: "Driveway",
+    room: "Outdoors", zones: ["z1"], zone_names: ["Gate"], active: false, since: minsAgo(25), last_seen: minsAgo(21), event_id: null,
+    thumb_url: faceSvg(31), trail: [{ camera_id: 1, camera_name: "Driveway", since: minsAgo(25), last_seen: minsAgo(21), active: false, event_id: null, via: "track" }] },
   { presence_key: "p-0c0ffee000", label: "cat", identity: { id: 21, kind: "pet", display_name: "Mimi", name: "Mimi" },
-    source: "pet", confidence: 1, camera_id: 3, camera_name: "Wohnzimmer", room: "Wohnzimmer", zones: [], zone_names: [],
+    source: "pet", confidence: 1, camera_id: 3, camera_name: "Living room", room: "Living room", zones: [], zone_names: [],
     active: false, since: minsAgo(50), last_seen: minsAgo(41), event_id: null, thumb_url: faceSvg(21, "pet"),
-    trail: [{ camera_id: 3, camera_name: "Wohnzimmer", since: minsAgo(50), last_seen: minsAgo(41), active: false, event_id: null, via: "face" }] },
+    trail: [{ camera_id: 3, camera_name: "Living room", since: minsAgo(50), last_seen: minsAgo(41), active: false, event_id: null, via: "face" }] },
 ];
 
 /* ---------- W2: Rückfragen, Haustier-Tagebuch, Berichte ---------- */
 let reviews: ReviewRequest[] = [
-  { id: 41, kind: "inventory_label", status: "open", question: "Ist das eine Fernbedienung?", camera_id: 3, camera_name: "Wohnzimmer",
+  { id: 41, kind: "inventory_label", status: "open", question: "Is this a remote control?", camera_id: 3, camera_name: "Living room",
     label: "remote", name_de: "Fernbedienung", inventory_item_id: null, identity_id: null, source_identity_id: null, score: 0.31,
-    threshold: 0.35, bbox: [0.41, 0.55, 0.47, 0.6], crop_url: sceneSvg("Fernbedienung?", 30, 320, 240), snapshot_url: null, data: {},
+    threshold: 0.35, bbox: [0.41, 0.55, 0.47, 0.6], crop_url: sceneSvg("Remote control?", 30, 320, 240), snapshot_url: null, data: {},
     created_at: ago(900), answered_at: null, answer_source: null, expires_at: new Date(Date.now() + 47 * 3600e3).toISOString(), correct_label: null },
-  { id: 42, kind: "identity_match", status: "open", question: "Ist Person #12 dieselbe Person wie Anna?", camera_id: null, camera_name: null,
+  { id: 42, kind: "identity_match", status: "open", question: "Is Person #12 the same person as Anna?", camera_id: null, camera_name: null,
     label: null, name_de: null, inventory_item_id: null, identity_id: 1, source_identity_id: 12, score: 0.41, threshold: 0.45, bbox: null,
     crop_url: faceSvg(12), snapshot_url: null, data: {}, created_at: ago(3600), answered_at: null, answer_source: null,
     expires_at: new Date(Date.now() + 45 * 3600e3).toISOString(), correct_label: null },
@@ -225,14 +225,14 @@ let reviews: ReviewRequest[] = [
 const dayStr = (back: number) => { const d = new Date(Date.now() - back * 86400e3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const daily = (counts: number[]) => counts.map((count, i) => ({ day: dayStr(counts.length - 1 - i), count }));
 const petVisits: PetVisit[] = [
-  { id: 4, identity: null, label: "cat", camera_id: 2, camera_name: "Garten", zone_id: "z2", zone_name: "Terrasse", purpose: "water",
+  { id: 4, identity: null, label: "cat", camera_id: 2, camera_name: "Garden", zone_id: "z2", zone_name: "Patio", purpose: "water",
     event_id: null, start_ts: ago(1200), end_ts: null, duration_s: null, thumb_url: null },
-  { id: 3, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
-    zone_id: "z2", zone_name: "Terrasse", purpose: "water", event_id: null, start_ts: ago(5400), end_ts: ago(5380), duration_s: 20, thumb_url: faceSvg(30, "pet") },
-  { id: 2, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
-    zone_id: "z2", zone_name: "Terrasse", purpose: "food", event_id: null, start_ts: ago(30000), end_ts: ago(29900), duration_s: 100, thumb_url: faceSvg(30, "pet") },
-  { id: 1, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garten",
-    zone_id: "z2", zone_name: "Terrasse", purpose: "food", event_id: null, start_ts: ago(86400 + 4000), end_ts: ago(86400 + 3950), duration_s: 50, thumb_url: faceSvg(30, "pet") },
+  { id: 3, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garden",
+    zone_id: "z2", zone_name: "Patio", purpose: "water", event_id: null, start_ts: ago(5400), end_ts: ago(5380), duration_s: 20, thumb_url: faceSvg(30, "pet") },
+  { id: 2, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garden",
+    zone_id: "z2", zone_name: "Patio", purpose: "food", event_id: null, start_ts: ago(30000), end_ts: ago(29900), duration_s: 100, thumb_url: faceSvg(30, "pet") },
+  { id: 1, identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", camera_id: 2, camera_name: "Garden",
+    zone_id: "z2", zone_name: "Patio", purpose: "food", event_id: null, start_ts: ago(86400 + 4000), end_ts: ago(86400 + 3950), duration_s: 50, thumb_url: faceSvg(30, "pet") },
 ];
 const petSummary: PetSummary[] = [
   { identity: { id: 30, kind: "pet", display_name: "Bello", name: "Bello" }, label: "dog", name: "Bello",
@@ -244,41 +244,41 @@ const petSummary: PetSummary[] = [
       litter: { today: 0, normal: null, median: null, expected_now: null, status: "unknown", last_ts: null, gap_s: null, usual_gap_s: null,
         daily: daily([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]) },
     } },
-  { identity: null, label: "cat", name: "Katze (unbekannt)",
+  { identity: null, label: "cat", name: "Cat (unknown)",
     purposes: { water: { today: 1, normal: null, median: null, expected_now: null, status: "unknown", last_ts: ago(1200), gap_s: 1200,
       usual_gap_s: null, daily: daily([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]) } } },
 ];
 function mockFacts(start: string, end: string): ReportFacts {
   // Wie das Backend (B3, report/facts.py) – feste Beispielwerte
   const sections = [
-    { key: "people", title: "Personen", text: "12× erkannt – bekannt: Anna 3× (07:12–17:10); 2 unbekannte Gesichter, davon 1 neu; 5× ohne erkanntes Gesicht." },
-    { key: "vehicles", title: "Fahrzeuge", text: "3 Autos (zuletzt 18:40) und 1 Fahrrad (zuletzt 08:05); Kennzeichen: Papa (B-AB 123) 18:40." },
-    { key: "animals", title: "Tiere", text: "Bello 4× (zuletzt 19:20, Garten); Näpfe/Klo: Bello Wassernapf 2× (zuletzt 18:02)." },
-    { key: "inventory", title: "Gegenstände", text: "1 neu (Schlüssel (Flur)), 1 verschoben (Fernbedienung: Tisch → Sofa)." },
-    { key: "rules", title: "Regeln", text: "„Person an Einfahrt nachts“ 07:12." },
-    { key: "system", title: "Hinweise", text: "1× Kamera-Zustand." },
+    { key: "people", title: "People", text: "Detected 12× – known: Anna 3× (07:12–17:10); 2 unknown faces, 1 of them new; 5× without a recognised face." },
+    { key: "vehicles", title: "Vehicles", text: "3 cars (last 18:40) and 1 bicycle (last 08:05); plates: Dad (B-AB 123) 18:40." },
+    { key: "animals", title: "Animals", text: "Bello 4× (last 19:20, Garden); bowls/litter: Bello water bowl 2× (last 18:02)." },
+    { key: "inventory", title: "Objects", text: "1 new (Keys (Hallway)), 1 moved (Remote control: table → sofa)." },
+    { key: "rules", title: "Rules", text: "“Person at driveway at night” 07:12." },
+    { key: "system", title: "Notifications", text: "1× camera health." },
   ];
   const p = (name: string, count: number, first: number, last: number, kind = "face") => ({
     identity_id: count, kind, name, display_name: name, plate_text: kind === "plate" ? "B-AB 123" : null, label: kind === "pet" ? "dog" : kind === "plate" ? "car" : "person",
-    count, first: ago(first), last: ago(last), cameras: ["Einfahrt"], new: false });
+    count, first: ago(first), last: ago(last), cameras: ["Driveway"], new: false });
   return {
-    version: 1, period: { start, end, date: end.slice(0, 10), weekday: "Samstag", hours: 24 },
+    version: 1, period: { start, end, date: end.slice(0, 10), weekday: "Saturday", hours: 24 },
     events: [], counts: { events: 20, person: 12, vehicle: 4, animal: 4, rules: 1, inventory: 2, notifications: 1 },
     people: { events: 12, named: [p("Anna", 3, 40000, 14000)], unknown_faces: 2, new_faces: 1, without_face: 5, unknown: [] },
-    vehicles: { total: 4, plates: [p("Papa", 1, 9000, 9000, "plate")], plates_total: 1, by_label: [
-      { label: "car", name_de: "Autos", group: "vehicle", count: 3, first: ago(30000), last: ago(9000), cameras: [] },
-      { label: "bicycle", name_de: "Fahrräder", group: "vehicle", count: 1, first: ago(40000), last: ago(40000), cameras: [] }] },
+    vehicles: { total: 4, plates: [p("Dad", 1, 9000, 9000, "plate")], plates_total: 1, by_label: [
+      { label: "car", name_de: "Cars", group: "vehicle", count: 3, first: ago(30000), last: ago(9000), cameras: [] },
+      { label: "bicycle", name_de: "Bicycles", group: "vehicle", count: 1, first: ago(40000), last: ago(40000), cameras: [] }] },
     animals: { total: 4, named: [p("Bello", 4, 30000, 6000, "pet")], unnamed: 0,
-      by_label: [{ label: "dog", name_de: "Hunde", group: "animal", count: 4, first: ago(30000), last: ago(6000), cameras: [] }],
-      visits: [{ identity_id: 30, pet: "Bello", label: "dog", purpose: "water", purpose_de: "Wassernapf", count: 2, last: ago(10000), total_s: 65 }] },
-    rules: [{ name: "Person an Einfahrt nachts", count: 1, first: ago(40000), last: ago(40000), snapshot_url: null }],
+      by_label: [{ label: "dog", name_de: "Dogs", group: "animal", count: 4, first: ago(30000), last: ago(6000), cameras: [] }],
+      visits: [{ identity_id: 30, pet: "Bello", label: "dog", purpose: "water", purpose_de: "Water bowl", count: 2, last: ago(10000), total_s: 65 }] },
+    rules: [{ name: "Person at driveway at night", count: 1, first: ago(40000), last: ago(40000), snapshot_url: null }],
     inventory: { summary: sections[3].text, counts: { appeared: 1, moved: 1 }, changes: [
-      { type: "appeared", at: ago(12000), text: "Schlüssel: neu seit 18:05 im Flur", item_id: 1, label: "keys", name_de: "Schlüssel",
-        camera_id: 1, camera_name: "Flur", room: "Flur", before: null, after: { ts: ago(12000), state: "present", zone_names: [], crop_url: null } },
-      { type: "moved", at: ago(20000), text: "Fernbedienung: vom Tisch aufs Sofa", item_id: 2, label: "remote", name_de: "Fernbedienung",
-        camera_id: 3, camera_name: "Wohnzimmer", room: "Wohnzimmer", before: { ts: ago(50000), state: "present", zone_names: [], crop_url: null },
+      { type: "appeared", at: ago(12000), text: "Keys: new since 18:05 in the hallway", item_id: 1, label: "keys", name_de: "Schlüssel",
+        camera_id: 1, camera_name: "Hallway", room: "Hallway", before: null, after: { ts: ago(12000), state: "present", zone_names: [], crop_url: null } },
+      { type: "moved", at: ago(20000), text: "Remote control: moved from the table to the sofa", item_id: 2, label: "remote", name_de: "Fernbedienung",
+        camera_id: 3, camera_name: "Living room", room: "Living room", before: { ts: ago(50000), state: "present", zone_names: [], crop_url: null },
         after: { ts: ago(20000), state: "present", zone_names: [], crop_url: null } }] },
-    notifications: { by_source: { health: 1 }, items: [{ ts: ago(3600), source: "health", source_de: "Kamera-Zustand", level: "warning", title: "Kamera Garten: unscharf" }] },
+    notifications: { by_source: { health: 1 }, items: [{ ts: ago(3600), source: "health", source_de: "Camera health", level: "warning", title: "Camera Garden: blurry" }] },
     system: { cameras: [], offline_cameras: [] },
     sections,
   };
@@ -286,28 +286,28 @@ function mockFacts(start: string, end: string): ReportFacts {
 
 function mockReport(id: number | null, kind: "daily" | "manual", start: string, end: string, deliver = false): Report {
   const facts = mockFacts(start, end);
-  const head = new Date(end).toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit" });
-  const text = [`${kind === "daily" ? "Tagesbericht" : "Bericht"} ${head}`, ...facts.sections.map((x) => `${x.title}: ${x.text}`)].join("\n");
+  const head = new Date(end).toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "2-digit" });
+  const text = [`${kind === "daily" ? "Daily report" : "Report"} ${head}`, ...facts.sections.map((x) => `${x.title}: ${x.text}`)].join("\n");
   return { id, kind, period_start: start, period_end: end, created_at: now(), text, html: `<p>${text}</p>`, generator: "template",
     delivery: deliver ? { mqtt: { ok: true, ts: now() }, push: { ok: true, ts: now(), targets: 1 } } : {}, facts };
 }
 
 let reports: Report[] = [
   { id: 1, kind: "daily", period_start: ago(86400 + 3600 * 3), period_end: ago(3600 * 3), created_at: ago(3600 * 3),
-    text: "Gestern: 12 Personen (Anna 17:10), 3 Fahrzeuge, Bello 4× im Garten. Schlüssel liegt seit 18:05 auf der Kommode.",
+    text: "Yesterday: 12 people (Anna 17:10), 3 vehicles, Bello 4× in the garden. Keys have been on the sideboard since 18:05.",
     generator: "template", delivery: { mqtt: { ok: true, ts: ago(3600 * 3) } } },
 ];
 
 /* ---------- W1: Hinweise, Veränderungen, Kamera-Gesundheit ---------- */
 let notifications: VGNotification[] = [
-  { id: 3, ts: ago(240), source: "rule", level: "info", rule_id: 1, rule: "Schlüssel vergessen", title: "Schlüssel vergessen",
-    message: "Schlüssel liegt noch am Brett (Flur, Schlüsselbrett)", camera_id: 1, event_id: null, item_ids: [], image_url: null,
+  { id: 3, ts: ago(240), source: "rule", level: "info", rule_id: 1, rule: "Keys left behind", title: "Keys left behind",
+    message: "Keys are still on the hook (Hallway, key hooks)", camera_id: 1, event_id: null, item_ids: [], image_url: null,
     data: { pushed: true }, delivery: [{ target: "handy", ok: true, status: "sent", error: null, ts: ago(238) }] },
-  { id: 2, ts: ago(3600), source: "health", level: "warning", rule_id: null, rule: null, title: "Kamera Garten: unscharf",
-    message: "Kamera Garten ist seit 13:02 unscharf (Schärfe 28 % der Referenz).", camera_id: 2, event_id: null, item_ids: [],
+  { id: 2, ts: ago(3600), source: "health", level: "warning", rule_id: null, rule: null, title: "Camera Garden: blurry",
+    message: "Camera Garden has been blurry since 13:02 (sharpness 28 % of reference).", camera_id: 2, event_id: null, item_ids: [],
     image_url: null, data: { type: "blur", pushed: true }, delivery: [{ target: "handy", ok: false, status: "failed", error: "HTTP 403: forbidden", ts: ago(3598) }] },
-  { id: 1, ts: ago(7200), source: "rule", level: "alarm", rule_id: 1, rule: "Medikamente", title: "Medikamente",
-    message: "Medikamente heute noch nicht genommen", camera_id: 3, event_id: null, item_ids: [], image_url: null,
+  { id: 1, ts: ago(7200), source: "rule", level: "alarm", rule_id: 1, rule: "Medication", title: "Medication",
+    message: "Medication not taken yet today", camera_id: 3, event_id: null, item_ids: [], image_url: null,
     data: { pushed: false }, delivery: [] },
 ];
 
@@ -318,30 +318,31 @@ function mockChanges(p: URLSearchParams): InventoryChanges {
     ts: ago(tsAgo), state, camera_id: it.camera_id, bbox, zones: it.zones, zone_names: it.zone_names,
     crop_url: state === "present" ? it.crop_url : null });
   const place = (it: InventoryItem) => it.room ?? it.camera_name;
+  const nm = (it: InventoryItem) => it.name ?? it.name_de;
   const book = byLabel("book"), keys = byLabel("keys"), remote = byLabel("remote"), lamp = byLabel("lamp");
   const changes: InventoryChange[] = [
     { type: "disappeared", at: ago(7200), item: keys, before: snap(keys, keys.bbox, 7300), after: snap(keys, keys.bbox, 7200, "missing"),
-      text: `${keys.name_de}: verschwunden (${place(keys)})` },
+      text: `${nm(keys)}: disappeared (${place(keys)})` },
     { type: "appeared", at: ago(1500), item: book, before: null, after: snap(book, book.bbox, 300),
-      text: `${book.name_de}: neu aufgetaucht (${place(book)}), vermutlich auf dem Tisch` },
+      text: `${nm(book)}: appeared (${place(book)}), probably on the table` },
     { type: "moved", at: ago(2400), item: remote, before: snap(remote, [0.12, 0.6, 0.19, 0.645], 5400), after: snap(remote, remote.bbox, 600),
-      text: `${remote.name_de}: vermutlich vom Sofa zum Tisch verschoben (${place(remote)})` },
+      text: `${nm(remote)}: probably moved from the sofa to the table (${place(remote)})` },
   ];
   if (p.get("include_transient") === "true" || p.get("include_transient") === "1")
     changes.push({ type: "transient", at: ago(3000), item: lamp, before: null, after: snap(lamp, lamp.bbox, 2950),
-      text: `${lamp.name_de}: zwischendurch da, inzwischen wieder weg (${place(lamp)})` });
+      text: `${nm(lamp)}: there for a while, gone again (${place(lamp)})` });
   if (p.get("since") === "yesterday")   // Beispiel für „Stand unklar“ (Kamera lieferte zeitweise keine Analyse)
     changes.push({ type: "uncertain", at: ago(900), item: { ...lamp, state: "stale", visible: false },
       before: snap(lamp, lamp.bbox, 1000), after: snap(lamp, lamp.bbox, 900, "stale"),
-      text: `${lamp.name_de}: Stand unklar – Kamera ${lamp.camera_name} liefert seit ${fmtHm(ago(900))} keine Gegenstandsanalyse` });
+      text: `${nm(lamp)}: status unclear – camera ${lamp.camera_name} has delivered no object analysis since ${fmtHm(ago(900))}` });
   const counts = { appeared: 0, disappeared: 0, moved: 0, uncertain: 0, transient: 0 };
   for (const c of changes) counts[c.type] += 1;
-  const sinceLabel: Record<string, string> = { morning: "06:00", today: "00:00", yesterday: "gestern 00:00", "3h": fmtHm(ago(10800)) };
-  const parts = [`1 neu (${book.name_de} (${place(book)}))`, `1 weg (${keys.name_de} (${place(keys)}))`, `1 verschoben (${remote.name_de}: Sofa → Tisch)`];
-  if (counts.transient) parts.push(`1 zwischendurch da (${lamp.name_de})`);
+  const sinceLabel: Record<string, string> = { morning: "06:00", today: "00:00", yesterday: "yesterday 00:00", "3h": fmtHm(ago(10800)) };
+  const parts = [`1 new (${nm(book)} (${place(book)}))`, `1 gone (${nm(keys)} (${place(keys)}))`, `1 moved (${nm(remote)}: sofa → table)`];
+  if (counts.transient) parts.push(`1 transient (${nm(lamp)})`);
   const since = p.get("since") ?? "morning";
   return { since: sinceLabel[since] ? since : since, until: now(),
-    summary: `Seit ${sinceLabel[since] ?? since}: ${parts.join(", ")}.`, counts, changes };
+    summary: `Since ${sinceLabel[since] ?? since}: ${parts.join(", ")}.`, counts, changes };
 }
 
 function fmtHm(iso: string): string {
@@ -352,7 +353,7 @@ function fmtHm(iso: string): string {
 function mockHealth(id: number): CameraHealth {
   const warn = id === 2;
   return { camera_id: id, enabled: true,
-    current: { state: warn ? "warn" : "ok", problems: warn ? [{ type: "blur", since: ago(3700), text: "Unscharf seit 13:02" }] : [],
+    current: { state: warn ? "warn" : "ok", problems: warn ? [{ type: "blur", since: ago(3700), text: "Blurry since 13:02" }] : [],
       pending: [],
       metrics: { brightness: 92, sharpness: warn ? 0.41 : 1.6, sharpness_ref: 1.5, diff: 3.2, inliers: 0.97, shift: 0.001, rotation: null, mode: "day" }, ts: now() },
     reference_urls: { day: null, night: null },
@@ -380,7 +381,7 @@ function livingRoomSvg(items: InventoryItem[]): string {
 <rect width="100%" height="100%" fill="#2a2420"/><rect y="${H * 0.62}" width="${W}" height="${H * 0.38}" fill="#3b3029"/>
 <rect x="${W * 0.78}" y="${H * 0.1}" width="${W * 0.16}" height="${H * 0.36}" fill="#1c2a3a" stroke="#4b3b30" stroke-width="10"/>
 ${parts.join("")}
-<text x="24" y="${H - 24}" font-family="monospace" font-size="22" fill="#ffffff88">Wohnzimmer – cam_3</text></svg>`;
+<text x="24" y="${H - 24}" font-family="monospace" font-size="22" fill="#ffffff88">Living room – cam_3</text></svg>`;
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
@@ -396,12 +397,17 @@ function itemCropSvg(label: string): string {
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
-const vocabName = (label: string) => settings.inventory_vocabulary.find((v) => v.label === label)?.name_de ?? label;
+// name_de bleibt deutsch, name = Anzeigename in der Sprache der Anfrage (Mock: Englisch, CONTRACT I18N.C)
+const vocabNameDe = (label: string) => settings.inventory_vocabulary.find((v) => v.label === label)?.name_de ?? label;
+const vocabName = (label: string) => {
+  const v = settings.inventory_vocabulary.find((x) => x.label === label);
+  return v?.names?.en ?? v?.prompts[0] ?? label;
+};
 
 function mkItem(id: number, label: string, bbox: Box4, state: InventoryItem["state"], lastSeenAgo: number, score: number): InventoryItem {
   const cam = cameras.find((c) => c.id === 3)!;
   return {
-    id, camera_id: cam.id, camera_name: cam.name, room: cam.room, label, name_de: vocabName(label), score, bbox,
+    id, camera_id: cam.id, camera_name: cam.name, room: cam.room, label, name_de: vocabNameDe(label), name: vocabName(label), score, bbox,
     zones: [], zone_names: [], state, visible: state === "present", relation: null,
     first_seen: ago(86400 * 3 + id * 600), last_seen: ago(lastSeenAgo), updated_at: ago(lastSeenAgo),
     crop_url: itemCropSvg(label), snapshot_url: null,
@@ -428,13 +434,13 @@ function relate(it: InventoryItem): InventoryRelation | null {
     const [a1, b1, a2, b2] = s.bbox;
     const ov = Math.max(0, Math.min(x2, a2) - Math.max(x1, a1)) * Math.max(0, Math.min(y2, b2) - Math.max(y1, b1));
     if (bx >= a1 && bx <= a2 && y2 >= b1 && y2 <= b2 && ov / area >= 0.6)
-      return { type: "on", item_id: s.id, label: s.label, name_de: s.name_de, text: `vermutlich auf dem ${s.name_de}` };
+      return { type: "on", item_id: s.id, label: s.label, name_de: s.name_de, text: `probably on the ${(s.name ?? s.name_de).toLowerCase()}` };
   }
   for (const s of surf) {
     const [a1, b1, a2, b2] = s.bbox;
     const dx = Math.max(0, a1 - x2, x1 - a2), dy = Math.max(0, b1 - y2, y1 - b2);
     if (Math.hypot(dx, dy) < 0.1)
-      return { type: "near", item_id: s.id, label: s.label, name_de: s.name_de, text: `vermutlich neben dem ${s.name_de}` };
+      return { type: "near", item_id: s.id, label: s.label, name_de: s.name_de, text: `probably next to the ${(s.name ?? s.name_de).toLowerCase()}` };
   }
   return null;
 }
@@ -447,7 +453,7 @@ function refreshInventoryMock() {
 refreshInventoryMock();
 
 const normDe = (t: string) => t.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
-  .replace(/\?/g, " ").replace(/\b(wo|ist|sind|liegt|der|die|das|den|dem|ein|eine|mein|meine|meinen|unser|unsere)\b/g, " ").trim().replace(/\s+/g, " ");
+  .replace(/\?/g, " ").replace(/\b(wo|ist|sind|liegt|der|die|das|den|dem|ein|eine|mein|meine|meinen|unser|unsere|where|is|are|the|a|an|my|our)\b/g, " ").trim().replace(/\s+/g, " ");
 
 function searchInventory(q: string): { query: string; answer: string; items: InventorySearchHit[] } {
   const nq = normDe(q);
@@ -458,7 +464,7 @@ function searchInventory(q: string): { query: string; answer: string; items: Inv
       const syn = settings.inventory_synonyms[it.label] ?? [];
       let via: InventorySearchHit["match"]["via"] | null = null;
       if (normDe(it.label) === nq) via = "label";
-      else if (normDe(it.name_de).includes(nq) || nq.includes(normDe(it.name_de))) via = "name";
+      else if ([it.name_de, it.name ?? ""].some((n) => n && (normDe(n).includes(nq) || nq.includes(normDe(n))))) via = "name";
       else if (syn.some((x) => normDe(x).includes(nq))) via = "synonym";
       else if (v?.prompts.some((x) => normDe(x).includes(nq))) via = "prompt";
       if (via) hits.push({ ...it, match: { score: via === "name" || via === "label" ? 100 : 90, via } });
@@ -466,9 +472,10 @@ function searchInventory(q: string): { query: string; answer: string; items: Inv
   }
   hits.sort((a, b) => Number(b.visible) - Number(a.visible) || (a.last_seen < b.last_seen ? 1 : -1));
   const h = hits[0];
-  const answer = !h ? `Kein Gegenstand „${q.trim()}“ bekannt.`
-    : h.visible ? `${h.name_de}: aktuell sichtbar in ${h.room ?? h.camera_name} (Kamera ${h.camera_name})${h.relation ? `, ${h.relation.text}` : ""}, seit ${new Date(h.first_seen).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}.`
-    : `${h.name_de}: zuletzt gesehen vor ${Math.max(1, Math.round((Date.now() - new Date(h.last_seen).getTime()) / 3600000))} h in ${h.room ?? h.camera_name} (Kamera ${h.camera_name}).`;
+  const hn = h ? h.name ?? h.name_de : "";
+  const answer = !h ? `No object “${q.trim()}” known.`
+    : h.visible ? `${hn}: currently visible in ${h.room ?? h.camera_name} (camera ${h.camera_name})${h.relation ? `, ${h.relation.text}` : ""}, since ${new Date(h.first_seen).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}.`
+    : `${hn}: last seen ${Math.max(1, Math.round((Date.now() - new Date(h.last_seen).getTime()) / 3600000))} h ago in ${h.room ?? h.camera_name} (camera ${h.camera_name}).`;
   return { query: q, answer, items: hits };
 }
 
@@ -503,9 +510,9 @@ function mkEvent(i: number, ageS: number): VGEvent {
 let events: VGEvent[] = Array.from({ length: 140 }, (_, i) => mkEvent(i, i * 620 + 20));
 // W2 C1: ein laufender, unquittierter Sturz-Notfall (Banner „Quittieren“)
 events = [{
-  ...events[0], id: "mock-fall-1", label: "person", active: true, end_ts: null, acknowledged_at: null, rules: ["Sturz Wohnzimmer"],
+  ...events[0], id: "mock-fall-1", label: "person", active: true, end_ts: null, acknowledged_at: null, rules: ["Fall in living room"],
   attributes: { posture: "lying", posture_since: Date.now() / 1000 - 95, motion: 0.01,
-    alert: { rule: "Sturz Wohnzimmer", rule_id: 9, trigger: "posture", repeat: 1, fired_at: ago(35), first_fired_at: ago(35),
+    alert: { rule: "Fall in living room", rule_id: 9, trigger: "posture", repeat: 1, fired_at: ago(35), first_fired_at: ago(35),
       posture: "lying", posture_since: ago(95) } },
 }, ...events.slice(1)];
 
@@ -523,7 +530,7 @@ let apiTokens: ApiToken[] = [
     last_used_at: ago(180), expires_at: null, revoked_at: null, revoked: false, expired: false },
   { id: 2, name: "Home Assistant", prefix: "vgt_9xk2m1qa", scopes: ["read", "write"], created_at: ago(86400 * 40),
     last_used_at: ago(86400 * 2), expires_at: new Date(Date.now() + 86400 * 1000 * 50).toISOString(), revoked_at: null, revoked: false, expired: false },
-  { id: 3, name: "Alter Test", prefix: "vgt_old00test", scopes: ["read"], created_at: ago(86400 * 90),
+  { id: 3, name: "Old test", prefix: "vgt_old00test", scopes: ["read"], created_at: ago(86400 * 90),
     last_used_at: null, expires_at: null, revoked_at: ago(86400 * 30), revoked: true, expired: false },
 ];
 function mockKey(): { key: string; prefix: string } {
@@ -542,12 +549,12 @@ const nightlyReports: NightlyReport[] = [{
   id: 1, mode: "preview", trigger: "schedule", status: "done", started_at: ago(6 * 3600), finished_at: ago(6 * 3600 - 4),
   error: null, applied_report_id: null, applied_at: null,
   summary: { identities: 4, fragments: 2, merges: 1, reviews: 1, curated: 0, negatives: 0, removed_samples: 0, thresholds: 0, cleanup: 0 },
-  text: "Probelauf: 1 Fragment würde zusammengeführt, 1 Rückfrage.",
+  text: "Preview: 1 fragment would be merged, 1 question.",
   actions: [
     { idx: 0, type: "merge", applied: false, src_id: 13, src_display_name: "Person #13", src_cover_url: faceSvg(13),
       into_id: 1, into_display_name: "Anna", into_cover_url: faceSvg(1), into_named: true, score: 0.62, second_score: 0.31, samples: 2, events: 3 },
     { idx: 1, type: "review", applied: false, src_id: 12, src_display_name: "Person #12", src_cover_url: faceSvg(12),
-      into_id: 2, into_display_name: "Paketbote", into_cover_url: faceSvg(2), into_named: true, score: 0.46, second_score: 0.2, samples: 7, events: 23 },
+      into_id: 2, into_display_name: "Delivery driver", into_cover_url: faceSvg(2), into_named: true, score: 0.46, second_score: 0.2, samples: 7, events: 23 },
   ],
 }];
 const summaryOf = (r: NightlyReport): NightlyReportSummary => { const { actions: _a, ...rest } = r; return rest; };
@@ -570,7 +577,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   await new Promise((r) => setTimeout(r, 120 + Math.random() * 150));
   if (path === "/auth/login") {
     if (body?.username === "admin" && body?.password === "admin") { loggedIn = true; sessionStorage.setItem("vg.mock.login", "1"); return json({ username: "admin" }); }
-    return json({ detail: "Benutzername oder Passwort falsch" }, 401);
+    return json({ detail: "Incorrect username or password" }, 401);
   }
   if (path === "/auth/logout") { loggedIn = false; sessionStorage.removeItem("vg.mock.login"); return json(undefined, 204); }
   if (!loggedIn) return json({ detail: "Not authenticated" }, 401);
@@ -578,7 +585,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/tokens" && method === "GET") return json([...apiTokens].sort((x, y) => y.created_at.localeCompare(x.created_at)));
   if (path === "/tokens" && method === "POST") {
     const name = String(body?.name ?? "").trim();
-    if (!name) return json({ detail: "Name darf nicht leer sein" }, 422);
+    if (!name) return json({ detail: "Name must not be empty" }, 422);
     const scopes: TokenScope[] = (body?.scopes ?? []).includes("write") ? ["read", "write"] : ["read"];
     const { key, prefix } = mockKey();
     const t: ApiToken = { id: nextId++, name, prefix, scopes, created_at: now(), last_used_at: null,
@@ -590,7 +597,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   const tokenMatch = method === "DELETE" ? path.match(/^\/tokens\/(\d+)$/) : null;
   if (tokenMatch) {
     const t = apiTokens.find((x) => x.id === Number(tokenMatch[1]));
-    if (!t) return json({ detail: "API-Zugang nicht gefunden" }, 404);
+    if (!t) return json({ detail: "API key not found" }, 404);
     if (!t.revoked) apiTokens = apiTokens.map((x) => (x.id === t.id ? { ...x, revoked: true, revoked_at: now() } : x));
     return json(undefined, 204);
   }
@@ -622,14 +629,14 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
       return json(ptzSet({ mode: t === "1" ? "idle" : "manual", view: t === "1" ? "home" : "away", preset: t,
         preset_name: ptzPresets.find((x) => x.token === t)?.name ?? null, until: t === "1" ? null : new Date(Date.now() + 60_000).toISOString() }));
     }
-    if (sub === "/resume") return json(ptzSet({ mode: "idle", view: "home", preset: "1", preset_name: "Grundposition", until: null }));
+    if (sub === "/resume") return json(ptzSet({ mode: "idle", view: "home", preset: "1", preset_name: "Home position", until: null }));
     if (sub === "/pause") return json(ptzSet({ paused_until: body?.minutes ? new Date(Date.now() + body.minutes * 60_000).toISOString() : null }));
     if (sub === "/home" && method === "POST") {
-      const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "Grundposition" }; ptzPresets.push(p);
+      const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "Home position" }; ptzPresets.push(p);
       const cam = cameras.find((c) => c.id === Number(m![1])); if (cam) cam.ptz = { ...cam.ptz, home_preset: p.token };
       return json({ ...p, state: ptzSet({ mode: "idle", view: "home", preset: p.token, preset_name: p.name, until: null }) });
     }
-    if (sub === "/presets" && method === "POST") { const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "Neu" }; ptzPresets.push(p); return json(p, 201); }
+    if (sub === "/presets" && method === "POST") { const p = { token: String(ptzPresets.length + 1), name: body?.name ?? "New" }; ptzPresets.push(p); return json(p, 201); }
     if (sub === "/presets" && method === "DELETE") { const i = ptzPresets.findIndex((x) => x.token === decodeURIComponent((m![3] ?? "").slice(1))); if (i >= 0) ptzPresets.splice(i, 1); return json(undefined, 204); }
   }
   // Fernseher (CONTRACT TV.C)
@@ -640,12 +647,12 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/tv/probe") {
     await new Promise((r) => setTimeout(r, 600));
     return json(String(body?.description_url).includes("fail")
-      ? { ok: false, description_url: body?.description_url, name: null, model: null, error: "Fernseher nicht erreichbar (eingeschaltet?)" }
+      ? { ok: false, description_url: body?.description_url, name: null, model: null, error: "TV not reachable (switched on?)" }
       : { ok: true, description_url: /^https?:/.test(body?.description_url) ? body.description_url : `http://${body?.description_url}:9197/dmr`, name: "Samsung QN900A 75 TV", model: "GQ75QN900ATXZG", error: null });
   }
   if ((m = path.match(/^\/tv\/([^/]+)\/(show|stop)$/))) {
     const t = settings.tv_targets.find((x) => x.id === decodeURIComponent(m![1]));
-    if (!t) return json({ detail: "Fernseher nicht gefunden" }, 404);
+    if (!t) return json({ detail: "TV not found" }, 404);
     if (m[2] === "show") {
       const cam = cameras.find((c) => c.id === body?.camera_id);
       tvShowing[t.id] = { camera_id: body?.camera_id, camera_name: cam?.name ?? null, since: new Date().toISOString(),
@@ -655,15 +662,15 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   }
   if (path === "/cameras/test") {
     await new Promise((r) => setTimeout(r, 900));
-    return json(String(body?.url).includes("fail") ? { ok: false, error: "Verbindung abgelehnt (connection refused)" } : { ok: true, width: 1920, height: 1080, codec: "H264" });
+    return json(String(body?.url).includes("fail") ? { ok: false, error: "Connection refused" } : { ok: true, width: 1920, height: 1080, codec: "H264" });
   }
   if ((m = path.match(/^\/cameras\/(\d+)$/))) {
     const id = Number(m[1]); const idx = cameras.findIndex((c) => c.id === id);
-    if (idx < 0) return json({ detail: "Nicht gefunden" }, 404);
+    if (idx < 0) return json({ detail: "Not found" }, 404);
     if (method === "GET") return json(cameras[idx]);
     if (method === "PUT") {
       const unknown = (body?.inventory_labels ?? []).find((l: string) => !settings.inventory_vocabulary.some((v) => v.label === l));
-      if (unknown) return json({ detail: `Unbekannter Gegenstand: ${unknown}` }, 422);
+      if (unknown) return json({ detail: `Unknown object: ${unknown}` }, 422);
       cameras[idx] = { ...cameras[idx], ...body, id }; return json(cameras[idx]);
     }
     if (method === "DELETE") { cameras.splice(idx, 1); return json(undefined, 204); }
@@ -685,8 +692,8 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/identities/bulk-delete" && method === "POST") {
     const ids: number[] = [...new Set<number>(body?.ids ?? [])];
     const missing = ids.filter((x) => !identities.some((i) => i.id === x));
-    if (missing.length) return json({ detail: `Identität(en) nicht gefunden: ${missing.join(", ")}` }, 404);
-    if (!ids.length || ids.length > 500) return json({ detail: "1 bis 500 IDs" }, 422);
+    if (missing.length) return json({ detail: `Identities not found: ${missing.join(", ")}` }, 404);
+    if (!ids.length || ids.length > 500) return json({ detail: "1 to 500 IDs" }, 422);
     for (const x of ids) { identities.splice(identities.findIndex((i) => i.id === x), 1); delete samples[x]; }
     events = events.map((e) => (e.identity && ids.includes(e.identity.id) ? { ...e, identity: null } : e));
     return json({ deleted: ids });
@@ -695,15 +702,15 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     const target = identities.find((i) => i.id === body?.into_id);
     const ids: number[] = [...new Set<number>(body?.ids ?? [])].filter((x) => x !== body?.into_id);
     if ((body?.ids ?? []).length > 500) return json({ detail: "max. 500 IDs" }, 422);
-    if (!target) return json({ detail: `Identität(en) nicht gefunden: ${body?.into_id}` }, 404);
-    if (!ids.length) return json({ detail: "Keine Quellen ausgewählt" }, 422);
+    if (!target) return json({ detail: `Identities not found: ${body?.into_id}` }, 404);
+    if (!ids.length) return json({ detail: "No sources selected" }, 422);
     const missing = ids.filter((x) => !identities.some((i) => i.id === x));
-    if (missing.length) return json({ detail: `Identität(en) nicht gefunden: ${missing.join(", ")}` }, 404);
+    if (missing.length) return json({ detail: `Identities not found: ${missing.join(", ")}` }, 404);
     const srcs = ids.map((x) => identities.find((i) => i.id === x)!);
-    if (srcs.some((x) => x.kind !== target.kind)) return json({ detail: "Nur Identitäten gleicher Art können zusammengeführt werden" }, 422);
+    if (srcs.some((x) => x.kind !== target.kind)) return json({ detail: "Only identities of the same kind can be merged" }, 422);
     const limit = target.kind === "face" && (target.name || srcs.some((x) => x.name)) ? 40 : 20;
     const manual = [target, ...srcs].reduce((n, x) => n + (samples[x.id] ?? []).filter((s) => s.manual).length, 0);
-    if (manual > limit) return json({ detail: `max. ${limit} Bilder – erst alte löschen` }, 422);
+    if (manual > limit) return json({ detail: `max. ${limit} images – delete old ones first` }, 422);
     const mergeIds: number[] = [];
     for (const src of srcs) {
       const mid = nextId++; mergeIds.push(mid);
@@ -713,7 +720,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
         into_display_name: target.display_name, score: null, sample_count: src.sample_count, event_count: src.event_count,
         nightly_report_id: null, undone_at: null, undoable: true });
       if (src.name && !target.name) { target.name = src.name; target.display_name = src.name; }
-      else if (src.name && src.name !== target.name) target.notes = `${target.notes ? `${target.notes}\n` : ""}früher: ${src.name}`;
+      else if (src.name && src.name !== target.name) target.notes = `${target.notes ? `${target.notes}\n` : ""}formerly: ${src.name}`;
       samples[target.id] = [...(samples[target.id] ?? []), ...(samples[src.id] ?? [])];
       target.sample_count = Math.min(target.sample_count + src.sample_count, limit); target.event_count += src.event_count;
       events = events.map((e) => (e.identity?.id === src.id ? { ...e, identity: { id: target.id, kind: target.kind, display_name: target.display_name, name: target.name } } : e));
@@ -734,16 +741,16 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   }
   if ((m = path.match(/^\/identities\/merges\/(\d+)\/undo$/)) && method === "POST") {
     const mg = merges.find((x) => x.id === Number(m![1])); const snap = mockMergeUndo.get(Number(m[1]));
-    if (!mg || !snap) return json({ detail: "Zusammenführung nicht gefunden" }, 404);
-    if (mg.undone_at) return json({ detail: "Diese Zusammenführung wurde bereits zurückgesetzt" }, 409);
+    if (!mg || !snap) return json({ detail: "Merge not found" }, 404);
+    if (mg.undone_at) return json({ detail: "This merge has already been undone" }, 409);
     const target = identities.find((i) => i.id === mg.into_id);
-    if (!target) return json({ detail: "Ziel existiert nicht mehr – zuerst die spätere Zusammenführung zurücksetzen" }, 409);
+    if (!target) return json({ detail: "Target no longer exists – undo the later merge first" }, 409);
     const restored = { ...snap.ident };
     identities.push(restored); samples[restored.id] = snap.samples;
     const back = new Set(snap.samples.map((s) => s.id));
     samples[target.id] = (samples[target.id] ?? []).filter((s) => !back.has(s.id));
     target.sample_count = Math.max(0, target.sample_count - restored.sample_count); target.event_count = Math.max(0, target.event_count - restored.event_count);
-    if (restored.name) target.notes = target.notes.split("\n").filter((l) => l !== `früher: ${restored.name}`).join("\n");
+    if (restored.name) target.notes = target.notes.split("\n").filter((l) => l !== `formerly: ${restored.name}`).join("\n");
     events = events.map((e) => (snap.events.includes(e.id) ? { ...e, identity: { id: restored.id, kind: restored.kind, display_name: restored.display_name, name: restored.name } } : e));
     mg.undone_at = now(); mg.undoable = false;
     return json({ restored, target });
@@ -756,7 +763,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/nightly/reports") return json({ items: nightlyReports.map(summaryOf), total: nightlyReports.length });
   if ((m = path.match(/^\/nightly\/reports\/(\d+)$/))) {
     const r = nightlyReports.find((x) => x.id === Number(m![1]));
-    return r ? json(r) : json({ detail: "Bericht nicht gefunden" }, 404);
+    return r ? json(r) : json({ detail: "Report not found" }, 404);
   }
   if (path === "/nightly/run" && method === "POST") {
     const base = nightlyReports[nightlyReports.length - 1];
@@ -766,7 +773,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   }
   if ((m = path.match(/^\/nightly\/reports\/(\d+)\/apply$/)) && method === "POST") {
     const src = nightlyReports.find((x) => x.id === Number(m![1]));
-    if (!src || src.mode !== "preview" || src.applied_at) return json({ detail: "Bericht kann nicht angewandt werden" }, 409);
+    if (!src || src.mode !== "preview" || src.applied_at) return json({ detail: "Report cannot be applied" }, 409);
     src.applied_at = now();
     const r: NightlyReport = { ...src, id: nextId++, mode: "apply", trigger: "apply", applied_report_id: src.id, applied_at: null,
       started_at: now(), finished_at: now(), actions: src.actions.map((a) => ({ ...a, applied: true })) };
@@ -774,7 +781,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     return json(summaryOf(r), 202);
   }
   if (path === "/identities" && method === "POST") {   // W2 B4: Exemplar anlegen
-    const i: Identity = { id: nextId++, kind: "item", name: body?.name ?? null, display_name: body?.name ?? "Gegenstand", plate_text: null,
+    const i: Identity = { id: nextId++, kind: "item", name: body?.name ?? null, display_name: body?.name ?? "Object", plate_text: null,
       notes: "", sample_count: 0, cover_url: null, first_seen: now(), last_seen: now(), event_count: 0, learning_locked: false,
       item_label: body?.item_label ?? null };
     identities.push(i);
@@ -790,11 +797,11 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   }
   if ((m = path.match(/^\/identities\/(\d+)(\/.*)?$/))) {
     const id = Number(m[1]); const sub = m[2] ?? ""; const idx = identities.findIndex((i) => i.id === id);
-    if (idx < 0) return json({ detail: "Nicht gefunden" }, 404);
+    if (idx < 0) return json({ detail: "Not found" }, 404);
     const ident = identities[idx];
     if (sub === "" && method === "GET") return json(ident);
     if (sub === "" && method === "PATCH") {
-      if ("name" in body) { ident.name = body.name || null; ident.display_name = ident.name ?? (ident.kind === "plate" ? `Kennzeichen ${ident.plate_text}` : `${ident.kind === "face" ? "Person" : "Tier"} #${id}`); }
+      if ("name" in body) { ident.name = body.name || null; ident.display_name = ident.name ?? (ident.kind === "plate" ? `Plate ${ident.plate_text}` : `${ident.kind === "face" ? "Person" : "Animal"} #${id}`); }
       if ("notes" in body) ident.notes = body.notes;
       if (typeof body.learning_locked === "boolean") ident.learning_locked = body.learning_locked;
       return json(ident);
@@ -803,17 +810,17 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     if (sub === "" && method === "DELETE") { identities.splice(idx, 1); return json(undefined, 204); }
     if (sub === "/merge") {
       const target = identities.find((i) => i.id === body.into_id);
-      if (!target) return json({ detail: "Identität nicht gefunden" }, 404);
-      if (target.id === id) return json({ detail: "Quelle und Ziel sind identisch" }, 422);
-      if (target.kind !== ident.kind) return json({ detail: "Nur Identitäten gleicher Art können zusammengeführt werden" }, 422);
+      if (!target) return json({ detail: "Identity not found" }, 404);
+      if (target.id === id) return json({ detail: "Source and target are identical" }, 422);
+      if (target.kind !== ident.kind) return json({ detail: "Only identities of the same kind can be merged" }, 422);
       const src = samples[id] ?? [];
       const ids: number[] | null = Array.isArray(body.sample_ids) ? body.sample_ids : null;
-      if (ids && !ids.length) return json({ detail: "Keine Bilder ausgewählt" }, 422);
-      if (ids && ids.some((x) => !src.some((s) => s.id === x))) return json({ detail: "Mindestens ein ausgewähltes Bild gehört nicht zur Quelle" }, 422);
+      if (ids && !ids.length) return json({ detail: "No images selected" }, 422);
+      if (ids && ids.some((x) => !src.some((s) => s.id === x))) return json({ detail: "At least one selected image does not belong to the source" }, 422);
       const moving = ids ? src.filter((s) => ids.includes(s.id)).map((s) => ({ ...s, manual: true })) : src;
       const full = !ids || moving.length === src.length;
       const manualAfter = (samples[target.id] ?? []).filter((s) => s.manual).length + moving.filter((s) => s.manual).length;
-      if (manualAfter > 20) return json({ detail: "max. 20 Samples – erst alte löschen" }, 422);
+      if (manualAfter > 20) return json({ detail: "max. 20 samples – delete old ones first" }, 422);
       samples[target.id] = [...(samples[target.id] ?? []), ...moving]
         .sort((a, b) => Number(b.manual) - Number(a.manual) || b.quality - a.quality).slice(0, 20);
       target.sample_count = samples[target.id].length;
@@ -872,7 +879,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/inventory/search") { refreshInventoryMock(); return json(searchInventory(p.get("q") ?? "")); }
   if (path === "/inventory/labels") {
     return json(settings.inventory_vocabulary.map((v) => ({
-      label: v.label, name_de: v.name_de, group: v.group, prompts: v.prompts, synonyms: settings.inventory_synonyms[v.label] ?? [],
+      label: v.label, name_de: v.name_de, name: v.names?.en ?? v.name_de, group: v.group, prompts: v.prompts, synonyms: settings.inventory_synonyms[v.label] ?? [],
       count_present: inventory.filter((i) => i.label === v.label && i.state === "present").length,
       count_total: inventory.filter((i) => i.label === v.label).length,
     })));
@@ -891,7 +898,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   }
   if ((m = path.match(/^\/inventory\/(\d+)(\/history)?$/))) {
     const id = Number(m[1]); const it = inventory.find((i) => i.id === id);
-    if (!it) return json({ detail: "Gegenstand nicht gefunden" }, 404);
+    if (!it) return json({ detail: "Object not found" }, 404);
     if (m[2]) return json(inventoryHistory(it).slice(0, Number(p.get("limit") ?? 50)));
     if (method === "DELETE") { inventory = inventory.filter((i) => i.id !== id); return json(undefined, 204); }
     return json(it);
@@ -899,18 +906,18 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if (path === "/settings") { if (method === "PUT") settings = { ...settings, ...body }; return json(settings); }
   if (path === "/settings/push_test") {
     const t: PushTarget | undefined = body?.config ?? settings.push_targets.find((x) => x.id === body?.target);
-    return t ? json({ ok: t.type === "ntfy", error: t.type === "ntfy" ? null : "Mock: Pushover nicht erreichbar", target: t.id })
-      : json({ detail: `Push-Ziel „${body?.target}“ nicht gefunden` }, 404);
+    return t ? json({ ok: t.type === "ntfy", error: t.type === "ntfy" ? null : "Mock: Pushover not reachable", target: t.id })
+      : json({ detail: `Push target “${body?.target}” not found` }, 404);
   }
   if (path === "/rules/check" && method === "POST") {
     const conds: RuleInput["conditions"] = body?.conditions ?? [];
     const details = conds.map((c) => c.type === "track_came_from"
-      ? { type: c.type, ok: null, reason: "wird erst beim Auslösen geprüft (Weg des Tracks)" }
-      : c.type === "weather" ? { type: c.type, ok: c.min <= 40, reason: `Wetter: 40 % Regen ab 15 Uhr (Schwelle ${c.min} % in ${c.hours} h)` }
-      : c.type === "inventory" ? { type: c.type, ok: c.state === "present", reason: c.state === "present" ? "Schlüssel: sichtbar (Flur, Schlüsselbrett, Score 0.62)" : "Schlüssel: noch sichtbar (Flur, Schlüsselbrett)" }
-      : c.type === "sensor" ? { type: c.type, ok: c.state === "on", reason: `Sensor #${c.sensor_id}: an` }
-      : { type: c.type, ok: true, reason: `Medikamente: seit ${c.since} unberührt (Küche, Regal)` });
-    const ph = { items: conds.some((c) => c.type.startsWith("inventory")) ? "Schlüssel" : "", item_place: "Flur, Schlüsselbrett", weather: conds.some((c) => c.type === "weather") ? "40 % Regen ab 15 Uhr" : "" };
+      ? { type: c.type, ok: null, reason: "checked only when the rule fires (path of the track)" }
+      : c.type === "weather" ? { type: c.type, ok: c.min <= 40, reason: `Weather: 40 % rain from 3 pm (threshold ${c.min} % within ${c.hours} h)` }
+      : c.type === "inventory" ? { type: c.type, ok: c.state === "present", reason: c.state === "present" ? "Keys: visible (Hallway, key hooks, score 0.62)" : "Keys: still visible (Hallway, key hooks)" }
+      : c.type === "sensor" ? { type: c.type, ok: c.state === "on", reason: `Sensor #${c.sensor_id}: on` }
+      : { type: c.type, ok: true, reason: `Medication: untouched since ${c.since} (Kitchen, shelf)` });
+    const ph = { items: conds.some((c) => c.type.startsWith("inventory")) ? "Keys" : "", item_place: "Hallway, key hooks", weather: conds.some((c) => c.type === "weather") ? "40 % rain from 3 pm" : "" };
     const ok = details.every((d) => d.ok !== false);
     const push = (body?.actions ?? []).find((a: RuleAction) => a.type === "push") as Extract<RuleAction, { type: "push" }> | undefined;
     const fill = (s: string) => s.replace(/\{(items|item_place|weather|rule)\}/g, (_x: string, k: string) => (k === "rule" ? body?.name ?? "" : ph[k as keyof typeof ph]));
@@ -927,7 +934,7 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   if ((m = path.match(/^\/notifications\/(\d+)$/))) {
     const id = Number(m[1]);
     const n = notifications.find((x) => x.id === id);
-    if (!n) return json({ detail: "Hinweis nicht gefunden" }, 404);
+    if (!n) return json({ detail: "Notification not found" }, 404);
     if (method === "DELETE") { notifications = notifications.filter((x) => x.id !== id); return json(undefined, 204); }
     return json(n);
   }
@@ -943,9 +950,9 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
   ]);
   if ((m = path.match(/^\/review\/(\d+)(\/answer)?$/))) {
     const id = Number(m[1]); const r = reviews.find((x) => x.id === id);
-    if (!r) return json({ detail: "Rückfrage nicht gefunden" }, 404);
+    if (!r) return json({ detail: "Question not found" }, 404);
     if (m[2] && method === "POST") {
-      if (r.status !== "open") return json({ detail: "Frage ist nicht mehr offen" }, 409);
+      if (r.status !== "open") return json({ detail: "Question is no longer open" }, 409);
       const st = ({ yes: "yes", no: "no", skip: "skipped" } as const)[body?.answer as "yes" | "no" | "skip"];
       reviews = reviews.map((x) => (x.id === id ? { ...x, status: st, answered_at: now(), answer_source: "ui", correct_label: body?.correct_label ?? null } : x));
       return json(reviews.find((x) => x.id === id));
@@ -979,40 +986,40 @@ async function route(method: string, path: string, p: URLSearchParams, body: any
     const id = Number(m[1]);
     if (method === "DELETE") { reports = reports.filter((r) => r.id !== id); return json(undefined, 204); }
     const r = reports.find((x) => x.id === id);
-    return r ? json({ ...r, html: `<p>${r.text}</p>`, facts: mockFacts(r.period_start, r.period_end) }) : json({ detail: "Bericht nicht gefunden" }, 404);
+    return r ? json({ ...r, html: `<p>${r.text}</p>`, facts: mockFacts(r.period_start, r.period_end) }) : json({ detail: "Report not found" }, 404);
   }
-  if (path === "/settings/llm_test") return json({ ok: false, error: "Kein Sprachmodell eingerichtet (Mock)", text: null, model: null, ms: null });
+  if (path === "/settings/llm_test") return json({ ok: false, error: "No language model configured (Mock)", text: null, model: null, ms: null });
   if ((m = path.match(/^\/cameras\/(\d+)\/health(\/reference)?$/))) {
     if (m[2]) return json({ request_id: "mock", ok: true, error: null, path: `health/cam${m[1]}_day.jpg` }, 202);
     return json(mockHealth(Number(m[1])));
   }
   const w3 = routeW3(method, path, p, body);
   if (w3) return w3;
-  return json({ detail: `Mock: ${method} ${path} nicht implementiert` }, 404);
+  return json({ detail: `Mock: ${method} ${path} not implemented` }, 404);
 }
 
 /* ---------- Welle 3 (K3): Frag die Kamera, Sensoren, Einkaufsliste, Zeitmaschine ---------- */
 const askLog: AskResult[] = [];
 const mockSensors: VirtualSensor[] = [
-  { id: 1, name: "Licht Wohnzimmer", camera_id: 1, camera_name: "Einfahrt", room: "Wohnzimmer", enabled: true, kind: "brightness",
+  { id: 1, name: "Living room light", camera_id: 1, camera_name: "Driveway", room: "Living room", enabled: true, kind: "brightness",
     region: [[0.1, 0.1], [0.3, 0.1], [0.3, 0.3], [0.1, 0.3]], params: { threshold: 0.5, invert: false }, state_set: "binary",
     supply: false, verify_vlm: false, interval_s: 10, vlm_max_age_s: 900, change_threshold: 0.08, confirm_n: 2,
-    state: "on", value: 0.71, since: ago(3600), last_eval: ago(5), last_engine: "cheap", snapshot_url: null, state_text: "an seit 1 h" },
-  { id: 2, name: "Wasserflaschen", camera_id: 1, camera_name: "Einfahrt", room: "Küche", enabled: true, kind: "inventory_count",
+    state: "on", value: 0.71, since: ago(3600), last_eval: ago(5), last_engine: "cheap", snapshot_url: null, state_text: "on for 1 h" },
+  { id: 2, name: "Water bottles", camera_id: 1, camera_name: "Driveway", room: "Kitchen", enabled: true, kind: "inventory_count",
     region: [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]], params: { labels: ["bottle"], min_count: 2 }, state_set: "level",
     supply: true, verify_vlm: false, interval_s: 600, vlm_max_age_s: 900, change_threshold: 0.08, confirm_n: 2,
-    state: "low", value: 1, since: ago(7200), last_eval: ago(60), last_engine: "cheap", snapshot_url: null, state_text: "knapp seit 2 h" },
+    state: "low", value: 1, since: ago(7200), last_eval: ago(60), last_engine: "cheap", snapshot_url: null, state_text: "low for 2 h" },
   // W4 (C4-VLM-Modus): Bildmodell zählt
-  { id: 3, name: "Eier", camera_id: 1, camera_name: "Einfahrt", room: "Küche", enabled: true, kind: "vlm",
+  { id: 3, name: "Eggs", camera_id: 1, camera_name: "Driveway", room: "Kitchen", enabled: true, kind: "vlm",
     region: [[0.2, 0.55], [0.45, 0.55], [0.45, 0.8], [0.2, 0.8]], params: { measure: "count", item: "eggs", min_count: 3 }, state_set: "level",
     supply: true, verify_vlm: false, interval_s: 1800, vlm_max_age_s: 3600, change_threshold: 0.08, confirm_n: 2,
-    state: "ok", value: 6, since: ago(5400), last_eval: ago(900), last_engine: "local", snapshot_url: null, state_text: "ok seit 1 h",
+    state: "ok", value: 6, since: ago(5400), last_eval: ago(900), last_engine: "local", snapshot_url: null, state_text: "ok for 1 h",
     last_answer: "6" },
 ];
 let mockRefs: { id: number; sensor_id: number; state: string; image_url: string; created_at: string }[] = [];
 let shopping: ShoppingItem[] = [
-  { id: 1, name: "Wasserflaschen", note: "", source: "auto", sensor_id: 2, created_at: ago(7200), done_at: null, done: false },
-  { id: 2, name: "Kaffee", note: "Bohnen", source: "manual", sensor_id: null, created_at: ago(86400), done_at: null, done: false },
+  { id: 1, name: "Water bottles", note: "", source: "auto", sensor_id: 2, created_at: ago(7200), done_at: null, done: false },
+  { id: 2, name: "Coffee", note: "Beans", source: "manual", sensor_id: null, created_at: ago(86400), done_at: null, done: false },
 ];
 
 function routeW3(method: string, path: string, p: URLSearchParams, body: any): Response | null {
@@ -1042,7 +1049,7 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
   if (path === "/sensors" && method === "POST") {
     const cam = cameras.find((c) => c.id === body?.camera_id);
     const s: VirtualSensor = { ...body, id: nextId++, camera_name: cam?.name ?? "?", room: cam?.room ?? null, state: "unknown", value: null,
-      since: null, last_eval: null, last_engine: null, snapshot_url: null, state_text: "unklar – noch keine Messung" };
+      since: null, last_eval: null, last_engine: null, snapshot_url: null, state_text: "unknown – no measurement yet" };
     mockSensors.push(s);
     return json(s, 201);
   }
@@ -1058,7 +1065,7 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
   }
   if ((m = path.match(/^\/sensors\/(\d+)(\/history|\/evaluate)?$/))) {
     const s = mockSensors.find((x) => x.id === Number(m![1]));
-    if (!s) return json({ detail: "Sensor nicht gefunden" }, 404);
+    if (!s) return json({ detail: "Sensor not found" }, 404);
     if (m[2] === "/history") return json([{ ts: s.since, state: s.state, value: s.value, engine: "cheap", snapshot_url: null }]);
     if (m[2] === "/evaluate") { s.last_eval = now(); return json(s); }
     if (method === "DELETE") { mockSensors.splice(mockSensors.indexOf(s), 1); return json(undefined, 204); }
@@ -1078,7 +1085,7 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
   }
   if ((m = path.match(/^\/shopping-list\/(\d+)$/))) {
     const it = shopping.find((x) => x.id === Number(m![1]));
-    if (!it) return json({ detail: "Eintrag nicht gefunden" }, 404);
+    if (!it) return json({ detail: "Entry not found" }, 404);
     if (method === "DELETE") { shopping = shopping.filter((x) => x !== it); return json(undefined, 204); }
     Object.assign(it, body ?? {});
     if (body?.done !== undefined) it.done_at = body.done ? now() : null;
@@ -1088,9 +1095,9 @@ function routeW3(method: string, path: string, p: URLSearchParams, body: any): R
   if (path === "/history/search") {
     const q = p.get("q") ?? "";
     return json({ query: q, queries: [q, "red box"], model: "siglip2-b16-256", items: [
-      { camera_id: 1, camera_name: "Einfahrt", room: null, start_ts: ago(7300), end_ts: ago(6900), best_ts: ago(7100), score: 71,
+      { camera_id: 1, camera_name: "Driveway", room: null, start_ts: ago(7300), end_ts: ago(6900), best_ts: ago(7100), score: 71,
         tile_bbox: null, thumb_url: null, frames: 9, similarity: 0.142 },
-      { camera_id: 2, camera_name: "Garten", room: "Garten", start_ts: ago(90000), end_ts: ago(89000), best_ts: ago(89500), score: 44,
+      { camera_id: 2, camera_name: "Garden", room: "Garden", start_ts: ago(90000), end_ts: ago(89000), best_ts: ago(89500), score: 44,
         tile_bbox: [0.45, 0.45, 1, 1], thumb_url: null, frames: 3, similarity: 0.088 },
     ] });
   }
@@ -1198,9 +1205,9 @@ export function installMock() {
   // Kamera-Standbilder
   (window as unknown as { __vgMockSnapshot: (id: number) => string }).__vgMockSnapshot = (id: number) => {
     const cam = cameras.find((c) => c.id === id);
-    return sceneSvg(cam?.name ?? `Kamera ${id}`, 200 + id * 25);
+    return sceneSvg(cam?.name ?? `Camera ${id}`, 200 + id * 25);
   };
-  console.info("%cVisionGuard Mock-Modus aktiv (admin/admin)", "color:#2dd4bf");
+  console.info("%cVisionGuard mock mode active (admin/admin)", "color:#2dd4bf");
 }
 
 export const isMock = import.meta.env.VITE_MOCK === "1";

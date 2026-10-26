@@ -14,7 +14,7 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import registry, state
+from .. import i18n, registry, state
 from ..config import config
 from ..models import Event, Identity, Notification, PetVisit
 from ..schemas import iso
@@ -24,7 +24,8 @@ log = logging.getLogger("vg.report")
 TOP_N = 8
 FACTS_VERSION = 1
 
-# Ereignis-Labels (COCO) → (Einzahl, Mehrzahl, Gruppe)
+# Ereignis-Labels (COCO) → (Einzahl, Mehrzahl, Gruppe) – deutsch für die Faktenfelder `*_de`; angezeigte Texte
+# kommen aus `report.labels.<label>` in der Systemsprache (`label_name`)
 LABEL_DE: dict[str, tuple[str, str, str]] = {
     "person": ("Person", "Personen", "person"),
     "car": ("Auto", "Autos", "vehicle"),
@@ -40,12 +41,31 @@ LABEL_DE: dict[str, tuple[str, str, str]] = {
 PURPOSE_DE = {"food": "Futternapf", "water": "Wassernapf", "litter": "Katzenklo"}
 SOURCE_DE = {"health": "Kamera-Zustand", "pet": "Tiere", "review": "Rückfragen", "sensor": "Sensoren",
              "rule": "Regeln", "report": "Berichte"}
-WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+
+
+def weekday_name(i: int) -> str:
+    """Wochentag 0 = Montag in der aktuellen Sprache."""
+    return i18n.t(f"report.weekdays.{int(i) % 7}")
 
 
 def label_name(label: str, n: int = 1) -> str:
+    """Einzahl/Mehrzahl einer Objektklasse in der aktuellen Sprache (`report.labels`, sonst `common.labels`)."""
+    key = f"report.labels.{label}"
+    txt = i18n.t(key, n=n)
+    return i18n.label(label) if txt == key else txt
+
+
+def label_name_de(label: str, n: int = 1) -> str:
     one, many, _ = LABEL_DE.get(label, (label, label, "other"))
     return one if n == 1 else many
+
+
+def purpose_name(purpose: Optional[str]) -> str:
+    return i18n.t(f"report.purpose.{purpose}") if purpose in PURPOSE_DE else str(purpose or "")
+
+
+def source_name(source: Optional[str]) -> str:
+    return i18n.t(f"report.source.{source}") if source in SOURCE_DE else str(source or "")
 
 
 def label_group(label: str) -> str:
@@ -73,7 +93,8 @@ def _events(db: Session, start: datetime, end: datetime) -> dict[str, Any]:
         .where(*rng).group_by(Event.label, Event.camera_id, Event.camera_name)).all()
     by_label: dict[str, dict[str, Any]] = {}
     for label, cid, cname, n, first, last in rows:
-        e = by_label.setdefault(label, {"label": label, "name_de": label_name(label, 2), "group": label_group(label),
+        e = by_label.setdefault(label, {"label": label, "name_de": label_name_de(label, 2),
+                                        "name": label_name(label, 2), "group": label_group(label),
                                         "count": 0, "first": None, "last": None, "cameras": []})
         e["count"] += int(n)
         f, l_ = _utc(first), _utc(last)
@@ -81,7 +102,8 @@ def _events(db: Session, start: datetime, end: datetime) -> dict[str, Any]:
             e["first"] = f
         if l_ and (e["last"] is None or l_ > e["last"]):
             e["last"] = l_
-        e["cameras"].append({"camera_id": cid, "camera_name": cname or f"Kamera {cid}", "count": int(n)})
+        e["cameras"].append({"camera_id": cid, "camera_name": cname or i18n.t("report.camera", id=cid),
+                             "count": int(n)})
     out = []
     for e in sorted(by_label.values(), key=lambda x: -x["count"]):
         e["cameras"].sort(key=lambda c: -c["count"])
@@ -160,7 +182,8 @@ def _animals(db: Session, start: datetime, end: datetime, events: dict[str, Any]
             if pid else {}
         for iid, label, purpose, n, last, dur in rows:
             visits.append({"identity_id": iid, "pet": names.get(iid) if iid else None, "label": label,
-                           "purpose": purpose, "purpose_de": PURPOSE_DE.get(purpose, purpose), "count": int(n),
+                           "purpose": purpose, "purpose_de": PURPOSE_DE.get(purpose, purpose),
+                           "purpose_name": purpose_name(purpose), "count": int(n),
                            "last": iso(_utc(last)), "total_s": round(float(dur or 0))})
         visits.sort(key=lambda v: (v["pet"] is None, v["pet"] or "", v["purpose"]))
     except Exception as e:  # noqa: BLE001 – Tabelle evtl. leer/neu (C3), Bericht darf nicht scheitern
@@ -213,22 +236,25 @@ def _notifications(db: Session, start: datetime, end: datetime) -> dict[str, Any
         Notification.ts > start, Notification.ts <= end, Notification.source.not_in(("rule", "report")))
         .order_by(Notification.ts.desc()).limit(TOP_N)).all()
     return {"by_source": {k: int(v) for k, v in by.items()},
-            "items": [{"ts": iso(_utc(ts)), "source": src, "source_de": SOURCE_DE.get(src, src), "level": lvl,
-                       "title": title} for ts, src, lvl, title in items]}
+            "items": [{"ts": iso(_utc(ts)), "source": src, "source_de": SOURCE_DE.get(src, src),
+                       "source_name": source_name(src), "level": lvl, "title": title}
+                      for ts, src, lvl, title in items]}
 
 
-def _inventory(db: Session, start: datetime, end: datetime) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+def _inventory(db: Session, start: datetime, end: datetime) \
+        -> tuple[Optional[dict[str, Any]], Optional[str], Optional[str]]:
     from ..inventory_diff import ChangesError, compute_changes   # Import hier: inventory zieht viel nach
 
     try:
         # now=end: Texte („14:02“, „gestern …“) beziehen sich auf das Berichtsende, nicht auf den Abrufzeitpunkt
         ch = compute_changes(db, start, end, limit=TOP_N * 2, now=end)
     except ChangesError as e:
-        return None, str(e)
+        code = "out_of_retention" if str(e) == i18n.t("inventory.err_out_of_retention") else None
+        return None, str(e), code
     except Exception as e:  # noqa: BLE001
         db.rollback()
         log.warning("Gegenstands-Veränderungen für den Bericht fehlgeschlagen: %s", e)
-        return None, "Gegenstände nicht auswertbar"
+        return None, i18n.t("report.inventory_unavailable"), None
     changes = []
     for c in ch.get("changes") or []:
         it = c.get("item") or {}
@@ -241,7 +267,7 @@ def _inventory(db: Session, start: datetime, end: datetime) -> tuple[Optional[di
     # „Seit 21:00: …“ → nur der Teil hinter dem Doppelpunkt (die Zeitspanne steht im Bericht schon)
     if ": " in summary:
         summary = summary.split(": ", 1)[1]
-    return {"summary": summary, "counts": ch.get("counts") or {}, "changes": changes}, None
+    return {"summary": summary, "counts": ch.get("counts") or {}, "changes": changes}, None, None
 
 
 def _snap(s: Optional[dict]) -> Optional[dict[str, Any]]:
@@ -259,7 +285,7 @@ def _system() -> dict[str, Any]:
             continue
         st = state.status_for(c["id"], True)
         if st.get("state") == "offline":
-            offline.append({"id": c["id"], "name": c.get("name") or f"Kamera {c['id']}"})
+            offline.append({"id": c["id"], "name": c.get("name") or i18n.t("report.camera", id=c["id"])})
     return {"cameras": [{"id": c["id"], "name": c.get("name"), "room": c.get("room")} for c in cams],
             "offline_cameras": offline}
 
@@ -272,11 +298,11 @@ def collect_facts(db: Session, start: datetime, end: datetime, *, with_system: b
         loc_end = (end - timedelta(seconds=1)).astimezone(config.tz)   # Kalendertag: Bericht gehört zum Vortag
     events = _events(db, start, end)
     ids = _identities(db, start, end)
-    inv, inv_err = _inventory(db, start, end)
+    inv, inv_err, inv_code = _inventory(db, start, end)
     facts: dict[str, Any] = {
         "version": FACTS_VERSION,
         "period": {"start": iso(start), "end": iso(end), "date": loc_end.date().isoformat(),
-                   "weekday": WEEKDAYS[loc_end.weekday()], "hours": round((end - start).total_seconds() / 3600, 1)},
+                   "weekday": weekday_name(loc_end.weekday()), "hours": round((end - start).total_seconds() / 3600, 1)},
         "events": events["by_label"],
         "people": _people(db, start, end, ids),
         "vehicles": _vehicles(events, ids),
@@ -288,6 +314,8 @@ def collect_facts(db: Session, start: datetime, end: datetime, *, with_system: b
     }
     if inv_err:
         facts["inventory_error"] = inv_err
+        if inv_code:
+            facts["inventory_error_code"] = inv_code
     facts["counts"] = counts(facts, events["total"])
     return facts
 

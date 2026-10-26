@@ -7,6 +7,8 @@ import { api } from "../lib/api";
 import type { PetPurposeStats, PetStatus, PetSummary, PetVisit, ZonePurpose } from "../lib/types";
 import { fmtAgo, fmtShort, parseTs } from "../lib/format";
 import { Empty, Img, LabelIcon, Loading } from "../components/ui";
+import { labelName } from "../lib/labels";
+import { fmtNum, intlLocale, msgs, useMsgs } from "../i18n";
 
 /**
  * Seite „Tiere“ – Haustier-Tagebuch (C3): je Tier Napf/Wasser/Klo heute vs. Normalwert (14 Tage), farbig bei
@@ -15,18 +17,10 @@ import { Empty, Img, LabelIcon, Loading } from "../components/ui";
  */
 
 const PURPOSES: ZonePurpose[] = ["food", "water", "litter"];
-const PURPOSE_NAME: Record<ZonePurpose, string> = { food: "Napf", water: "Wasser", litter: "Klo" };
 const PURPOSE_ICON: Record<ZonePurpose, ReactNode> = {
   food: <UtensilsCrossed size={15} />, water: <Droplet size={15} />, litter: <Toilet size={15} />,
 };
-const STATUS: Record<PetStatus, { cls: string; text: string }> = {
-  ok: { cls: "ok", text: "normal" },
-  low: { cls: "warn", text: "weniger als sonst" },
-  high: { cls: "bad", text: "mehr als sonst" },
-  gap: { cls: "warn", text: "lange Pause" },
-  unknown: { cls: "outline", text: "lernt noch" },
-};
-const LABEL_DE: Record<string, string> = { cat: "Katze", dog: "Hund" };
+const STATUS_CLS: Record<PetStatus, string> = { ok: "ok", low: "warn", high: "bad", gap: "warn", unknown: "outline" };
 const PAGE = 50;
 
 function petKey(p: PetSummary) {
@@ -34,18 +28,18 @@ function petKey(p: PetSummary) {
 }
 
 function petName(p: PetSummary) {
-  return p.name ?? p.identity?.name ?? p.identity?.display_name ?? `${LABEL_DE[p.label] ?? p.label} (unbekannt)`;
+  return p.name ?? p.identity?.name ?? p.identity?.display_name ?? msgs().pets.unknownPet(labelName(p.label));
 }
 
 function fmtGap(s?: number | null) {
   if (s === null || s === undefined) return "–";
   if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min`;
   const h = s / 3600;
-  return h < 10 ? `${h.toFixed(1).replace(".", ",")} h` : `${Math.round(h)} h`;
+  return h < 10 ? `${fmtNum(h, 1)} h` : `${Math.round(h)} h`;
 }
 
 function fmtDur(s: number | null) {
-  if (s === null) return "läuft";
+  if (s === null) return msgs().pets.running;
   if (s < 90) return `${Math.round(s)} s`;
   return `${Math.round(s / 60)} min`;
 }
@@ -68,7 +62,7 @@ function DailyBars({ st }: { st: PetPurposeStats }) {
         const today = i === st.daily.length - 1;
         const day = new Date(`${d.day}T12:00:00`);
         return (
-          <div key={d.day} className={`pet-bar ${today ? "today" : ""}`} title={`${day.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}: ${d.count}×`}>
+          <div key={d.day} className={`pet-bar ${today ? "today" : ""}`} title={`${day.toLocaleDateString(intlLocale(), { weekday: "short", day: "2-digit", month: "2-digit" })}: ${d.count}×`}>
             <div style={{ height: d.count ? Math.max(3, (d.count / max) * H) : 1 }} />
           </div>
         );
@@ -78,34 +72,35 @@ function DailyBars({ st }: { st: PetPurposeStats }) {
 }
 
 function PurposeTile({ purpose, st }: { purpose: ZonePurpose; st?: PetPurposeStats }) {
+  const m = useMsgs().pets;
   if (!st) {
     return (
       <div className="pet-tile muted">
-        <div className="pet-tile-head">{PURPOSE_ICON[purpose]}{PURPOSE_NAME[purpose]}</div>
-        <div style={{ fontSize: 13 }}>keine Besuche</div>
+        <div className="pet-tile-head">{PURPOSE_ICON[purpose]}{m.purpose[purpose]}</div>
+        <div style={{ fontSize: 13 }}>{m.noVisits}</div>
       </div>
     );
   }
   const status = st.status ?? (st.normal ? "ok" : "unknown");
-  const s = STATUS[status];
+  const s = { cls: STATUS_CLS[status], text: m.status[status] };
   const exp = range(st.expected_now);
   const normal = range(st.normal);
   return (
     <div className={`pet-tile st-${status}`}>
       <div className="pet-tile-head">
-        {PURPOSE_ICON[purpose]}{PURPOSE_NAME[purpose]}
+        {PURPOSE_ICON[purpose]}{m.purpose[purpose]}
         <span className="spacer" />
         <span className={`badge ${s.cls}`}>{s.text}</span>
       </div>
       <div className="row" style={{ alignItems: "baseline", gap: 8 }}>
         <span className="pet-count">{st.today}×</span>
-        <span className="muted" style={{ fontSize: 13 }}>heute</span>
+        <span className="muted" style={{ fontSize: 13 }}>{m.today}</span>
       </div>
       <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
-        {normal ? <>normal {normal} am Tag{exp && exp !== normal ? <> · bis jetzt {exp}</> : null}</> : "Normalwert ab 7 Tagen Daten"}
+        {normal ? <>{m.normalPerDay(normal)}{exp && exp !== normal ? <> · {m.soFar(exp)}</> : null}</> : m.normalAfter7}
         <br />
-        {st.last_ts ? <>zuletzt {fmtShort(st.last_ts)} ({fmtAgo(st.last_ts)})</> : "noch nie"}
-        {status === "gap" && st.usual_gap_s ? <> · sonst max. {fmtGap(st.usual_gap_s)} Pause</> : null}
+        {st.last_ts ? m.lastAt(fmtShort(st.last_ts), fmtAgo(st.last_ts)) : m.never}
+        {status === "gap" && st.usual_gap_s ? <> · {m.usualGap(fmtGap(st.usual_gap_s))}</> : null}
       </div>
       <DailyBars st={st} />
     </div>
@@ -113,16 +108,17 @@ function PurposeTile({ purpose, st }: { purpose: ZonePurpose; st?: PetPurposeSta
 }
 
 function PetCard({ p, onSelect, selected }: { p: PetSummary; onSelect: () => void; selected: boolean }) {
+  const m = useMsgs().pets;
   return (
     <div className={`card pet-card ${selected ? "sel" : ""}`}>
-      <div className="card-head" style={{ cursor: "pointer" }} onClick={onSelect} title="Besuche dieses Tiers anzeigen">
+      <div className="card-head" style={{ cursor: "pointer" }} onClick={onSelect} title={m.showVisits}>
         <LabelIcon label={p.label} size={18} />
         <h3>{petName(p)}</h3>
-        <span className="muted" style={{ fontSize: 12 }}>{LABEL_DE[p.label] ?? p.label}</span>
+        <span className="muted" style={{ fontSize: 12 }}>{labelName(p.label)}</span>
         <span className="spacer" />
         {p.identity && (
           <Link to={`/identitaeten/${p.identity.id}`} className="btn btn-ghost btn-sm" onClick={(e) => e.stopPropagation()}>
-            <Fingerprint size={14} />Identität
+            <Fingerprint size={14} />{m.identity}
           </Link>
         )}
       </div>
@@ -134,12 +130,13 @@ function PetCard({ p, onSelect, selected }: { p: PetSummary; onSelect: () => voi
 }
 
 function VisitRow({ v }: { v: PetVisit }) {
-  const name = v.identity?.name ?? v.identity?.display_name ?? `${LABEL_DE[v.label] ?? v.label} (unbekannt)`;
+  const m = useMsgs().pets;
+  const name = v.identity?.name ?? v.identity?.display_name ?? m.unknownPet(labelName(v.label));
   return (
     <div className="pet-visit">
       <Img src={v.thumb_url} className="pet-thumb" fallback={<div className="pet-thumb ph"><LabelIcon label={v.label} size={20} /></div>} />
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontWeight: 600 }}>{name} <span className="muted" style={{ fontWeight: 400 }}>· {PURPOSE_NAME[v.purpose]}</span></div>
+        <div style={{ fontWeight: 600 }}>{name} <span className="muted" style={{ fontWeight: 400 }}>· {m.purpose[v.purpose]}</span></div>
         <div className="muted" style={{ fontSize: 12 }}>{v.camera_name} · {v.zone_name}</div>
       </div>
       <div style={{ textAlign: "right", fontSize: 13 }}>
@@ -156,12 +153,13 @@ function dayLabel(ts: string): string {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const day = new Date(d); day.setHours(0, 0, 0, 0);
   const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
-  if (diff === 0) return "Heute";
-  if (diff === 1) return "Gestern";
-  return d.toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit" });
+  if (diff === 0) return msgs().pets.todayDay;
+  if (diff === 1) return msgs().pets.yesterday;
+  return d.toLocaleDateString(intlLocale(), { weekday: "long", day: "2-digit", month: "2-digit" });
 }
 
 export function PetsPage() {
+  const m = useMsgs().pets;
   const [days, setDays] = useState(14);
   const [pet, setPet] = useState<string | null>(null);
   const [purpose, setPurpose] = useState<ZonePurpose | "">("");
@@ -193,17 +191,16 @@ export function PetsPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Tiere</h1><div className="sub">Haustier-Tagebuch: Napf, Wasser und Katzenklo – heute im Vergleich zu den letzten 14 Tagen</div></div>
+        <div><h1>{m.title}</h1><div className="sub">{m.subtitle}</div></div>
         <div className="row">
-          <select className="select input-sm" value={days} onChange={(e) => setDays(Number(e.target.value))} title="Zeitraum der Balken">
-            <option value={7}>7 Tage</option><option value={14}>14 Tage</option><option value={30}>30 Tage</option>
+          <select className="select input-sm" value={days} onChange={(e) => setDays(Number(e.target.value))} title={m.barsPeriod}>
+            {[7, 14, 30].map((d) => <option key={d} value={d}>{m.nDays(d)}</option>)}
           </select>
         </div>
       </div>
       {!pets.length ? (
-        <Empty icon={<PawPrint size={44} />} title="Noch keine Besuche"
-          text={<>Legen Sie in der Kameraverwaltung eine Zone an und wählen Sie als Zweck „Napf“, „Wasser“ oder „Katzenklo“.
-            Besuche von Hunden und Katzen in diesen Zonen erscheinen dann hier (Einstellungen → Haustier-Tagebuch).</>} />
+        <Empty icon={<PawPrint size={44} />} title={m.noVisitsYet}
+          text={m.emptyText} />
       ) : (
         <>
           <div className="pet-grid">
@@ -214,17 +211,17 @@ export function PetsPage() {
           </div>
           <div className="card" style={{ marginTop: 16 }}>
             <div className="card-head">
-              <Clock size={18} color="var(--accent)" /><h3>Besuche{sel ? ` – ${petName(sel)}` : ""}</h3>
-              <span className="muted" style={{ fontSize: 12 }}>{visits.data ? `${visits.data.total} insgesamt` : ""}</span>
+              <Clock size={18} color="var(--accent)" /><h3>{sel ? m.visitsOf(petName(sel)) : m.visits}</h3>
+              <span className="muted" style={{ fontSize: 12 }}>{visits.data ? m.total(visits.data.total) : ""}</span>
               <span className="spacer" />
-              {sel && <button className="btn btn-ghost btn-sm" onClick={() => setPet(null)}>alle Tiere</button>}
+              {sel && <button className="btn btn-ghost btn-sm" onClick={() => setPet(null)}>{m.allPets}</button>}
               <select className="select input-sm" style={{ width: 140 }} value={purpose} onChange={(e) => { setPurpose(e.target.value as ZonePurpose | ""); setLimit(PAGE); }}>
-                <option value="">alle Zwecke</option>
-                {PURPOSES.map((k) => <option key={k} value={k}>{PURPOSE_NAME[k]}</option>)}
+                <option value="">{m.allPurposes}</option>
+                {PURPOSES.map((k) => <option key={k} value={k}>{m.purpose[k]}</option>)}
               </select>
             </div>
             <div className="card-body">
-              {!groups.length && <div className="muted">Keine Besuche.</div>}
+              {!groups.length && <div className="muted">{m.noVisitsList}</div>}
               {groups.map((g) => (
                 <div key={g.day} style={{ marginBottom: 12 }}>
                   <div className="muted" style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", margin: "4px 0 6px" }}>{g.day}</div>
@@ -232,7 +229,7 @@ export function PetsPage() {
                 </div>
               ))}
               {visits.data && visits.data.total > (visits.data.items.length ?? 0) && (
-                <button className="btn btn-sm" onClick={() => setLimit((l) => l + PAGE)}>Weitere laden</button>
+                <button className="btn btn-sm" onClick={() => setLimit((l) => l + PAGE)}>{m.loadMore}</button>
               )}
             </div>
           </div>

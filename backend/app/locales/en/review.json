@@ -1,1 +1,40 @@
-{}
+{
+  "q_label": "Detected as “{name}” – is that correct?",
+  "q_instance": "Is this “{name}”?",
+  "q_match": {
+    "face": "Is “{src}” the same person as “{dst}”?",
+    "pet": "Is “{src}” the same animal as “{dst}”?"
+  },
+  "push_title": "Please confirm",
+  "kind": {
+    "inventory_label": "Item detected correctly?",
+    "inventory_identity": "Is this the item?",
+    "identity_match": "Same person or animal?"
+  },
+  "err_answer_invalid": "Answer must be yes, no or skip",
+  "err_not_found": "Question not found",
+  "err_not_open": "Question is no longer open",
+  "err_expired": "Question has expired",
+  "err_apply": "Answer could not be applied: {error}",
+  "err_unknown_item": "Unknown item: {label}",
+  "err_instance_gone": "The item no longer exists",
+  "err_identity_gone": "One of the identities no longer exists",
+  "err_kind_mismatch": "Only identities of the same kind can be merged",
+  "page": {
+    "title_invalid": "Link invalid",
+    "invalid": "Link invalid or expired",
+    "title_unknown": "Unknown",
+    "gone": "This question no longer exists.",
+    "title_done": "Done",
+    "done": "This question has already been answered or has expired.",
+    "title_confirm": "Please confirm",
+    "answer": "Answer",
+    "submit": "{answer} – submit",
+    "title_failed": "Not possible",
+    "title_thanks": "Thank you",
+    "thanks": "Thank you!",
+    "saved": "saved.",
+    "yes": "Yes",
+    "no": "No"
+  }
+}

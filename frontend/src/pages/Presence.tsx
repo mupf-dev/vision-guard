@@ -6,6 +6,8 @@ import { api } from "../lib/api";
 import type { Presence, PresenceSource } from "../lib/types";
 import { fmtAgo, fmtDuration, fmtShort, fmtTime, pct } from "../lib/format";
 import { Empty, Img, LabelIcon, Loading } from "../components/ui";
+import { labelName } from "../lib/labels";
+import { msgs, useMsgs } from "../i18n";
 
 /**
  * Seite „Anwesenheit“ (W4 C2): wer ist gerade wo, wer wurde zuletzt wo gesehen. Quelle: GET /presence (RAM-Galerie
@@ -13,24 +15,24 @@ import { Empty, Img, LabelIcon, Loading } from "../components/ui";
  * Liste (useLiveSocket), zusätzlich alle 30 s neu laden (relative Zeiten).
  */
 
-const LABEL_DE: Record<string, string> = { person: "Person", dog: "Hund", cat: "Katze" };
-const SOURCE: Record<PresenceSource, { text: string; icon: ReactNode; cls: string }> = {
-  face: { text: "Gesicht", icon: <ScanFace size={12} />, cls: "ok" },
-  pet: { text: "Tiererkennung", icon: <LabelIcon label="dog" size={12} />, cls: "ok" },
-  reid: { text: "Wiedererkennung", icon: <Shirt size={12} />, cls: "info" },
-  none: { text: "unbekannt", icon: <UserRound size={12} />, cls: "outline" },
+const SOURCE: Record<PresenceSource, { text: () => string; icon: ReactNode; cls: string }> = {
+  face: { text: () => msgs().presence.sourceFace, icon: <ScanFace size={12} />, cls: "ok" },
+  pet: { text: () => msgs().presence.sourcePet, icon: <LabelIcon label="dog" size={12} />, cls: "ok" },
+  reid: { text: () => msgs().presence.sourceReid, icon: <Shirt size={12} />, cls: "info" },
+  none: { text: () => msgs().presence.sourceNone, icon: <UserRound size={12} />, cls: "outline" },
 };
 
 function who(p: Presence) {
-  return p.identity?.display_name ?? `${LABEL_DE[p.label] ?? p.label} (unbekannt)`;
+  return p.identity?.display_name ?? msgs().presence.unknownWho(labelName(p.label));
 }
 
 function place(p: Presence) {
-  const cam = p.camera_name ?? `Kamera ${p.camera_id}`;
+  const cam = p.camera_name ?? msgs().presence.camera(p.camera_id);
   return p.room && p.room !== cam ? `${p.room} · ${cam}` : cam;
 }
 
 function PresenceCard({ p }: { p: Presence }) {
+  const m = useMsgs();
   const src = SOURCE[p.source] ?? SOURCE.none;
   // älteste zuerst → Weg durchs Haus; aufeinanderfolgende Tracks derselben Kamera zusammenfassen
   const trail = p.trail.slice(0, 8).reverse()
@@ -48,21 +50,21 @@ function PresenceCard({ p }: { p: Presence }) {
           </div>
           <div className="presence-when">
             {p.active
-              ? <><span className="badge ok">jetzt</span> seit {fmtTime(p.since)} ({fmtDuration(p.since)})</>
-              : <><span className="badge outline">zuletzt</span> {fmtAgo(p.last_seen)} · {fmtShort(p.last_seen)}</>}
+              ? <><span className="badge ok">{m.presence.now}</span>{m.presence.since(fmtTime(p.since), fmtDuration(p.since))}</>
+              : <><span className="badge outline">{m.presence.last}</span> {fmtAgo(p.last_seen)} · {fmtShort(p.last_seen)}</>}
           </div>
         </div>
       </div>
       <div className="presence-foot">
-        <span className={`badge ${src.cls}`} title={p.source === "reid" ? "über Kleidung/Statur von einer anderen Kamera übernommen – nur ein Hinweis" : undefined}>
-          {src.icon}{src.text}{p.source === "reid" && p.confidence ? ` ${pct(p.confidence)}` : ""}
+        <span className={`badge ${src.cls}`} title={p.source === "reid" ? m.presence.reidHint : undefined}>
+          {src.icon}{src.text()}{p.source === "reid" && p.confidence ? ` ${pct(p.confidence)}` : ""}
         </span>
         {trail.length > 1 && (
-          <span className="presence-trail" title="Verlauf (Kameras, älteste zuerst)">
+          <span className="presence-trail" title={m.presence.trailTitle}>
             {trail.map((t, i) => (
               <span key={`${t.camera_id}-${t.since}-${i}`} className="presence-step">
                 {i > 0 && <ArrowRight size={11} className="muted" />}
-                <span className={t.active ? "" : "muted"} title={`${fmtShort(t.since)}–${fmtTime(t.last_seen)}${t.via === "reid" ? ` (Wiedererkennung${t.score ? ` ${pct(t.score)}` : ""})` : t.via === "face" ? " (Gesicht)" : ""}`}>
+                <span className={t.active ? "" : "muted"} title={`${fmtShort(t.since)}–${fmtTime(t.last_seen)}${t.via === "reid" ? m.presence.viaReid(t.score ? pct(t.score) : "") : t.via === "face" ? m.presence.viaFace : ""}`}>
                   {t.camera_name ?? t.camera_id}
                 </span>
               </span>
@@ -75,6 +77,7 @@ function PresenceCard({ p }: { p: Presence }) {
 }
 
 export function PresencePage() {
+  const m = useMsgs();
   const [minutes, setMinutes] = useState(60);
   const [label, setLabel] = useState<"" | "person" | "dog,cat">("");
   const q = useQuery({
@@ -91,34 +94,33 @@ export function PresencePage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Anwesenheit</h1>
-          <div className="sub">Wer ist gerade wo – und wer wurde zuletzt wo gesehen (Gesicht, Tiererkennung, Wiedererkennung über Kameras)</div>
+        <div><h1>{m.presence.title}</h1>
+          <div className="sub">{m.presence.subtitle}</div>
         </div>
         <div className="row">
           <select className="select input-sm" value={label} onChange={(e) => setLabel(e.target.value as typeof label)}>
-            <option value="">Alle</option><option value="person">Personen</option><option value="dog,cat">Tiere</option>
+            <option value="">{m.presence.all}</option><option value="person">{m.presence.people}</option><option value="dog,cat">{m.presence.animals}</option>
           </select>
-          <select className="select input-sm" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} title="zuletzt gesehen innerhalb von">
+          <select className="select input-sm" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} title={m.presence.windowTitle}>
             <option value={15}>15 min</option><option value={60}>1 h</option><option value={180}>3 h</option><option value={720}>12 h</option>
           </select>
         </div>
       </div>
       {reidCams === 0 && cams.data && (
         <div className="hint-box" style={{ marginBottom: 12 }}>
-          <Footprints size={15} /> Die Wiedererkennung über Kameras ist an keiner Kamera eingeschaltet – Personen ohne erkanntes
-          Gesicht erscheinen je Kamera getrennt. Einschalten unter Administration → Kameras → „Personenanalyse“.
+          <Footprints size={15} /> {m.presence.noReid}
         </div>
       )}
       {!items.length ? (
-        <Empty icon={<Footprints size={44} />} title="Niemand gesehen"
-          text={`${minutes === 60 ? "In der letzten Stunde" : minutes > 60 ? `In den letzten ${minutes / 60} Stunden` : `In den letzten ${minutes} Minuten`} wurde keine Person und kein Tier erfasst. Die Anwesenheit beginnt nach einem Neustart leer (nur im Arbeitsspeicher).`} />
+        <Empty icon={<Footprints size={44} />} title={m.presence.emptyTitle}
+          text={m.presence.emptyText(minutes)} />
       ) : (
         <>
-          <h3 className="section-title">Jetzt sichtbar <span className="muted">({now.length})</span></h3>
+          <h3 className="section-title">{m.presence.visibleNow} <span className="muted">({now.length})</span></h3>
           {now.length ? <div className="presence-grid">{now.map((p) => <PresenceCard key={p.presence_key} p={p} />)}</div>
-            : <div className="muted" style={{ margin: "4px 0 16px" }}>Gerade ist niemand zu sehen.</div>}
+            : <div className="muted" style={{ margin: "4px 0 16px" }}>{m.presence.nobodyNow}</div>}
           {before.length > 0 && <>
-            <h3 className="section-title" style={{ marginTop: 20 }}>Zuletzt gesehen <span className="muted">({before.length})</span></h3>
+            <h3 className="section-title" style={{ marginTop: 20 }}>{m.presence.lastSeen} <span className="muted">({before.length})</span></h3>
             <div className="presence-grid">{before.map((p) => <PresenceCard key={p.presence_key} p={p} />)}</div>
           </>}
         </>

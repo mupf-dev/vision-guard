@@ -9,7 +9,8 @@ snapshot, video clip from the RAM ring buffer, push notification to your phone, 
 
 ![Live view with detections](https://mupf-dev.github.io/vision-guard/img/live.webp)
 
-> The user interface is currently in German; an English interface with support for further languages is in progress.
+> The user interface, notifications, reports and AI-agent answers are available in **English** (default) and
+> **German**; more languages can be added with plain translation files (see [Languages](#languages)).
 
 ## Features
 
@@ -50,6 +51,17 @@ snapshot, video clip from the RAM ring buffer, push notification to your phone, 
   read-only from outside (separate listener, see below)
 - **Time machine:** per camera an optional image memory (image embeddings + 256 px preview, no video); searching in
   your own words ("red box in the hallway") returns time ranges with a filmstrip – also via MCP
+
+## Languages
+
+- The web interface language is chosen per browser (globe icon in the header); it defaults to the browser language
+  and falls back to English.
+- The **system language** (Settings → Language) is used for everything created without a browser: notifications and
+  push messages, the daily report, "please confirm" questions, MQTT texts and MCP answers.
+- Adding a language needs no code changes beyond registering it: copy `frontend/src/i18n/locales/en`,
+  `backend/app/locales/en` and `mcp/locales/en.json`, translate, and add the language to
+  `frontend/src/i18n/locales/index.ts`. Missing strings fall back to English. Details in [AGENTS.md](AGENTS.md)
+  (German).
 
 ## Architecture
 

@@ -3,17 +3,22 @@ import { Eye, Gauge, Image as ImageIcon, Lightbulb, Package, RefreshCw, Sparkles
 import type { SensorKind, SensorState, VirtualSensor, VlmMeasure } from "../lib/types";
 import { api } from "../lib/api";
 import { isMock, mockSnapshot } from "../lib/mock";
+import { fmtNum, msgs, useMsgs } from "../i18n";
 
 /** W3 (A3+C4): gemeinsame Bausteine für Sensoren (Admin → Sensoren, Vorräte). */
 
-export const SENSOR_KIND: Record<SensorKind, { name: string; icon: React.ReactNode; text: string }> = {
-  brightness: { name: "Helligkeit", icon: <Lightbulb size={15} />, text: "Licht an/aus, Bildschirm an, Fenster hell – mittlere Helligkeit im Bereich (CPU, sehr günstig)." },
-  blink: { name: "Blinken", icon: <Waves size={15} />, text: "Blinkende LED, flackernder Bildschirm – Helligkeitsschwankung über wenige Sekunden." },
-  reference: { name: "Referenzbilder", icon: <ImageIcon size={15} />, text: "Vergleich mit aufgenommenen Bildern „an“ und „aus“ (z. B. Fenster offen/zu, Tür, Rollladen)." },
-  inventory_count: { name: "Gegenstände zählen", icon: <Package size={15} />, text: "Zählt erkannte Gegenstände im Bereich (z. B. Flaschen im Regal). Braucht die Gegenstandserkennung der Kamera." },
-  fill: { name: "Füllstand", icon: <Gauge size={15} />, text: "Vergleich mit Bildern „voll“, „halb“ und „leer“ (z. B. Obstschale, Futterbehälter, Holzstapel)." },
-  vlm: { name: "Bildmodell", icon: <Sparkles size={15} />, text: "Frage an das Bildmodell: Ja/Nein („Is the stove on?“), Anzahl („How many bottles?“) oder leer/nicht leer – nur bei sichtbarer Änderung oder nach Ablauf der Höchstzeit." },
+const KIND_ICON: Record<SensorKind, React.ReactNode> = {
+  brightness: <Lightbulb size={15} />, blink: <Waves size={15} />, reference: <ImageIcon size={15} />,
+  inventory_count: <Package size={15} />, fill: <Gauge size={15} />, vlm: <Sparkles size={15} />,
 };
+/** Name/Symbol/Erklärung je Art – liest bei jedem Zugriff die aktuelle Sprache (i18n `sensors`). */
+export const SENSOR_KIND = new Proxy({} as Record<SensorKind, { name: string; icon: React.ReactNode; text: string }>, {
+  get: (_t, k) => {
+    const m = msgs().sensors;
+    const kind = k as SensorKind;
+    return { name: m.kind[kind], icon: KIND_ICON[kind], text: m.kindText[kind] };
+  },
+});
 
 /** W4 (C4-VLM): Messart eines Bildmodell-Sensors bzw. der Rückfrage eines Zählsensors */
 export function vlmMeasure(s: Pick<VirtualSensor, "kind" | "params">): VlmMeasure | null {
@@ -23,12 +28,13 @@ export function vlmMeasure(s: Pick<VirtualSensor, "kind" | "params">): VlmMeasur
   return m === "count" || m === "fill" ? m : "yesno";
 }
 
-export const STATE_NAME: Record<SensorState, string> = { on: "an", off: "aus", ok: "ok", low: "knapp", out: "leer", unknown: "unklar" };
+export const STATE_NAME = new Proxy({} as Record<SensorState, string>, { get: (_t, k) => msgs().sensors.state[k as SensorState] });
 export const STATE_CLASS: Record<SensorState, string> = { on: "ok", off: "outline", ok: "ok", low: "warn", out: "bad", unknown: "" };
-export const REF_NAME: Record<string, string> = { on: "an", off: "aus", full: "voll", half: "halb", empty: "leer" };
+export const REF_NAME = new Proxy({} as Record<string, string>, { get: (_t, k) => msgs().sensors.ref[k as string] });
 
 export function SensorStateBadge({ s }: { s: Pick<VirtualSensor, "state" | "enabled"> }) {
-  if (!s.enabled) return <span className="badge">deaktiviert</span>;
+  const m = useMsgs();
+  if (!s.enabled) return <span className="badge">{m.sensors.disabled}</span>;
   return <span className={`badge ${STATE_CLASS[s.state]}`}>{s.state !== "unknown" && s.state !== "off" && <span className="dot" />}{STATE_NAME[s.state]}</span>;
 }
 
@@ -36,17 +42,18 @@ export function SensorStateBadge({ s }: { s: Pick<VirtualSensor, "state" | "enab
 export function fmtSensorValue(s: Pick<VirtualSensor, "kind" | "value"> & { params?: Record<string, unknown> }): string {
   const v = s.value;
   if (v === null || v === undefined) return "–";
+  const t = msgs().sensors;
   switch (s.kind) {
-    case "brightness": return `Helligkeit ${Math.round(v * 100)} %`;
-    case "blink": return `Schwankung ${v.toFixed(3)}`;
-    case "reference": return `„an“ zu ${Math.round(v * 100)} %`;
-    case "fill": return `Füllstand ${Math.round(v * 100)} %`;
-    case "inventory_count": return `${Math.round(v)} Stück`;
+    case "brightness": return t.valBrightness(Math.round(v * 100));
+    case "blink": return t.valBlink(fmtNum(v, 3));
+    case "reference": return t.valReference(Math.round(v * 100));
+    case "fill": return t.valFill(Math.round(v * 100));
+    case "inventory_count": return t.valCount(Math.round(v));
     case "vlm": {
       const m = vlmMeasure({ kind: s.kind, params: s.params ?? {} });
-      if (m === "count") return `${Math.round(v)} Stück (Bildmodell)`;
-      if (m === "fill") return v < 0.15 ? "Bildmodell: leer" : v >= 0.75 ? "Bildmodell: voll" : `Bildmodell: ca. ${Math.round(v * 100)} %`;
-      return v >= 0.5 ? "Antwort: ja" : "Antwort: nein";
+      if (m === "count") return t.valVlmCount(Math.round(v));
+      if (m === "fill") return v < 0.15 ? t.valVlmEmpty : v >= 0.75 ? t.valVlmFull : t.valVlmApprox(Math.round(v * 100));
+      return v >= 0.5 ? t.valYes : t.valNo;
     }
   }
 }
@@ -69,6 +76,7 @@ export function RegionImage({ src, region, height = 90 }: { src: string | null; 
  * Rechteck aufziehen (Standard), Polygon zeichnen, Punkte ziehen, Rechtsklick entfernt einen Punkt.
  */
 export function RegionEditor({ cameraId, region, onChange }: { cameraId: number | null; region: [number, number][]; onChange: (r: [number, number][]) => void }) {
+  const t = useMsgs().sensors;
   const svgRef = useRef<SVGSVGElement>(null);
   const [mode, setMode] = useState<"idle" | "rect" | "poly">(region.length ? "idle" : "rect");
   const [draft, setDraft] = useState<[number, number][]>([]);
@@ -123,8 +131,8 @@ export function RegionEditor({ cameraId, region, onChange }: { cameraId: number 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div className="ze-stage">
-        {imgSrc && !imgErr ? <img src={imgSrc} alt="Kamerabild" draggable={false} onError={() => setImgErr(true)} />
-          : <div style={{ aspectRatio: "16/9", display: "grid", placeItems: "center", color: "var(--text-3)" }}>{cameraId === null ? "Erst eine Kamera wählen" : "Kein Standbild verfügbar"}</div>}
+        {imgSrc && !imgErr ? <img src={imgSrc} alt={t.cameraImage} draggable={false} onError={() => setImgErr(true)} />
+          : <div style={{ aspectRatio: "16/9", display: "grid", placeItems: "center", color: "var(--text-3)" }}>{cameraId === null ? t.pickCameraFirst : t.noSnapshot}</div>}
         <svg ref={svgRef} className={mode !== "idle" ? "drawing" : ""}
           onPointerDown={(e) => { if (mode === "rect") { e.preventDefault(); setRectStart(pt(e)); setHover(pt(e)); } }}
           onPointerMove={(e) => { if (mode !== "idle") setHover(pt(e)); }}
@@ -161,19 +169,17 @@ export function RegionEditor({ cameraId, region, onChange }: { cameraId: number 
           )}
         </svg>
         <div className="ze-hint">
-          {mode === "rect" ? "Rechteck aufziehen: Maus gedrückt halten und ziehen"
-            : mode === "poly" ? `Punkte setzen (${draft.length}) · Klick auf ersten Punkt / Doppelklick / Enter = fertig · Esc = abbrechen`
-            : "Punkte ziehen · Rechtsklick = Punkt entfernen"}
+          {mode === "rect" ? t.hintRect : mode === "poly" ? t.hintPoly(draft.length) : t.hintIdle}
         </div>
       </div>
       <div className="row-wrap" style={{ gap: 6 }}>
-        <button type="button" className={`btn btn-sm ${mode === "rect" ? "btn-primary" : ""}`} onClick={() => { setMode("rect"); setDraft([]); }}><Square size={14} />Rechteck</button>
-        <button type="button" className={`btn btn-sm ${mode === "poly" ? "btn-primary" : ""}`} onClick={() => { setMode("poly"); setDraft([]); }}><PenLine size={14} />Vieleck</button>
-        {mode === "poly" && <button type="button" className="btn btn-sm" disabled={draft.length < 3} onClick={finishPoly}><Check size={14} />Fertig</button>}
-        {mode !== "idle" && region.length >= 3 && <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setMode("idle"); setDraft([]); }}><X size={14} />Abbrechen</button>}
+        <button type="button" className={`btn btn-sm ${mode === "rect" ? "btn-primary" : ""}`} onClick={() => { setMode("rect"); setDraft([]); }}><Square size={14} />{t.rect}</button>
+        <button type="button" className={`btn btn-sm ${mode === "poly" ? "btn-primary" : ""}`} onClick={() => { setMode("poly"); setDraft([]); }}><PenLine size={14} />{t.poly}</button>
+        {mode === "poly" && <button type="button" className="btn btn-sm" disabled={draft.length < 3} onClick={finishPoly}><Check size={14} />{t.done}</button>}
+        {mode !== "idle" && region.length >= 3 && <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setMode("idle"); setDraft([]); }}><X size={14} />{msgs().common.cancel}</button>}
         <span className="spacer" />
-        {region.length >= 3 && <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}><Eye size={12} style={{ verticalAlign: -2 }} /> {region.length} Punkte</span>}
-        {cameraId !== null && <button type="button" className="btn btn-ghost btn-icon btn-sm" title="Standbild neu laden" onClick={() => { setImgErr(false); setBust(Date.now()); }}><RefreshCw size={14} /></button>}
+        {region.length >= 3 && <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}><Eye size={12} style={{ verticalAlign: -2 }} /> {t.points(region.length)}</span>}
+        {cameraId !== null && <button type="button" className="btn btn-ghost btn-icon btn-sm" title={t.reloadSnapshot} onClick={() => { setImgErr(false); setBust(Date.now()); }}><RefreshCw size={14} /></button>}
       </div>
     </div>
   );

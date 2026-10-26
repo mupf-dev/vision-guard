@@ -28,6 +28,7 @@ from typing import Any, Optional
 import httpx
 from sqlalchemy import delete, select
 
+from . import i18n
 from . import go2rtc, settings_store
 from .config import config
 from .db import SessionLocal
@@ -114,10 +115,10 @@ def grab_frame(camera_id: int, timeout: float = 15.0) -> bytes:
                       params={"src": go2rtc.stream_name(camera_id), "cache": FRAME_CACHE}, timeout=timeout)
     except httpx.HTTPError as e:
         log.info("Standbild Kamera %s nicht verfügbar: %s", camera_id, type(e).__name__)
-        raise AskError(502, "Kamerabild nicht verfügbar") from None
+        raise AskError(502, i18n.t("errors.camera_image_unavailable")) from None
     if r.status_code != 200 or not r.content.startswith(b"\xff\xd8"):
         log.info("Standbild Kamera %s nicht verfügbar: HTTP %s", camera_id, r.status_code)
-        raise AskError(502, "Kamerabild nicht verfügbar")
+        raise AskError(502, i18n.t("errors.camera_image_unavailable"))
     return r.content
 
 
@@ -139,19 +140,19 @@ def ask_local(image: bytes, question: str, region: Optional[list[float]], mode: 
                              "region": region, "mode": mode})
     except httpx.ConnectError:
         _set_health({"state": "off"})
-        raise AskError(503, "Bildmodell nicht verfügbar (Dienst vlm läuft nicht – Compose-Profil vlm)") from None
+        raise AskError(503, i18n.t("errors.vlm_service_down")) from None
     except httpx.TimeoutException:
-        raise AskError(503, "Bildmodell nicht verfügbar (Zeitlimit)") from None
+        raise AskError(503, i18n.t("errors.vlm_timeout")) from None
     except httpx.HTTPError as e:
-        raise AskError(503, f"Bildmodell nicht verfügbar ({type(e).__name__})") from None
+        raise AskError(503, i18n.t("errors.vlm_unavailable_detail", detail=type(e).__name__)) from None
     if r.status_code == 429:
-        raise AskError(429, "Bildmodell beschäftigt")
+        raise AskError(429, i18n.t("errors.vlm_busy"))
     if r.status_code == 503:
         d = _detail(r)
         raise AskError(503, d if d.startswith("Bildmodell") or d.startswith("Lokales") else
-                       f"Bildmodell nicht verfügbar ({d})")
+                       i18n.t("errors.vlm_unavailable_detail", detail=d))
     if r.status_code >= 400:
-        raise AskError(503, f"Bildmodell nicht verfügbar ({_detail(r)})")
+        raise AskError(503, i18n.t("errors.vlm_unavailable_detail", detail=_detail(r)))
     d = r.json()
     return {"answer": str(d.get("answer") or "").strip(), "yes_no": d.get("yes_no") or "unknown",
             "model": str(d.get("model") or ""), "ms": float(d.get("ms") or 0)}
@@ -201,7 +202,7 @@ def _camera(camera_id: int) -> dict[str, Any]:
     with SessionLocal() as s:
         c = s.get(Camera, camera_id)
         if c is None:
-            raise AskError(404, "Kamera nicht gefunden")
+            raise AskError(404, i18n.t("errors.camera_not_found"))
         return {"id": c.id, "name": c.name, "enabled": bool(c.enabled),
                 "vlm_cloud_allowed": bool(getattr(c, "vlm_cloud_allowed", False))}
 
@@ -254,18 +255,18 @@ def ask(camera_id: int, question: str, *, region: Optional[list[float]] = None, 
     question = (question or "").strip()[:300]
     cam = _camera(camera_id)
     if not cam["enabled"]:
-        raise AskError(409, "Kamera ist deaktiviert")
+        raise AskError(409, i18n.t("errors.camera_disabled"))
     st = settings_store.get()
     from . import cloud_vlm
 
     cloud_ready = cloud_vlm.available(cam)
     if engine == "cloud":
         if not cam["vlm_cloud_allowed"]:
-            raise AskError(403, "Cloud für diese Kamera nicht freigegeben")
+            raise AskError(403, i18n.t("errors.vlm_cloud_not_allowed"))
         if not cloud_ready:
-            raise AskError(503, "Bildmodell nicht verfügbar (Cloud-Modell nicht eingerichtet)")
+            raise AskError(503, i18n.t("errors.vlm_cloud_not_configured"))
     if engine == "local" and not st.get("vlm_enabled", True):
-        raise AskError(503, "Lokales Bildmodell ist ausgeschaltet (Einstellungen → Frag die Kamera)")
+        raise AskError(503, i18n.t("errors.vlm_local_disabled"))
     ts = datetime.now(timezone.utc)
     t0 = time.perf_counter()
     try:
@@ -283,7 +284,7 @@ def ask(camera_id: int, question: str, *, region: Optional[list[float]] = None, 
                 log.info("Frag die Kamera: lokal nicht möglich (%s) – Cloud-Fallback", e.message)
         if result is None:
             if not cloud_ready:
-                raise local_err or AskError(503, "Bildmodell nicht verfügbar (lokales Modell aus, keine Cloud)")
+                raise local_err or AskError(503, i18n.t("errors.vlm_local_off_no_cloud"))
             result = {**cloud_vlm.ask(img, question, region, mode), "engine": "cloud"}
         result["ms"] = round((time.perf_counter() - t0) * 1000)
     except AskError as e:

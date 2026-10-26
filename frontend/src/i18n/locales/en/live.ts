@@ -1,5 +1,35 @@
-/** Namensbereich (Englisch = Quelle). Texte mit Parametern als Funktion, z. B. count: (n: number) => `${n} items`. */
+/** Namensbereich „live“ (Englisch = Quelle). */
 const live = {
+  disabled: "Disabled",
+  auto: "Auto",
+  focusView: "Focus view",
+  showFeed: "Show feed",
+  hideFeed: "Hide feed",
+  recentEvents: "Recent events",
+  liveEvents: "Live events",
+  noEventsTitle: "No events yet",
+  noEventsText: "New detections appear here in real time.",
+  kpiCamerasOnline: "Cameras online",
+  kpiPeople: "People",
+  kpiVehicles: "Vehicles",
+  kpiAnimals: "Animals",
+  syncTitle: "Overlay delay: align boxes with the video",
+  overlayDelay: "Overlay delay",
+  syncHelp: (mode: string, s: string) => `The boxes are shifted automatically by the measured video delay (${mode}: ${s} s). If they still run ahead of the picture (positive) or behind it (negative), correct it here.`,
+  extraDelay: "Additional delay in seconds",
+  total: (s: string) => `Total: ${s} s`,
+  videoStalled: " · video stalled",
+  reset: "Reset",
+  allCameras: "All cameras",
+  lastSeen: (ago: string) => `last seen ${ago}`,
+  zones: "Zones",
+  showZones: "Show zones",
+  layout: "Layout",
+  layoutTitle: (t: string) => `Layout ${t}`,
+  loadingCameras: "Loading cameras …",
+  noCamerasTitle: "No cameras yet",
+  noCamerasText: "Add your first camera under Administration → Cameras.",
+  addCamera: "Add camera",
 };
 
 export type LiveMessages = typeof live;

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import settings_store
 from ..config import config
 from ..db import SessionLocal
@@ -17,7 +18,7 @@ from ..schemas import iso
 from ..ws import hub
 from . import deliver as _deliver
 from .facts import collect_facts
-from .render import period_text, render_llm, render_template, sections
+from .render import period_text, render_llm, render_template, report_title, sections
 
 log = logging.getLogger("vg.report")
 
@@ -55,7 +56,7 @@ def build(db: Session, since: datetime, until: datetime, *, kind: str = "manual"
         generator = "template"
         if st.get("report_generator") == "llm":
             facts["generation"] = {"requested": "llm", "ok": False,
-                                   "error": "Kein Sprachmodell eingerichtet (Einstellungen → KI-Sprachmodell)"}
+                                   "error": i18n.t("errors.llm_not_configured")}
     facts["sections"] = [{"key": k, "title": t, "text": s} for k, t, s in sections(facts)]
     return {"kind": kind, "period_start": since, "period_end": until, "facts": facts, "text": text, "html": html,
             "generator": generator}
@@ -69,7 +70,7 @@ def preview_json(data: dict[str, Any]) -> dict[str, Any]:
 
 def title_of(r: dict[str, Any]) -> str:
     head, _ = period_text(r.get("facts") or {"period": {"end": r.get("period_end")}})
-    return f"Tagesbericht {head}" if r.get("kind") == "daily" else f"Bericht {head}"
+    return report_title(head, r.get("kind") or "manual")
 
 
 def generate(since: datetime, until: datetime, *, kind: str = "manual", period_key: Optional[str] = None,

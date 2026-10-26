@@ -6,6 +6,8 @@ import { eventAlert, fmtDuration, POSTURE_NAME } from "../lib/pose";
 import { toast } from "../lib/store";
 import type { VGEvent } from "../lib/types";
 import { EventDetailDialog } from "./EventBits";
+import { msgs, useMsgs } from "../i18n";
+import { labelName } from "../lib/labels";
 
 /** Sekunden seit `iso` (aktualisiert sich jede Sekunde) */
 function useSince(iso?: string | null): number {
@@ -20,28 +22,29 @@ function useSince(iso?: string | null): number {
 export function alertText(e: VGEvent): string {
   const a = eventAlert(e);
   const p = a?.posture ? POSTURE_NAME[a.posture] : null;
-  const who = e.identity?.display_name ?? (e.label === "person" ? "Person" : e.label);
-  return p ? `${who} ${p}` : `${who}: ${a?.rule ?? "Alarm"}`;
+  const who = e.identity?.display_name ?? labelName(e.label);
+  return p ? `${who} ${p}` : `${who}: ${a?.rule ?? msgs().ui.alert.fallback}`;
 }
 
 function AlertRow({ e, onOpen }: { e: VGEvent; onOpen: () => void }) {
   const qc = useQueryClient();
+  const m = useMsgs().ui.alert;
   const a = eventAlert(e);
   const since = useSince(a?.posture_since ?? a?.first_fired_at ?? e.start_ts);
   const ack = useMutation({
     mutationFn: () => api.ackEvent(e.id),
-    onSuccess: () => { toast.success("Quittiert", alertText(e)); qc.invalidateQueries({ queryKey: ["events"] }); },
-    onError: (err: Error) => toast.error("Quittieren fehlgeschlagen", err.message),
+    onSuccess: () => { toast.success(m.acknowledged, alertText(e)); qc.invalidateQueries({ queryKey: ["events"] }); },
+    onError: (err: Error) => toast.error(m.ackFailed, err.message),
   });
   return (
     <div className="alert-row">
       <Siren size={18} className="alert-ico" />
-      <button type="button" className="alert-text" onClick={onOpen} title="Ereignis öffnen">
-        <b>{alertText(e)}</b> seit {fmtDuration(since)} · Kamera {e.camera_name}
-        <span className="muted"> · Regel „{a?.rule}“{a?.repeat ? ` · ${a.repeat}× wiederholt` : ""}</span>
+      <button type="button" className="alert-text" onClick={onOpen} title={m.openEvent}>
+        <b>{alertText(e)}</b> {m.since(fmtDuration(since))} · {m.camera(e.camera_name)}
+        <span className="muted"> · {m.rule(a?.rule ?? "")}{a?.repeat ? ` · ${m.repeated(a.repeat)}` : ""}</span>
       </button>
       <button className="btn btn-sm btn-danger" disabled={ack.isPending} onClick={() => ack.mutate()}>
-        {ack.isPending ? <span className="spinner" /> : <CheckCheck size={15} />}Quittieren
+        {ack.isPending ? <span className="spinner" /> : <CheckCheck size={15} />}{m.acknowledge}
       </button>
     </div>
   );
@@ -56,6 +59,7 @@ export function AlertBanner() {
     refetchInterval: 30_000,
   });
   const [open, setOpen] = useState<VGEvent | null>(null);
+  const m = useMsgs().ui.alert;
   const items = q.data?.items ?? [];
   if (!items.length && !open) return null;
   return (
@@ -63,7 +67,7 @@ export function AlertBanner() {
       {items.length > 0 && (
         <div className="alert-banner" role="alert">
           {items.map((e) => <AlertRow key={e.id} e={e} onOpen={() => setOpen(e)} />)}
-          {(q.data?.total ?? 0) > items.length && <div className="muted" style={{ fontSize: 12 }}>… und {(q.data?.total ?? 0) - items.length} weitere</div>}
+          {(q.data?.total ?? 0) > items.length && <div className="muted" style={{ fontSize: 12 }}>{m.andMore((q.data?.total ?? 0) - items.length)}</div>}
         </div>
       )}
       {open && <EventDetailDialog event={open} onClose={() => setOpen(null)} />}

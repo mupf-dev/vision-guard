@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from sqlalchemy import func, select
 
-from . import media_sign, push, settings_store
+from . import i18n, media_sign, push, settings_store
 from .config import config
 from .db import SessionLocal
 from .models import Notification, utcnow
@@ -72,8 +72,7 @@ def unmask_target(new: dict[str, Any], stored: list[dict[str, Any]]) -> dict[str
     masked = [k for k in PUSH_SECRET_FIELDS if out.get(k) == MASK]
     if masked and old and (old.get("type") != out.get("type")
                            or _norm_server(old.get("server")) != _norm_server(out.get("server"))):
-        raise SecretReuseError("Server oder Art des Push-Ziels geändert – Zugangsdaten (Token/Topic/Schlüssel) "
-                               "bitte neu eingeben")
+        raise SecretReuseError(i18n.t("notify.secret_reuse"))
     for k in masked:
         out[k] = old.get(k)
     return out
@@ -148,7 +147,7 @@ def create(*, source: str, title: str, message: str, level: str = "info",
                 Notification.ts >= _local_midnight_utc(),
                 Notification.data["pushed"].as_boolean().is_(True))) or 0
             if today >= limit:
-                skip_reason = f"Tageslimit erreicht ({limit} Pushes je Regel)"
+                skip_reason = i18n.t("notify.daily_limit", limit=limit)
         delivery = [{"target": t["id"], "ok": False, "status": "skipped" if skip_reason else "pending",
                      "error": skip_reason, "ts": None} for t in tgts]
         n = Notification(ts=now, source=source, level=level, rule_id=rule_id, rule_name=rule_name,

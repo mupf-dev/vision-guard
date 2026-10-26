@@ -15,9 +15,7 @@ from typing import Any, Optional
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
-from .common import LOCAL_TZ, READ_ONLY, BackendError, _parse_ts, api, fail, fmt_time, ok
-
-CHANNEL_DE = {"mqtt": "MQTT", "push": "Push", "webhook": "Webhook", "mail": "Mail"}
+from .common import LOCAL_TZ, READ_ONLY, BackendError, _parse_ts, api, fail, fmt_time, mapped, ok, t
 KEYWORDS = {"today": 0, "heute": 0, "yesterday": 1, "gestern": 1, "vorgestern": 2}
 
 
@@ -35,16 +33,17 @@ def parse_day(value: Optional[str], today: _date) -> _date:
             if d > today:
                 d = d.replace(year=today.year - 1)
         return d
-    raise ValueError(f"Unbekanntes Datum „{value}“ (erlaubt: YYYY-MM-DD, today, yesterday, heute, gestern)")
+    raise ValueError(t("reports.bad_date", value=value))
 
 
 def _delivery_text(delivery: dict[str, Any]) -> str:
     if not delivery:
-        return "nicht versendet"
+        return t("reports.not_sent")
     parts = []
     for k, d in delivery.items():
-        name = CHANNEL_DE.get(k, k)
-        parts.append(f"{name} ok" if d.get("ok") else f"{name} fehlgeschlagen ({d.get('error') or '?'})")
+        name = mapped("reports.channel", k)
+        parts.append(t("reports.channel_ok", name=name) if d.get("ok")
+                     else t("reports.channel_failed", name=name, error=d.get("error") or "?"))
     return ", ".join(parts)
 
 
@@ -63,11 +62,11 @@ def _compact(r: dict[str, Any]) -> dict[str, Any]:
 def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def get_daily_report(ctx: Context, date: Optional[str] = None) -> CallToolResult:
-        """Tagesbericht von VisionGuard: kurze deutsche Zusammenfassung eines Tages (Personen mit Namen und
-        Uhrzeiten, Fahrzeuge/Kennzeichen, Tiere und Näpfe, veränderte Gegenstände, ausgelöste Regeln, Hinweise) und
-        der Zustellstatus (MQTT, Push, Webhook, Mail). `date`: „today“ (Standard), „yesterday“ oder YYYY-MM-DD.
-        Gibt es für den Tag keinen gespeicherten Tagesbericht, wird eine Vorschau für den Tag (00:00 bis jetzt bzw.
-        bis Mitternacht) berechnet und nicht gespeichert."""
+        """VisionGuard daily report: short summary of a day (people with names and times, vehicles/licence
+        plates, pets and bowls, changed objects, triggered rules, notifications) and the delivery status (MQTT,
+        push, webhook, mail). `date`: "today" (default), "yesterday" or YYYY-MM-DD.
+        If no daily report is stored for that day, a preview for the day (00:00 until now or until midnight) is
+        computed and not stored. Stored reports keep the language they were written in."""
         try:
             now = datetime.now(LOCAL_TZ)
             try:
@@ -75,7 +74,7 @@ def register(mcp: MCPServer) -> None:
             except ValueError as e:
                 return fail(str(e))
             if day > now.date():
-                return fail("Für zukünftige Tage gibt es keinen Bericht.")
+                return fail(t("reports.future"))
             data = await api(ctx, "/reports", {"limit": 100})
             found = None
             for r in data.get("items") or []:
@@ -85,10 +84,11 @@ def register(mcp: MCPServer) -> None:
                     found = r
                     break
             if found:
-                full = await api(ctx, f"/reports/{found['id']}", {"signed": 1}, not_found="Bericht nicht gefunden.")
+                full = await api(ctx, f"/reports/{found['id']}", {"signed": 1}, not_found=t("reports.not_found"))
                 rep = _compact(full)
-                text = (f"{rep['text']}\n\n(Tagesbericht vom {fmt_time(rep['created_at'])}; Text: "
-                        f"{rep['generator']}; Versand: {_delivery_text(rep['delivery'])})")
+                text = f"{rep['text']}\n\n" + t("reports.stored_note", time=fmt_time(rep["created_at"]),
+                                                    generator=rep["generator"],
+                                                    delivery=_delivery_text(rep["delivery"]))
                 return ok(text, {"date": day.isoformat(), "source": "stored", "report": rep})
             start = datetime.combine(day, datetime.min.time())
             until = None if day == now.date() else datetime.combine(day + timedelta(days=1), datetime.min.time())
@@ -98,7 +98,7 @@ def register(mcp: MCPServer) -> None:
                                                        # und ggf. bezahlte Wiederholungen
                                                        "template": 1})
             rep = _compact(prev)
-            text = f"{rep['text']}\n\n(Vorschau – für diesen Tag ist kein Tagesbericht gespeichert; Text: {rep['generator']})"
+            text = f"{rep['text']}\n\n" + t("reports.preview_note", generator=rep["generator"])
             return ok(text, {"date": day.isoformat(), "source": "preview", "report": rep})
         except BackendError as e:
             return fail(str(e))

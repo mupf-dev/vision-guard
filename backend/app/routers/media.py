@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from .. import i18n
 from ..auth import bearer_key, principal_from_key, require_read, session_principal
 from ..media_sign import normalize_path, sign_media_path, sign_urls, verify_media_sig
 from ..util import media_path
@@ -33,8 +34,8 @@ def _check_access(request: Request, rel: str) -> None:
     if q.get("sig") is not None or q.get("exp") is not None:
         if verify_media_sig(rel, q.get("exp"), q.get("sig")):
             return
-        raise HTTPException(403, "Link ungültig oder abgelaufen")
-    raise HTTPException(401, "Nicht angemeldet", headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(403, i18n.t("errors.link_invalid"))
+    raise HTTPException(401, i18n.t("errors.not_logged_in"), headers={"WWW-Authenticate": "Bearer"})
 
 
 @router.api_route("/media/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -43,10 +44,10 @@ def get_media(path: str, request: Request):
     try:
         full = media_path(rel)
     except ValueError:
-        raise HTTPException(404, "Nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.not_found"))
     _check_access(request, rel)
     if not rel or not os.path.isfile(full):
-        raise HTTPException(404, "Nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.not_found"))
     # Range-Anfragen (Clips im <video>) beantwortet FileResponse selbst mit 206
     return FileResponse(full, headers={"Cache-Control": "private, max-age=600"})
 
@@ -64,9 +65,9 @@ def sign_media(body: MediaSignIn, _user: str = Depends(require_read)):
         try:
             media_path(rel)
         except ValueError:
-            raise HTTPException(422, f"Ungültiger Medienpfad: {p}")
+            raise HTTPException(422, i18n.t("errors.invalid_media_path", path=p))
         if not rel:
-            raise HTTPException(422, f"Ungültiger Medienpfad: {p}")
+            raise HTTPException(422, i18n.t("errors.invalid_media_path", path=p))
         urls[p] = sign_media_path(rel, body.ttl_s)
     exp = datetime.fromtimestamp(int(datetime.now(timezone.utc).timestamp()) + body.ttl_s, timezone.utc)
     return {"urls": urls, "expires_at": exp.isoformat().replace("+00:00", "Z")}

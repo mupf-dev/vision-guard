@@ -22,6 +22,7 @@ from typing import Any, Optional
 import numpy as np
 from sqlalchemy import delete, func, select, text, update
 
+from . import i18n
 from . import settings_store
 from .config import config
 from .db import SessionLocal, vector_available
@@ -147,14 +148,14 @@ def encode_query(q: str) -> tuple[list[str], list[list[float]], str]:
                 res = request("text", text=t, model="siglip2", timeout=TEXT_TIMEOUT_S)
                 break
             except EmbedUnavailable as e:
-                raise SearchUnavailable("Textsuche derzeit nicht verfügbar") from e
+                raise SearchUnavailable(i18n.t("errors.text_search_unavailable")) from e
             except EmbedError as e:
-                if "lädt" in str(e) and time.time() < deadline:
+                if ("lädt" in str(e) or "loading" in str(e).lower()) and time.time() < deadline:
                     time.sleep(1.0)
                     continue
-                raise SearchUnavailable(f"Textsuche derzeit nicht verfügbar ({e})") from e
+                raise SearchUnavailable(i18n.t("errors.text_search_unavailable_detail", error=e)) from e
         if len(res.embedding) != HISTORY_DIM:
-            raise SearchUnavailable(f"Textsuche: unerwartete Vektorlänge {len(res.embedding)}")
+            raise SearchUnavailable(i18n.t("errors.text_search_bad_dim", dim=len(res.embedding)))
         vecs.append(res.embedding)
         used.append(t)
         model = res.model
@@ -250,7 +251,7 @@ def _episodes(hits, cams: dict[int, dict]) -> list[dict]:
 
 def _episode(e: dict, cam: Optional[dict], cid: int) -> dict:
     b = e["_best"]
-    return {"camera_id": cid, "camera_name": cam["name"] if cam else f"Kamera {cid}",
+    return {"camera_id": cid, "camera_name": cam["name"] if cam else i18n.t("history.camera_fallback", id=cid),
             "room": cam["room"] if cam else None,
             "start_ts": _iso(e["_start"]), "end_ts": _iso(e["_end"]), "best_ts": _iso(b.ts),
             "score": score(e["_sim"]), "similarity": round(e["_sim"], 4),

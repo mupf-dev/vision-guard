@@ -8,25 +8,26 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
 from .common import (READ_ONLY, BackendError, api, cameras, compact_item, fail, find_camera, fmt_time, item_sentence,
-                     n_de, ok)
+                     mapped, ok, t)
 
 
 def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def find_object(query: str, ctx: Context, limit: int = 5) -> CallToolResult:
-        """Sucht einen Gegenstand (deutsch oder englisch, z. B. „Wo ist meine Fernbedienung?“) und sagt, wo er
-        aktuell sichtbar ist bzw. zuletzt gesehen wurde – mit Kamera, Raum, vermuteter Lage und Zeit."""
+        """Find an object (query in English or the system language, e.g. "Where is my remote control?") and tell
+        where it is visible right now or was last seen – with camera, room, probable location and time. Answers
+        come in the configured system language."""
         try:
             q = (query or "").strip()
             if not q:
-                return fail("Bitte einen Suchbegriff angeben, z. B. „Fernbedienung“.")
+                return fail(t("inventory.query_required"))
             limit = max(1, min(int(limit), 20))
             data = await api(ctx, "/inventory/search", {"q": q, "limit": limit, "signed": 1})
             items = [compact_item(i) for i in data.get("items", [])]
-            answer = data.get("answer") or (item_sentence(items[0]) if items else f"Kein Gegenstand „{q}“ bekannt.")
+            answer = data.get("answer") or (item_sentence(items[0]) if items else t("inventory.not_known", query=q))
             lines = [answer]
             if items:
-                lines.append("Treffer:")
+                lines.append(t("inventory.hits"))
                 lines += [f"- {item_sentence(c)}" for c in items]
             return ok("\n".join(lines), {"query": data.get("query", q), "answer": answer, "items": items})
         except BackendError as e:
@@ -36,8 +37,8 @@ def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def list_visible_objects(ctx: Context, camera_id: Optional[int] = None, room: Optional[str] = None,
                                    camera_name: Optional[str] = None) -> CallToolResult:
-        """Listet alle Gegenstände, die gerade sichtbar sind – optional nur für eine Kamera (camera_id oder
-        camera_name) oder einen Raum (room)."""
+        """List all objects that are visible right now – optionally only for one camera (camera_id or
+        camera_name) or one room (room)."""
         try:
             if camera_id is None and camera_name:
                 camera_id = find_camera(await cameras(ctx), None, camera_name)["id"]
@@ -46,14 +47,15 @@ def register(mcp: MCPServer) -> None:
             items = [compact_item(i) for i in data.get("items", [])]
             scope = []
             if camera_id is not None:
-                scope.append(f"Kamera {camera_name or camera_id}")
+                scope.append(t("common.camera", name=camera_name or camera_id))
             if room:
-                scope.append(f"Raum {room}")
+                scope.append(t("common.room", name=room))
             suffix = f" ({', '.join(scope)})" if scope else ""
             if not items:
-                text = f"Derzeit sind keine Gegenstände sichtbar{suffix}."
+                text = t("inventory.none_visible", scope=suffix)
             else:
-                text = f"{n_de(len(items), 'Gegenstand', 'Gegenstände')} sichtbar{suffix}:\n" + "\n".join(f"- {item_sentence(c)}" for c in items)
+                text = (t("inventory.n_visible", n=len(items), scope=suffix) + "\n"
+                        + "\n".join(f"- {item_sentence(c)}" for c in items))
             return ok(text, {"total": data.get("total", len(items)), "items": items})
         except BackendError as e:
             return fail(str(e))
@@ -61,21 +63,21 @@ def register(mcp: MCPServer) -> None:
 
     @mcp.tool(annotations=READ_ONLY)
     async def get_object_history(item_id: int, ctx: Context, limit: int = 20) -> CallToolResult:
-        """Verlauf eines Gegenstands (id aus find_object/list_visible_objects): wann er wo sichtbar war oder fehlte."""
+        """History of an object (id from find_object/list_visible_objects): when and where it was visible or
+        missing, newest first."""
         try:
             limit = max(1, min(int(limit), 500))
-            nf = f"Gegenstand {item_id} ist unbekannt."
+            nf = t("inventory.unknown_id", id=item_id)
             item = await api(ctx, f"/inventory/{item_id}", {"signed": 1}, not_found=nf)
             hist = await api(ctx, f"/inventory/{item_id}/history", {"limit": limit, "signed": 1}, not_found=nf)
             entries = [{"ts": h.get("ts"), "state": h.get("state"), "camera_id": h.get("camera_id"),
                         "zones": h.get("zones") or [], "crop_url": h.get("crop_url")} for h in hist]
-            state_de = {"present": "sichtbar", "missing": "nicht sichtbar", "stale": "keine Daten"}
-            name = item.get("name_de") or item.get("label")
-            lines = [item_sentence(compact_item(item)), f"Verlauf ({n_de(len(entries), 'Eintrag', 'Einträge')}, neueste zuerst):"]
-            lines += [f"- {fmt_time(e['ts'])}: {state_de.get(e['state'], e['state'])} (Kamera {e['camera_id']})"
-                      for e in entries]
+            name = item.get("name") or item.get("name_de") or item.get("label")
+            lines = [item_sentence(compact_item(item)), t("inventory.history_head", n=len(entries))]
+            lines += [f"- {fmt_time(e['ts'])}: {mapped('inventory.state', e['state'])} "
+                      f"({t('common.camera', name=e['camera_id'])})" for e in entries]
             if not entries:
-                lines[-1] = f"Kein Verlauf für {name} gespeichert."
+                lines[-1] = t("inventory.no_history", name=name)
             return ok("\n".join(lines), {"item_id": item_id, "entries": entries})
         except BackendError as e:
             return fail(str(e))

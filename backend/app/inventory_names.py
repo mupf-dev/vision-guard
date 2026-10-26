@@ -1,4 +1,4 @@
-"""Deutsche Namen, Synonyme und Suche für Gegenstände (Inventar).
+"""Namen (alle Sprachen), Synonyme und Suche für Gegenstände (Inventar).
 
 Die Anzeige-Namen kommen aus dem Settings-Vokabular (`inventory_vocabulary[].name_de`); hier stehen eingebaute
 Synonyme (zusätzlich zu `inventory_synonyms` aus den Settings) und die Normalisierung/Suche für Fragen wie
@@ -67,9 +67,52 @@ BUILTIN_SYNONYMS: dict[str, list[str]] = {
     "trash_can": ["Mülltonne", "Abfalleimer", "Papierkorb", "Eimer", "Müll"],
 }
 
-# Dativ-Formen für Lagebeziehungen („vermutlich auf dem Tisch“)
+# Eingebaute englische Suchwörter (zusätzlich zu Prompts und `names.en`)
+BUILTIN_SYNONYMS_EN: dict[str, list[str]] = {
+    "keys": ["key", "keychain", "house keys", "car keys"],
+    "wallet": ["purse", "billfold"],
+    "phone": ["mobile", "mobile phone", "cellphone", "iphone", "smartphone"],
+    "eyeglasses": ["glasses", "specs", "spectacles", "reading glasses"],
+    "sunglasses": ["shades"],
+    "wristwatch": ["watch", "smartwatch"],
+    "headphones": ["earphones", "earbuds", "airpods", "headset"],
+    "backpack": ["rucksack", "school bag"],
+    "handbag": ["bag", "shoulder bag", "clutch"],
+    "medicine": ["pills", "tablets", "meds", "medication", "pill box"],
+    "jacket": ["coat", "raincoat", "anorak"],
+    "remote": ["remote", "tv remote", "clicker"],
+    "laptop": ["notebook", "computer", "macbook"],
+    "tablet": ["ipad", "e-reader", "kindle"],
+    "charger": ["cable", "usb cable", "power bank", "power adapter"],
+    "game_controller": ["controller", "gamepad", "joystick"],
+    "tv": ["telly", "television", "screen", "monitor"],
+    "flashlight": ["torch", "head torch"],
+    "mug": ["cup", "coffee cup", "tea cup"],
+    "glass": ["drinking glass", "wine glass", "water glass"],
+    "bottle": ["water bottle", "wine bottle"],
+    "cutting_board": ["chopping board", "board"],
+    "kettle": ["electric kettle"],
+    "table": ["coffee table", "desk", "dining table", "side table", "bedside table"],
+    "chair": ["armchair", "stool"],
+    "sofa": ["couch", "settee"],
+    "rug": ["carpet", "mat", "doormat"],
+    "pillow": ["cushion"],
+    "blanket": ["throw", "duvet"],
+    "lamp": ["light", "floor lamp", "desk lamp"],
+    "potted_plant": ["plant", "flower", "flower pot"],
+    "book": ["magazine", "novel", "paperback"],
+    "pen": ["pencil", "marker", "biro"],
+    "tool": ["hammer", "screwdriver", "pliers", "wrench", "spanner"],
+    "parcel": ["package", "box", "cardboard box", "delivery"],
+    "toy": ["teddy", "teddy bear", "stuffed animal", "doll"],
+    "shoes": ["shoe", "trainers", "sneakers", "slippers", "boots"],
+    "helmet": ["bike helmet", "bicycle helmet"],
+    "trash_can": ["bin", "rubbish bin", "garbage can", "waste basket", "trash"],
+}
+
+# Flächen für Lagebeziehungen („vermutlich auf dem Tisch“ / "probably on the table"); Texte in
+# `locales/<code>/inventory.json` (`surface_at|surface_from|surface_to.<label>`)
 SURFACE_LABELS = ("table", "sofa", "bed", "chair", "rug")
-_DATIVE = {"table": "dem Tisch", "sofa": "dem Sofa", "bed": "dem Bett", "chair": "dem Stuhl", "rug": "dem Teppich"}
 
 _UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
 
@@ -82,6 +125,10 @@ _FILLERS = {
     "gerade", "denn", "nur", "bitte", "noch", "eigentlich", "zuletzt", "gesehen", "finde", "find", "suche",
     "such", "gefunden", "hingelegt", "gelegt", "gelassen", "verlegt", "kann", "nicht", "mehr", "nochmal",
     "where", "is", "are", "my", "the", "a", "an",
+    # englische Füllwörter („Where are my keys?“, "where's the remote", "have you seen my wallet")
+    "s", "whereabouts", "was", "were", "did", "do", "does", "i", "we", "you", "it", "they", "our", "your", "his",
+    "her", "their", "have", "has", "had", "seen", "see", "last", "put", "leave", "left", "find", "can", "cant",
+    "please", "currently", "right", "now", "still", "any", "some", "lost", "misplaced", "show", "me",
 }
 
 
@@ -99,8 +146,15 @@ def strip_fillers(norm: str) -> str:
 
 
 def stem(word: str) -> str:
-    """Grobe deutsche Pluralreduktion (nur für den Vergleich, nicht für die Anzeige)."""
+    """Grobe deutsche/englische Pluralreduktion (nur für den Vergleich, nicht für die Anzeige)."""
     w = word
+    # englisch: batteries → battery, glasses → glass, knives → knif(e), boxes → box
+    if len(w) > 4 and w.endswith("ies"):
+        w = w[:-3] + "y"
+    elif len(w) > 4 and w.endswith("ves"):
+        w = w[:-3] + "f"
+    elif len(w) > 4 and w.endswith(("sses", "shes", "ches", "xes")):
+        w = w[:-2]
     if len(w) > 5 and w.endswith("ern"):
         return w[:-3]
     for suf in ("en", "er", "n", "e", "s"):
@@ -138,11 +192,36 @@ def localized_name(label: str, vocab: Optional[dict[str, dict[str, Any]]] = None
         return str(e["name_de"])
     if names.get("en"):
         return str(names["en"])
+    # gespeichertes Vokabular aus der Zeit vor I18N.C (ohne `names`): Name aus dem Default-Vokabular
+    if lg != "de" or not e.get("name_de"):
+        d = _default_entry(label)
+        dn = d.get("names") if isinstance(d.get("names"), dict) else {}
+        if dn.get(lg) or dn.get("en"):
+            return str(dn.get(lg) or dn["en"])
     prompts = e.get("prompts") or []
     if prompts:
         p = str(prompts[0])
         return p[:1].upper() + p[1:]
     return label.replace("_", " ")
+
+
+def _default_entry(label: str) -> dict[str, Any]:
+    from .config import DEFAULT_INVENTORY_VOCABULARY
+    for e in DEFAULT_INVENTORY_VOCABULARY:
+        if e.get("label") == label:
+            return e
+    return {}
+
+
+def all_names(entry: Optional[dict[str, Any]], label: str = "") -> list[str]:
+    """Alle Anzeigenamen eines Vokabular-Eintrags (name_de, names.* inkl. Default-Vokabular) – für die Suche."""
+    out: list[str] = []
+    e = entry or {}
+    for n in [e.get("name_de")] + list((e.get("names") or {}).values()) + \
+            list((_default_entry(label or e.get("label") or "").get("names") or {}).values()):
+        if n and str(n) not in out:
+            out.append(str(n))
+    return out
 
 
 def vocab_name(label: str, lang: Optional[str] = None) -> str:
@@ -153,18 +232,43 @@ def vocab_name(label: str, lang: Optional[str] = None) -> str:
 
 def synonyms_for(label: str, custom: Optional[dict[str, list[str]]] = None) -> list[str]:
     out: list[str] = []
-    for s in list(BUILTIN_SYNONYMS.get(label, [])) + list((custom or {}).get(label) or []):
+    for s in (list(BUILTIN_SYNONYMS.get(label, [])) + list(BUILTIN_SYNONYMS_EN.get(label, []))
+              + list((custom or {}).get(label) or [])):
         s = str(s).strip()
         if s and s not in out:
             out.append(s)
     return out
 
 
-def relation_text(rel_type: str, surface_label: str, surface_name: str) -> str:
-    target = _DATIVE.get(surface_label) or f"„{surface_name}“"
-    if rel_type == "on":
-        return f"vermutlich auf {target}"
-    return f"vermutlich neben {target}"
+def _opt_text(key: str, lang: Optional[str]) -> Optional[str]:
+    """Text oder None (ohne Warnung), Rückfall Englisch."""
+    from . import i18n
+    lg = i18n.normalize(lang) or i18n.current()
+    v = i18n._lookup(lg, key)
+    if v is None and lg != i18n.FALLBACK:
+        v = i18n._lookup(i18n.FALLBACK, key)
+    return v if isinstance(v, str) else None
+
+
+def surface_phrase(surface_label: str, surface_name: Optional[str] = None, case: str = "at",
+                   lang: Optional[str] = None) -> str:
+    """Fläche im Satz: case `at` („dem Tisch“/"the table"), `from` („vom Tisch“), `to` („zum Tisch“).
+    Unbekannte Flächen mit ihrem Anzeigenamen in Anführungszeichen."""
+    from . import i18n
+    hit = _opt_text(f"inventory.surface_{case}.{surface_label}", lang)
+    if hit:
+        return hit
+    name = surface_name or vocab_name(surface_label, lang)
+    return i18n.t(f"inventory.surface_{case}_named", lang, name=name)
+
+
+def relation_text(rel_type: str, surface_label: str, surface_name: Optional[str] = None,
+                  lang: Optional[str] = None, *, plain: bool = False) -> str:
+    """„vermutlich auf dem Tisch“ / "probably on the table" (plain: ohne „vermutlich“)."""
+    from . import i18n
+    target = surface_phrase(surface_label, surface_name, "at", lang)
+    kind = "on" if rel_type == "on" else "near"
+    return i18n.t(f"inventory.relation_{'plain_' if plain else ''}{kind}", lang, target=target)
 
 
 # ---------------------------------------------------------------- Suche
@@ -173,9 +277,9 @@ def relation_text(rel_type: str, surface_label: str, surface_name: str) -> str:
 def _terms(label: str, entry: Optional[dict[str, Any]], custom: Optional[dict[str, list[str]]]):
     """(normierter Begriff, via) je Label."""
     out: list[tuple[str, str]] = [(normalize(label.replace("_", " ")), "label")]
+    for n in all_names(entry, label):
+        out.append((normalize(n), "name"))
     if entry:
-        if entry.get("name_de"):
-            out.append((normalize(entry["name_de"]), "name"))
         for p in entry.get("prompts") or []:
             out.append((normalize(p), "prompt"))
     for s in synonyms_for(label, custom):
@@ -208,7 +312,8 @@ def match_labels(query: str, vocab: list[dict[str, Any]], custom: Optional[dict[
         for term, via in _terms(label, vmap.get(label), custom):
             t_stem = stem_phrase(term)
             if term == norm or t_stem == q_stem:
-                offer(label, 100.0, via)
+                # wörtlich gleich vor nur gleichem Stamm ("glasses" = Brille, nicht Glas)
+                offer(label, 100.0 if term == norm else 98.0, via)
                 continue
             t_tokens = t_stem.split()
             # ganzer Begriff als Wortfolge in der Anfrage („die blaue tasse“) oder umgekehrt

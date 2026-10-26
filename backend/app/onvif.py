@@ -17,6 +17,7 @@ from urllib.parse import urlsplit, urlunsplit
 from xml.sax.saxutils import escape
 
 import httpx
+from . import i18n
 
 log = logging.getLogger("vg.onvif")
 
@@ -113,9 +114,9 @@ class OnvifPtz:
             r = self.http.post(url, content=env.encode(), headers={"Content-Type": "application/soap+xml; charset=utf-8"},
                                **kw)
         except httpx.TimeoutException as e:
-            raise OnvifError("Kamera antwortet nicht (Zeitüberschreitung)") from e
+            raise OnvifError(i18n.t("errors.onvif_timeout")) from e
         except httpx.HTTPError as e:
-            raise OnvifError(f"Kamera nicht erreichbar ({type(e).__name__})") from e
+            raise OnvifError(i18n.t("errors.onvif_unreachable", error=type(e).__name__)) from e
         if r.status_code == 401 and auth and self.user and not self.digest:
             # einige Geräte verlangen HTTP-Digest statt WS-Security
             self.digest = True
@@ -123,14 +124,14 @@ class OnvifPtz:
         try:
             root = ET.fromstring(r.content)
         except ET.ParseError as e:
-            raise OnvifError(f"Ungültige ONVIF-Antwort (HTTP {r.status_code})") from e
+            raise OnvifError(i18n.t("errors.onvif_invalid_response", status=r.status_code)) from e
         fault = _find(root, "Fault")
         if fault is not None or r.status_code >= 400:
             reason = " ".join(t.strip() for t in (fault.itertext() if fault is not None else []) if t.strip())
             low = reason.lower()
             if r.status_code == 401 or "notauthorized" in low or "not authorized" in low or "sender not auth" in low:
-                raise OnvifError("ONVIF-Anmeldung fehlgeschlagen (Benutzer/Passwort prüfen)")
-            raise OnvifError(f"Kamera meldet Fehler: {reason[:200] or f'HTTP {r.status_code}'}")
+                raise OnvifError(i18n.t("errors.onvif_auth_failed"))
+            raise OnvifError(i18n.t("errors.onvif_camera_error", reason=reason[:200] or f"HTTP {r.status_code}"))
         return root
 
     def _rebase(self, xaddr: Optional[str]) -> str:
@@ -162,8 +163,8 @@ class OnvifPtz:
         ports = [self.port] if self.port else list(DEFAULT_PORTS)
         if not any(self._try_port(p) for p in ports):
             self.port = ports[0] if len(ports) == 1 else None
-            raise OnvifError("Kein ONVIF-Dienst gefunden" + (f" (Port {ports[0]})" if len(ports) == 1 else
-                                                            f" (Ports {', '.join(map(str, ports))} geprüft)"))
+            raise OnvifError(i18n.t("errors.onvif_no_service_port", port=ports[0]) if len(ports) == 1 else
+                             i18n.t("errors.onvif_no_service_ports", ports=", ".join(map(str, ports))))
         root = self._call(self.device_url, f'<GetDeviceInformation xmlns="{NS_DEVICE}"/>')
         self.device = {"manufacturer": _text(root, "Manufacturer"), "model": _text(root, "Model"),
                        "firmware": _text(root, "FirmwareVersion")}
@@ -171,9 +172,9 @@ class OnvifPtz:
         self.media_url = self._rebase(_text(root, "Media", "XAddr"))
         self.ptz_url = self._rebase(_text(root, "PTZ", "XAddr"))
         if not self.ptz_url:
-            raise OnvifError("Kamera bietet keine PTZ-Steuerung über ONVIF an")
+            raise OnvifError(i18n.t("errors.onvif_no_ptz"))
         if not self.media_url:
-            raise OnvifError("Kamera meldet keinen ONVIF-Mediendienst")
+            raise OnvifError(i18n.t("errors.onvif_no_media_service"))
         root = self._call(self.media_url, f'<GetProfiles xmlns="{NS_MEDIA}"/>')
         profiles = [p for p in _findall(root, "Profiles") if p.get("token")]
         with_ptz = [p for p in profiles if _find(p, "PTZConfiguration") is not None]
@@ -181,10 +182,10 @@ class OnvifPtz:
         if self.want_profile:
             pick = next((p for p in profiles if p.get("token") == self.want_profile), None)
             if pick is None:
-                raise OnvifError(f"Medienprofil {self.want_profile} gibt es auf der Kamera nicht")
+                raise OnvifError(i18n.t("errors.onvif_profile_missing", profile=self.want_profile))
         pick = pick or (with_ptz[0] if with_ptz else (profiles[0] if profiles else None))
         if pick is None:
-            raise OnvifError("Kamera meldet kein Medienprofil")
+            raise OnvifError(i18n.t("errors.onvif_no_media_profile"))
         self.profile = pick.get("token") or ""
         self.caps = {"continuous": True, "zoom": False, "presets": True, "presets_max": 0, "status": True}
         try:

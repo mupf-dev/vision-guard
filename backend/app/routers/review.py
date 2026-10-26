@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import review as review_svc
 from .. import review_effects
 from ..auth import current_principal, require_user
@@ -34,7 +35,7 @@ def list_reviews(db: Session = Depends(get_db), status: Optional[str] = "open", 
         sts = [x.strip() for x in status.split(",") if x.strip()]
         bad = [x for x in sts if x not in STATUSES]
         if bad:
-            raise HTTPException(422, f"Unbekannter Status: {', '.join(bad)}")
+            raise HTTPException(422, i18n.t("errors.unknown_status", status=", ".join(bad)))
         q = q.where(ReviewRequest.status.in_(sts))
     if kind:
         q = q.where(ReviewRequest.kind.in_([x.strip() for x in kind.split(",") if x.strip()]))
@@ -60,7 +61,7 @@ def thresholds(camera_id: Optional[int] = None, db: Session = Depends(get_db)):
 def get_review(review_id: int, db: Session = Depends(get_db)):
     r = db.get(ReviewRequest, review_id)
     if r is None:
-        raise HTTPException(404, "Rückfrage nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.review_not_found"))
     return review_svc.review_json(r)
 
 
@@ -78,11 +79,13 @@ def answer_review(review_id: int, body: ReviewAnswerIn, request: Request, db: Se
 
 public_router = APIRouter(prefix="/api/review/a", tags=["review"])
 
-_ANSWER_DE = {"yes": "Ja", "no": "Nein"}
+
+def _ans(a: str) -> str:
+    return i18n.t("review.page.yes" if a == "yes" else "review.page.no")
 
 
 def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
-    doc = f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
+    doc = f"""<!doctype html><html lang="{i18n.current()}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>{html.escape(title)} – VisionGuard</title>
 <style>body{{font-family:system-ui,sans-serif;background:#0f1115;color:#e8eaed;margin:0;padding:24px;}}
@@ -95,7 +98,7 @@ button.no{{background:#555}}</style></head><body><main>{body}</main></body></htm
 
 def _check(review_id: int, a: str, exp: Optional[str], sig: Optional[str]) -> None:
     if not review_effects.verify_answer_sig(review_id, a, exp, sig):
-        raise HTTPException(403, "Link ungültig oder abgelaufen")
+        raise HTTPException(403, i18n.t("errors.link_invalid"))
 
 
 @public_router.get("/{review_id}", response_class=HTMLResponse)
@@ -105,16 +108,18 @@ def answer_page(review_id: int, a: str = "", exp: Optional[str] = None, sig: Opt
     try:
         _check(review_id, a, exp, sig)
     except HTTPException:
-        return _page("Link ungültig", "<h1>Link ungültig oder abgelaufen</h1>", 403)
+        return _page(i18n.t("review.page.title_invalid"), f"<h1>{html.escape(i18n.t('review.page.invalid'))}</h1>", 403)
     r = db.get(ReviewRequest, review_id)
     if r is None:
-        return _page("Unbekannt", "<h1>Diese Frage gibt es nicht mehr.</h1>", 404)
+        return _page(i18n.t("review.page.title_unknown"), f"<h1>{html.escape(i18n.t('review.page.gone'))}</h1>", 404)
     q = html.escape(r.question or "")
     if r.status != "open":
-        return _page("Erledigt", f"<h1>{q}</h1><p>Diese Frage ist bereits beantwortet oder abgelaufen.</p>")
+        return _page(i18n.t("review.page.title_done"), f"<h1>{q}</h1><p>{html.escape(i18n.t('review.page.done'))}</p>")
     cls = "" if a == "yes" else "no"
-    return _page("Bitte bestätigen", f"""<h1>{q}</h1><p>Antwort: <b>{_ANSWER_DE[a]}</b></p>
-<form method="post"><button class="{cls}" type="submit">{_ANSWER_DE[a]} – absenden</button></form>""")
+    label = html.escape(_ans(a))
+    submit = html.escape(i18n.t("review.page.submit", answer=_ans(a)))
+    return _page(i18n.t("review.page.title_confirm"), f"""<h1>{q}</h1><p>{html.escape(i18n.t("review.page.answer"))}: <b>{label}</b></p>
+<form method="post"><button class="{cls}" type="submit">{submit}</button></form>""")
 
 
 @public_router.post("/{review_id}")
@@ -126,9 +131,10 @@ def answer_by_link(review_id: int, request: Request, a: str = "", exp: Optional[
         out = review_svc.answer(db, review_id, a, source="push")
     except review_svc.ReviewError as e:
         if "text/html" in (request.headers.get("accept") or ""):
-            return _page("Nicht möglich", f"<h1>{html.escape(str(e))}</h1>", e.status)
+            return _page(i18n.t("review.page.title_failed"), f"<h1>{html.escape(str(e))}</h1>", e.status)
         raise HTTPException(e.status, str(e)) from None
     if "text/html" in (request.headers.get("accept") or ""):
-        return _page("Danke", f"<h1>Danke!</h1><p>{html.escape(out['question'])} – <b>{_ANSWER_DE[a]}</b> "
-                              "gespeichert.</p>")
+        return _page(i18n.t("review.page.title_thanks"),
+                     f"<h1>{html.escape(i18n.t('review.page.thanks'))}</h1><p>{html.escape(out['question'])} – "
+                     f"<b>{html.escape(_ans(a))}</b> {html.escape(i18n.t('review.page.saved'))}</p>")
     return out

@@ -18,7 +18,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import inventory_names as names
-from . import item_identity, registry, settings_store
+from . import i18n, item_identity, registry, settings_store
 from .db import SessionLocal
 from .models import Camera, InventoryHistory, InventoryItem
 from .schemas import iso, media_url
@@ -130,18 +130,16 @@ def _utc(dt: Optional[datetime]) -> Optional[datetime]:
 def ago_text(dt: Optional[datetime], now: Optional[datetime] = None) -> str:
     dt = _utc(dt)
     if dt is None:
-        return "unbekannt"
+        return i18n.t("inventory.unknown")
     now = now or datetime.now(timezone.utc)
     s = max(0.0, (now - dt).total_seconds())
     if s < 60:
-        return "gerade eben"
+        return i18n.t("inventory.just_now")
     if s < 3600:
-        return f"vor {int(s // 60)} min"
+        return i18n.t("inventory.ago_min", n=int(s // 60))
     if s < 86400:
-        h = int(s // 3600)
-        return f"vor {h} h"
-    d = int(s // 86400)
-    return "vor 1 Tag" if d == 1 else f"vor {d} Tagen"
+        return i18n.t("inventory.ago_h", n=int(s // 3600))
+    return i18n.t("inventory.ago_d", n=int(s // 86400))
 
 
 def local_time_text(dt: Optional[datetime], now: Optional[datetime] = None) -> str:
@@ -156,27 +154,51 @@ def local_time_text(dt: Optional[datetime], now: Optional[datetime] = None) -> s
     if loc.date() == nloc.date():
         return hm
     if loc.date() == (nloc - timedelta(days=1)).date():
-        return f"gestern {hm}"
-    return f"{loc.strftime('%d.%m.')} {hm}"
+        return i18n.t("inventory.yesterday_at", time=hm)
+    return i18n.t("inventory.date_time", date=loc.strftime(i18n.t("inventory.day_month_format")), time=hm)
 
 
 def status_text(state: str, last_seen: Optional[datetime]) -> str:
     if state == "present":
-        return "aktuell sichtbar"
+        return i18n.t("inventory.status_present")
     if state == "stale":
-        return f"Stand unklar (Kamera liefert gerade keine Gegenstandsanalyse), zuletzt gesehen {ago_text(last_seen)}"
-    return f"zuletzt gesehen {ago_text(last_seen)}"
+        return i18n.t("inventory.status_stale", ago=ago_text(last_seen))
+    return i18n.t("inventory.status_missing", ago=ago_text(last_seen))
+
+
+def zones_text(zone_names: list[str]) -> str:
+    """„Zone Tischchen“ / "zones A, B"."""
+    return i18n.t("inventory.zones", n=len(zone_names), names=", ".join(zone_names))
 
 
 def place_text(cam: dict[str, Any], zone_names: list[str]) -> str:
     """„in Wohnzimmer (Kamera Wohnzimmer, Zone Tischchen)“."""
-    extra = [f"Kamera {cam.get('name') or '?'}"]
+    extra = [i18n.t("inventory.camera", name=cam.get("name") or "?")]
     if zone_names:
-        extra.append(("Zone " if len(zone_names) == 1 else "Zonen ") + ", ".join(zone_names))
+        extra.append(zones_text(zone_names))
     room = cam.get("room")
     if room:
-        return f"in {room} ({', '.join(extra)})"
-    return f"bei {', '.join(extra)}"
+        return i18n.t("inventory.place_room", room=room, details=", ".join(extra))
+    return i18n.t("inventory.place_camera", details=", ".join(extra))
+
+
+def relation_json(rel: Optional[dict[str, Any]], vocab: Optional[dict[str, dict[str, Any]]] = None
+                  ) -> Optional[dict[str, Any]]:
+    """Gespeicherte Lagebeziehung mit Text/Namen in der aktuellen Sprache (Anfrage bzw. Systemsprache)."""
+    if not rel:
+        return None
+    out = dict(rel)
+    label = rel.get("label") or ""
+    if label and rel.get("type") in ("on", "near"):
+        out["name"] = names.localized_name(label, vocab)
+        out["text"] = names.relation_text(rel["type"], label, out["name"])
+    return out
+
+
+def relation_text_of(rel: Optional[dict[str, Any]], vocab: Optional[dict[str, dict[str, Any]]] = None
+                     ) -> Optional[str]:
+    r = relation_json(rel, vocab)
+    return (r or {}).get("text")
 
 
 # ---------------------------------------------------------------- Serialisierung
@@ -197,7 +219,8 @@ def _media(path: Optional[str], signed: bool) -> Optional[str]:
 
 def camera_info(camera_id: int) -> dict[str, Any]:
     cam = registry.get(camera_id) or {}
-    return {"id": camera_id, "name": cam.get("name") or f"Kamera {camera_id}", "room": cam.get("room"),
+    return {"id": camera_id, "name": cam.get("name") or i18n.t("inventory.camera_fallback", id=camera_id),
+            "room": cam.get("room"),
             "zones": cam.get("zones") or {}}
 
 
@@ -216,13 +239,14 @@ def item_json(it: InventoryItem, *, signed: bool = False, vocab: Optional[dict[s
         "room": cam.get("room"),
         "label": it.label,
         "name_de": names.display_name(it.label, vocab),
+        "name": names.localized_name(it.label, vocab),
         "score": round(float(it.score or 0), 4),
         "bbox": [round(float(x), 4) for x in (it.bbox or [])],
         "zones": zones,
         "zone_names": zone_names,
         "state": it.state,
         "visible": it.state == "present",
-        "relation": it.relation if it.relation else None,
+        "relation": relation_json(it.relation, vocab),
         "first_seen": iso(it.first_seen),
         "last_seen": iso(it.last_seen),
         "updated_at": iso(it.updated_at),
@@ -256,42 +280,42 @@ def present_since(s: Session, it: InventoryItem) -> Optional[datetime]:
 def _item_title(it: InventoryItem, vocab: dict[str, dict[str, Any]]) -> str:
     """„Annas Rucksack“ bei zugeordnetem Exemplar, sonst der Vokabular-Name."""
     ident = item_identity.summary(it.identity_id)
-    return ident["display_name"] if ident else names.display_name(it.label, vocab)
+    return ident["display_name"] if ident else names.localized_name(it.label, vocab)
 
 
 def answer_sentence(s: Session, items: list[InventoryItem], query: str, matched_label: Optional[str],
                     vocab: dict[str, dict[str, Any]], title: Optional[str] = None) -> str:
-    """Deutscher Antwortsatz für die Suche bzw. das MCP-Tool find_object. `title`: Exemplar-Name (B4)."""
+    """Antwortsatz (Sprache der Anfrage) für die Suche bzw. das MCP-Tool find_object. `title`: Exemplar-Name (B4)."""
     if not matched_label:
-        return f"Kein Gegenstand „{query.strip()}“ bekannt."
-    name = title or names.display_name(matched_label, vocab)
+        return i18n.t("inventory.answer_unknown", query=query.strip())
+    name = title or names.localized_name(matched_label, vocab)
     if not items:
-        return f"{name}: bisher von keiner Kamera gesehen."
+        return i18n.t("inventory.answer_never_seen", name=name)
     top = items[0]
     cam = camera_info(top.camera_id)
     zmap = cam.get("zones") or {}
     place = place_text(cam, [zmap.get(z) or z for z in (top.zones or [])])
-    rel = (top.relation or {}).get("text")
+    rel = relation_text_of(top.relation, vocab)
     tname = title or _item_title(top, vocab)
     if top.state == "present":
         since = present_since(s, top)
-        parts = [f"{tname}: aktuell sichtbar {place}"]
+        parts = [i18n.t("inventory.answer_visible", name=tname, place=place)]
         if rel:
             parts.append(rel)
-        parts.append(f"seit {local_time_text(since)}")
+        parts.append(i18n.t("inventory.answer_since", time=local_time_text(since)))
         text = ", ".join(parts)
     else:
         when = f"{ago_text(top.last_seen)} ({local_time_text(top.last_seen)})"
-        if top.state == "stale":
-            text = f"{tname}: Stand unklar, die Kamera liefert gerade keine Gegenstandsanalyse; zuletzt gesehen {when} {place}"
-        else:
-            text = f"{tname}: zuletzt gesehen {when} {place}"
+        key = "inventory.answer_stale" if top.state == "stale" else "inventory.answer_last_seen"
+        text = i18n.t(key, name=tname, when=when, place=place)
         if rel:
             text += f", {rel}"
     others = len(items) - 1
     if others > 0:
         visible_others = sum(1 for i in items[1:] if i.state == "present")
-        text += f". Weitere Funde: {others}" + (f" (davon {visible_others} sichtbar)" if visible_others else "")
+        text += ". " + i18n.t("inventory.answer_others", n=others)
+        if visible_others:
+            text += " " + i18n.t("inventory.answer_others_visible", n=visible_others)
     return text + "."
 
 

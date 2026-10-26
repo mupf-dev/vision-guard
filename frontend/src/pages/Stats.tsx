@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { labelName } from "../lib/labels";
 import { parseTs } from "../lib/format";
 import { Empty, Loading } from "../components/ui";
+import { fmtNum, intlLocale, useMsgs } from "../i18n";
 
 /* Kategoriale Chart-Palette (validiert für dunkle Flächen), feste Reihenfolge – Farbe folgt dem Label, nie dem Rang. */
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
@@ -18,6 +19,7 @@ const AXIS = { stroke: "#6b7a90", fontSize: 12 };
 
 interface TipEntry { dataKey?: unknown; value?: unknown; color?: string }
 function ChartTip({ active, payload, label, title }: { active?: boolean; payload?: readonly TipEntry[]; label?: unknown; title?: (l: unknown) => string }) {
+  const m = useMsgs();
   if (!active || !payload?.length) return null;
   const rows = payload.filter((p) => Number(p.value) > 0);
   const sum = rows.reduce((a, p) => a + Number(p.value), 0);
@@ -27,12 +29,13 @@ function ChartTip({ active, payload, label, title }: { active?: boolean; payload
       {rows.map((p) => (
         <div className="r" key={String(p.dataKey)}><span className="row" style={{ gap: 6 }}><i style={{ background: p.color }} />{labelName(String(p.dataKey))}</span><b>{String(p.value)}</b></div>
       ))}
-      {rows.length > 1 && <div className="r" style={{ borderTop: "1px solid var(--line)", marginTop: 4, paddingTop: 4 }}><span>Summe</span><b>{sum}</b></div>}
+      {rows.length > 1 && <div className="r" style={{ borderTop: "1px solid var(--line)", marginTop: 4, paddingTop: 4 }}><span>{m.stats.sum}</span><b>{sum}</b></div>}
     </div>
   );
 }
 
 export function StatsPage() {
+  const m = useMsgs();
   const [hours, setHours] = useState(24);
   const [table, setTable] = useState(false);
   const stats = useQuery({ queryKey: ["stats", hours], queryFn: () => api.stats(hours), refetchInterval: 60_000 });
@@ -57,43 +60,44 @@ export function StatsPage() {
   }, [stats.data]);
 
   const camRows = useMemo(() => Object.entries(stats.data?.by_camera ?? {})
-    .map(([id, n]) => ({ name: cams.data?.find((c) => String(c.id) === id)?.name ?? `Gelöschte Kamera (ID ${id})`, count: n }))
-    .sort((a, b) => b.count - a.count), [stats.data, cams.data]);
+    .map(([id, n]) => ({ name: cams.data?.find((c) => String(c.id) === id)?.name ?? m.stats.deletedCamera(id), count: n }))
+    .sort((a, b) => b.count - a.count), [stats.data, cams.data, m]);
 
   const total = Object.values(stats.data?.by_label ?? {}).reduce((a, b) => a + b, 0);
   const top = Object.entries(stats.data?.by_label ?? {}).sort((a, b) => b[1] - a[1])[0];
   const fmtHour = (v: unknown) => {
     const d = parseTs(String(v));
     if (!d) return "";
-    return hours > 48 ? d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("de-DE", { hour: "2-digit" }) + " h"
-      : d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    const loc = intlLocale();
+    return hours > 48 ? d.toLocaleDateString(loc, { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString(loc, { hour: "2-digit" }) + m.stats.hourSuffix
+      : d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
   };
 
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Statistik</h1><div className="sub">Erkennungen und neue Identitäten im gewählten Zeitraum</div></div>
+        <div><h1>{m.stats.title}</h1><div className="sub">{m.stats.subtitle}</div></div>
         <div className="row">
-          <button className={`btn btn-sm ${table ? "active" : ""}`} onClick={() => setTable(!table)}><Table2 size={14} />Tabelle</button>
+          <button className={`btn btn-sm ${table ? "active" : ""}`} onClick={() => setTable(!table)}><Table2 size={14} />{m.stats.table}</button>
           <div className="seg">
-            {[6, 24, 72, 168].map((h) => <button key={h} className={hours === h ? "on" : ""} onClick={() => setHours(h)}>{h < 48 ? `${h} h` : `${h / 24} Tage`}</button>)}
+            {[6, 24, 72, 168].map((h) => <button key={h} className={hours === h ? "on" : ""} onClick={() => setHours(h)}>{h < 48 ? m.stats.hours(h) : m.stats.days(h / 24)}</button>)}
           </div>
         </div>
       </div>
-      {stats.isLoading ? <Loading /> : stats.isError ? <Empty title="Statistik nicht verfügbar" text={(stats.error as Error).message} /> : (
+      {stats.isLoading ? <Loading /> : stats.isError ? <Empty title={m.stats.unavailable} text={(stats.error as Error).message} /> : (
         <>
           <div className="stat-tiles">
-            <div className="card stat-tile"><div className="l"><Activity size={14} />Erkennungen</div><div className="v">{total.toLocaleString("de-DE")}</div></div>
-            <div className="card stat-tile"><div className="l"><TrendingUp size={14} />Häufigstes Objekt</div><div className="v">{top ? labelName(top[0]) : "–"}</div><div className="muted">{top ? `${top[1]}×` : ""}</div></div>
-            <div className="card stat-tile"><div className="l"><Cctv size={14} />Aktivste Kamera</div><div className="v">{camRows[0]?.name ?? "–"}</div><div className="muted">{camRows[0] ? `${camRows[0].count}×` : ""}</div></div>
-            <div className="card stat-tile"><div className="l"><Fingerprint size={14} />Neue Identitäten</div><div className="v">{stats.data?.identities_new ?? 0}</div></div>
+            <div className="card stat-tile"><div className="l"><Activity size={14} />{m.stats.detections}</div><div className="v">{fmtNum(total)}</div></div>
+            <div className="card stat-tile"><div className="l"><TrendingUp size={14} />{m.stats.topObject}</div><div className="v">{top ? labelName(top[0]) : "–"}</div><div className="muted">{top ? `${top[1]}×` : ""}</div></div>
+            <div className="card stat-tile"><div className="l"><Cctv size={14} />{m.stats.topCamera}</div><div className="v">{camRows[0]?.name ?? "–"}</div><div className="muted">{camRows[0] ? `${camRows[0].count}×` : ""}</div></div>
+            <div className="card stat-tile"><div className="l"><Fingerprint size={14} />{m.stats.newIdentities}</div><div className="v">{stats.data?.identities_new ?? 0}</div></div>
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
-            <div className="card-head"><h3>Erkennungen pro Stunde nach Objekt</h3></div>
+            <div className="card-head"><h3>{m.stats.perHourByObject}</h3></div>
             <div className="card-body">
               <div className="legend">{labels.map((l) => <span key={l}><i style={{ background: seriesColor(l) }} />{labelName(l)} <b>{stats.data?.by_label[l] ?? 0}</b></span>)}</div>
-              {rows.length === 0 ? <Empty title="Keine Daten" /> : (
+              {rows.length === 0 ? <Empty title={m.stats.noData} /> : (
                 <div className="chart-box">
                   <ResponsiveContainer>
                     <BarChart data={rows} margin={{ top: 8, right: 8, left: -16, bottom: 0 }} barCategoryGap="18%">
@@ -114,9 +118,9 @@ export function StatsPage() {
 
           <div className="grid-2">
             <div className="card">
-              <div className="card-head"><h3>Erkennungen pro Kamera</h3></div>
+              <div className="card-head"><h3>{m.stats.perCamera}</h3></div>
               <div className="card-body">
-                {camRows.length === 0 ? <Empty title="Keine Daten" /> : (
+                {camRows.length === 0 ? <Empty title={m.stats.noData} /> : (
                   <div style={{ height: Math.max(120, camRows.length * 44) }}>
                     <ResponsiveContainer>
                       <BarChart data={camRows} layout="vertical" margin={{ top: 0, right: 40, left: 0, bottom: 0 }}>
@@ -133,7 +137,7 @@ export function StatsPage() {
               </div>
             </div>
             <div className="card">
-              <div className="card-head"><h3>Nach Objekt</h3></div>
+              <div className="card-head"><h3>{m.stats.byObject}</h3></div>
               <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {Object.entries(stats.data?.by_label ?? {}).sort((a, b) => b[1] - a[1]).map(([l, n]) => (
                   <div key={l}>
@@ -146,7 +150,7 @@ export function StatsPage() {
                     </div>
                   </div>
                 ))}
-                {total === 0 && <Empty title="Keine Daten" />}
+                {total === 0 && <Empty title={m.stats.noData} />}
               </div>
             </div>
           </div>
@@ -154,7 +158,7 @@ export function StatsPage() {
           {table && (
             <div className="card" style={{ marginTop: 16, overflow: "auto", maxHeight: 420 }}>
               <table className="table">
-                <thead><tr><th>Zeit</th>{labels.map((l) => <th key={l}>{labelName(l)}</th>)}</tr></thead>
+                <thead><tr><th>{m.stats.time}</th>{labels.map((l) => <th key={l}>{labelName(l)}</th>)}</tr></thead>
                 <tbody>{rows.map((r) => <tr key={String(r.ts)}><td className="mono">{fmtHour(r.ts)}</td>{labels.map((l) => <td key={l}>{r[l]}</td>)}</tr>)}</tbody>
               </table>
             </div>

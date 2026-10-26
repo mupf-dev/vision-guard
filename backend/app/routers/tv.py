@@ -14,6 +14,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import go2rtc, tv
 from ..auth import require_user
 from ..config import config
@@ -50,9 +51,9 @@ async def tv_probe(body: TvProbeIn):
 @router.post("/{target_id}/show")
 async def tv_show(target_id: str, body: TvShowIn, db: Session = Depends(get_db)):
     if db.get(Camera, body.camera_id) is None:
-        raise HTTPException(404, "Kamera nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.camera_not_found"))
     if tv.find_target(target_id) is None:
-        raise HTTPException(404, "Fernseher nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.tv_not_found"))
     try:
         return await run_in_threadpool(tv.show, target_id, body.camera_id, body.duration_s)
     except tv.TvError as e:
@@ -64,7 +65,7 @@ async def tv_show(target_id: str, body: TvShowIn, db: Session = Depends(get_db))
 @router.post("/{target_id}/stop")
 async def tv_stop(target_id: str):
     if tv.find_target(target_id) is None:
-        raise HTTPException(404, "Fernseher nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.tv_not_found"))
     try:
         return await run_in_threadpool(tv.stop_target, target_id)
     except tv.TvError as e:
@@ -80,7 +81,7 @@ HEADERS = {"Cache-Control": "no-store", "transferMode.dlna.org": "Streaming",
 
 def _check(cam_id: int, exp: int, t: str, sig: str) -> None:
     if not tv.verify(cam_id, exp, t, sig):
-        raise HTTPException(403, "Link ungültig oder abgelaufen")
+        raise HTTPException(403, i18n.t("errors.link_invalid"))
 
 
 @public_router.head("/stream/{cam_id}.ts", include_in_schema=False)
@@ -97,7 +98,7 @@ async def stream(request: Request, cam_id: int, exp: int = Query(...), t: str = 
     _check(cam_id, exp, t, sig)
     log.debug("TV GET %s", {k: v for k, v in request.headers.items() if k.lower() not in ("host",)})
     if _active >= MAX_STREAMS:
-        raise HTTPException(429, "Zu viele Fernseher-Ströme gleichzeitig")
+        raise HTTPException(429, i18n.t("errors.tv_too_many_streams"))
     src = f"{config.go2rtc_rtsp}/{go2rtc.stream_name(cam_id)}"
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-i", src,
@@ -107,7 +108,7 @@ async def stream(request: Request, cam_id: int, exp: int = Query(...), t: str = 
     first = await proc.stdout.read(65536)
     if not first:
         await proc.wait()
-        raise HTTPException(502, "Kamerabild nicht verfügbar")
+        raise HTTPException(502, i18n.t("errors.camera_image_unavailable"))
     _active += 1
 
     async def body():

@@ -19,19 +19,19 @@ import { VlmSettingsCard } from "./VlmSettings";
 import { SensorSettingsCard } from "./SensorSettings";
 import { HistorySettingsCard } from "./HistorySettings";
 import { FaceSettingsCard, NightlySettingsCard } from "./FaceSettings";
+import { fmtNum, msgs, useMsgs } from "../../i18n";
 
-// R1: Sprungmarken der langen Einstellungsseite (Reihenfolge wie die Karten)
-const SECTIONS: [string, string][] = [
-  ["s-sprache", "Sprache"], ["s-aufbewahrung", "Aufbewahrung"], ["s-wiedererkennung", "Wiedererkennung"], ["s-gesichter", "Gesichter"], ["s-nachtlauf", "Nachtlauf"],
-  ["s-gegenstaende", "Gegenstände"],
-  ["s-benachrichtigungen", "Benachrichtigungen"], ["s-fernseher", "Fernseher"], ["s-rueckfragen", "Rückfragen"], ["s-haltung", "Haltung & Gesten"],
-  ["s-reid", "Über Kameras"], ["s-tiere", "Tiere"], ["s-bericht", "Tagesbericht"], ["s-ki", "KI-Sprachmodell"],
-  ["s-frag", "Frag die Kamera"], ["s-sensoren", "Sensoren"], ["s-zeitmaschine", "Zeitmaschine"], ["s-mqtt", "MQTT"],
-  ["s-zugriff", "Externer Zugriff"],
+// R1: Sprungmarken der langen Einstellungsseite (Reihenfolge wie die Karten); Beschriftung aus i18n `settings.page.sections`
+const SECTIONS: string[] = [
+  "s-sprache", "s-aufbewahrung", "s-wiedererkennung", "s-gesichter", "s-nachtlauf", "s-gegenstaende",
+  "s-benachrichtigungen", "s-fernseher", "s-rueckfragen", "s-haltung", "s-reid", "s-tiere", "s-bericht", "s-ki",
+  "s-frag", "s-sensoren", "s-zeitmaschine", "s-mqtt", "s-zugriff",
 ];
 
 export function SettingsPage() {
   const qc = useQueryClient();
+  const all = useMsgs();
+  const m = all.settings;
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [f, setF] = useState<Settings | null>(null);
   useEffect(() => { if (q.data) setF(q.data); }, [q.data]);
@@ -40,8 +40,8 @@ export function SettingsPage() {
     // tv_stream_base_url null → "" (setzt zurück)
     mutationFn: (s: Settings) => api.saveSettings({ ...s, weather_location: s.weather_location ?? ({} as Settings["weather_location"]),
       tv_stream_base_url: s.tv_stream_base_url ?? "" }),
-    onSuccess: (r) => { toast.success("Einstellungen gespeichert"); qc.setQueryData(["settings"], r ?? f); },
-    onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
+    onSuccess: (r) => { toast.success(msgs().settings.page.toastSaved); qc.setQueryData(["settings"], r ?? f); },
+    onError: (e: Error) => toast.error(msgs().settings.page.toastSaveFailed, e.message),
   });
   const dirty = !!f && JSON.stringify(f) !== JSON.stringify(q.data);
   // R1: Warnung beim Schließen/Neuladen mit ungespeicherten Änderungen (BrowserRouter: kein useBlocker)
@@ -59,43 +59,43 @@ export function SettingsPage() {
   return (
     <>
       <div className={`page-header settings-head${dirty ? " dirty" : ""}`}>
-        <div><h1>Einstellungen</h1><div className="sub">{dirty ? "Ungespeicherte Änderungen" : "Erkennung, Benachrichtigungen, KI, Zugriff – Speichern gilt für alle Bereiche"}</div></div>
+        <div><h1>{m.page.title}</h1><div className="sub">{dirty ? m.page.subDirty : m.page.sub}</div></div>
         <div className="row">
-          {dirty && <button className="btn btn-ghost" onClick={() => setF(q.data!)}><RotateCcw size={16} />Verwerfen</button>}
-          <button className="btn btn-primary" disabled={!dirty || invalid || save.isPending} title={invalid ? "Push-Ziel oder Fernseher unvollständig" : undefined} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}Speichern</button>
+          {dirty && <button className="btn btn-ghost" onClick={() => setF(q.data!)}><RotateCcw size={16} />{m.page.discard}</button>}
+          <button className="btn btn-primary" disabled={!dirty || invalid || save.isPending} title={invalid ? m.page.invalidTitle : undefined} onClick={() => save.mutate(f)}>{save.isPending ? <span className="spinner" /> : <Save size={16} />}{all.common.save}</button>
         </div>
       </div>
-      <nav className="settings-toc" aria-label="Bereiche">
-        {SECTIONS.map(([id, label]) => <a key={id} href={`#${id}`} onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{label}</a>)}
+      <nav className="settings-toc" aria-label={m.page.tocLabel}>
+        {SECTIONS.map((id) => <a key={id} href={`#${id}`} onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{m.page.sections[id] ?? id}</a>)}
       </nav>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div id="s-sprache" className="settings-anchor">
           <LanguageSettingsCard f={f} patch={(p) => setF((prev) => (prev ? { ...prev, ...p } : prev))} />
         </div>
         <div className="card" id="s-aufbewahrung">
-          <div className="card-head"><Archive size={18} color="var(--accent)" /><h3>Aufbewahrung</h3></div>
+          <div className="card-head"><Archive size={18} color="var(--accent)" /><h3>{m.retention.title}</h3></div>
           <div className="card-body form-grid">
-            <div className="field"><label>Ereignisse aufbewahren</label>
-              <div className="row"><input type="number" min={1} className="input" value={f.retention_days_events} onChange={(e) => set("retention_days_events", Number(e.target.value))} /><span className="muted">Tage</span></div>
+            <div className="field"><label>{m.retention.events}</label>
+              <div className="row"><input type="number" min={1} className="input" value={f.retention_days_events} onChange={(e) => set("retention_days_events", Number(e.target.value))} /><span className="muted">{m.shared.daysUnit}</span></div>
             </div>
-            <div className="field"><label>Medien (Snapshots, Clips) aufbewahren</label>
-              <div className="row"><input type="number" min={1} className="input" value={f.retention_days_media} onChange={(e) => set("retention_days_media", Number(e.target.value))} /><span className="muted">Tage</span></div>
+            <div className="field"><label>{m.retention.media}</label>
+              <div className="row"><input type="number" min={1} className="input" value={f.retention_days_media} onChange={(e) => set("retention_days_media", Number(e.target.value))} /><span className="muted">{m.shared.daysUnit}</span></div>
             </div>
           </div>
         </div>
         <div className="card" id="s-wiedererkennung">
-          <div className="card-head"><Fingerprint size={18} color="var(--accent)" /><h3>Wiedererkennung (Gesicht, Kennzeichen, Tier)</h3></div>
+          <div className="card-head"><Fingerprint size={18} color="var(--accent)" /><h3>{m.recognition.title}</h3></div>
           <div className="card-body form-grid">
-            <div className="field"><label>Gesichts-Schwelle (Kosinus-Ähnlichkeit)</label>
-              <Range value={f.face_match_threshold} min={0.2} max={0.9} step={0.01} onChange={(v) => set("face_match_threshold", v)} format={(v) => v.toFixed(2)} />
-              <span className="hint">Höher = strenger, weniger Verwechslungen, aber mehr neue Identitäten.</span>
+            <div className="field"><label>{m.recognition.faceThreshold}</label>
+              <Range value={f.face_match_threshold} min={0.2} max={0.9} step={0.01} onChange={(v) => set("face_match_threshold", v)} format={(v) => fmtNum(v, 2)} />
+              <span className="hint">{m.recognition.faceHint}</span>
             </div>
-            <div className="field"><label>Tier-Schwelle (Kosinus-Ähnlichkeit)</label>
-              <Range value={f.pet_match_threshold} min={0.5} max={0.99} step={0.01} onChange={(v) => set("pet_match_threshold", v)} format={(v) => v.toFixed(2)} />
+            <div className="field"><label>{m.recognition.petThreshold}</label>
+              <Range value={f.pet_match_threshold} min={0.5} max={0.99} step={0.01} onChange={(v) => set("pet_match_threshold", v)} format={(v) => fmtNum(v, 2)} />
             </div>
-            <div className="field"><label>Kennzeichen: max. Zeichen-Abweichung</label>
+            <div className="field"><label>{m.recognition.plateDistance}</label>
               <Range value={f.plate_max_distance} min={0} max={3} step={1} onChange={(v) => set("plate_max_distance", v)} format={(v) => `${v}`} />
-              <span className="hint">Levenshtein-Distanz für OCR-Toleranz.</span>
+              <span className="hint">{m.recognition.plateHint}</span>
             </div>
           </div>
         </div>
@@ -145,26 +145,26 @@ export function SettingsPage() {
         <div className="card" id="s-mqtt">
           <div className="card-head"><Radio size={18} color="var(--accent)" /><h3>MQTT</h3></div>
           <div className="card-body form-grid">
-            <div className="field"><label>Topic-Präfix</label><input className="input mono" value={f.mqtt_prefix} onChange={(e) => set("mqtt_prefix", e.target.value)} />
-              <span className="hint">z. B. <code>{f.mqtt_prefix || "visionguard"}/events</code>, <code>{f.mqtt_prefix || "visionguard"}/einfahrt/person</code></span>
+            <div className="field"><label>{m.mqtt.prefix}</label><input className="input mono" value={f.mqtt_prefix} onChange={(e) => set("mqtt_prefix", e.target.value)} />
+              <span className="hint">{m.mqtt.example} <code>{f.mqtt_prefix || "visionguard"}/events</code>, <code>{f.mqtt_prefix || "visionguard"}/{m.mqtt.exampleTopic}</code></span>
             </div>
-            <div className="field"><label>Alle Ereignisse veröffentlichen</label>
+            <div className="field"><label>{m.mqtt.publishAll}</label>
               <div style={{ height: 38, display: "flex", alignItems: "center" }}><Switch checked={f.publish_all_events} onChange={(v) => set("publish_all_events", v)} label={<code>{f.mqtt_prefix}/events</code>} /></div>
             </div>
           </div>
         </div>
         <div className="card" id="s-zugriff">
-          <div className="card-head"><Link2 size={18} color="var(--accent)" /><h3>Externer Zugriff &amp; Medien-Links</h3></div>
+          <div className="card-head"><Link2 size={18} color="var(--accent)" /><h3>{m.access.title}</h3></div>
           <div className="card-body form-grid">
-            <div className="field"><label>Öffentliche Adresse</label>
+            <div className="field"><label>{m.access.publicUrl}</label>
               <input className="input mono" value={f.public_base_url ?? ""} placeholder="https://vg.example.org"
                 onChange={(e) => set("public_base_url", e.target.value)} />
-              <span className="hint">Ohne „/“ am Ende. Wenn gesetzt, enthalten Webhooks, MQTT und MCP absolute Links auf Bilder und Clips.</span>
+              <span className="hint">{m.access.publicUrlHint}</span>
             </div>
-            <div className="field"><label>Gültigkeit signierter Links</label>
+            <div className="field"><label>{m.access.linkTtl}</label>
               <div className="row"><input type="number" min={1} max={720} className="input" value={f.media_link_ttl_h}
-                onChange={(e) => set("media_link_ttl_h", Number(e.target.value))} /><span className="muted">Stunden</span></div>
-              <span className="hint">Bilder/Clips in Webhooks, MQTT und API-Antworten mit <code>signed=1</code> sind nur so lange ohne Anmeldung abrufbar.</span>
+                onChange={(e) => set("media_link_ttl_h", Number(e.target.value))} /><span className="muted">{m.shared.hoursUnit}</span></div>
+              <span className="hint">{m.access.linkTtlHintPre} <code>signed=1</code> {m.access.linkTtlHintPost}</span>
             </div>
           </div>
         </div>

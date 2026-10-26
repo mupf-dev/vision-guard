@@ -69,18 +69,19 @@ def seed_demo() -> None:
             return
         if config.demo_cameras and (s.scalar(select(func.count()).select_from(Camera)) or 0) == 0:
             log.info("Lege Demo-Kameras und Beispielregeln an")
-            for name, url in (("Demo Eingang", "rtsp://testcam:8554/cam1"), ("Demo Straße", "rtsp://testcam:8554/cam2")):
+            for name, url in ((i18n.t("rules.demo.camera_entrance"), "rtsp://testcam:8554/cam1"),
+                              (i18n.t("rules.demo.camera_street"), "rtsp://testcam:8554/cam2")):
                 s.add(Camera(name=name, url=url, detect_url=None, enabled=True, detect_fps=5,
                              labels=list(DEFAULT_LABELS), min_score=0.5, face_recognition=True,
                              plate_recognition=True, pet_recognition=True, zones=[]))
             if (s.scalar(select(func.count()).select_from(Rule)) or 0) == 0:
-                s.add(Rule(name="Person erkannt → Snapshot + MQTT", enabled=True, camera_ids=[], zone_ids=[],
+                s.add(Rule(name=i18n.t("rules.demo.rule_person"), enabled=True, camera_ids=[], zone_ids=[],
                            labels=["person"], min_score=0.5, identity={"mode": "any", "identity_ids": []},
                            trigger="enter", min_dwell_s=0, schedule=None, cooldown_s=30,
                            actions=[{"type": "snapshot"},
                                     {"type": "mqtt", "topic": "visionguard/alarm/{camera}", "payload": None,
                                      "retain": False}]))
-                s.add(Rule(name="Fahrzeug → Clip", enabled=True, camera_ids=[], zone_ids=[],
+                s.add(Rule(name=i18n.t("rules.demo.rule_vehicle"), enabled=True, camera_ids=[], zone_ids=[],
                            labels=["car", "truck", "bus", "motorcycle"], min_score=0.5,
                            identity={"mode": "any", "identity_ids": []}, trigger="enter", min_dwell_s=0,
                            schedule=None, cooldown_s=30, actions=[{"type": "clip", "pre_s": 5, "post_s": 10}]))

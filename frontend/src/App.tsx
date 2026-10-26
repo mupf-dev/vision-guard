@@ -25,11 +25,13 @@ import { SystemPage } from "./pages/admin/System";
 import { TokensPage } from "./pages/admin/Tokens";
 import { Loading } from "./components/ui";
 import { Toasts } from "./components/Toasts";
+import { useMsgs } from "./i18n";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const loc = useLocation();
+  const m = useMsgs();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, retry: false, staleTime: 5 * 60_000 });
-  if (me.isLoading) return <Loading text="Prüfe Anmeldung …" />;
+  if (me.isLoading) return <Loading text={m.ui.checkingLogin} />;
   if (me.isError || !me.data) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />;
   return <>{children}</>;
 }

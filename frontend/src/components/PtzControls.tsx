@@ -9,6 +9,7 @@ import type { Camera, PtzState } from "../lib/types";
 import { toast, useLive } from "../lib/store";
 import { labelName } from "../lib/labels";
 import { parseTs } from "../lib/format";
+import { msgs, useMsgs } from "../i18n";
 
 /** Aktueller PTZ-Zustand: WebSocket (live) vor dem Stand aus der Kamera-Liste. */
 export function usePtzState(cam: Camera): PtzState | null {
@@ -33,17 +34,19 @@ function useCountdown(iso: string | null | undefined): string | null {
   const end = parseTs(iso ?? null)?.getTime();
   if (!end) return null;
   const s = Math.max(0, Math.round((end - Date.now()) / 1000));
-  return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`;
+  const m = msgs().ui.ptz;
+  return s >= 60 ? m.countdownMin(Math.floor(s / 60), String(s % 60).padStart(2, "0")) : m.countdownSec(s);
 }
 
 export function ptzModeText(st: PtzState): string {
+  const m = msgs().ui.ptz;
   switch (st.mode) {
-    case "manual": return "Handsteuerung";
-    case "rule": return `Regel-Position${st.preset_name ? ` „${st.preset_name}“` : ""}`;
-    case "follow": return `Verfolgt ${st.target ? labelName(st.target.label) : "Ziel"}`;
-    case "patrol": return `Patrouille${st.patrol_step !== null ? ` · Schritt ${st.patrol_step + 1}` : ""}`;
-    case "error": return "PTZ nicht verbunden";
-    default: return st.view === "home" ? "Grundposition" : st.preset_name ? `Position „${st.preset_name}“` : "Freie Position";
+    case "manual": return m.manual;
+    case "rule": return m.rule(st.preset_name || null);
+    case "follow": return m.follow(st.target ? labelName(st.target.label) : null);
+    case "patrol": return m.patrol(st.patrol_step !== null ? st.patrol_step + 1 : null);
+    case "error": return m.error;
+    default: return st.view === "home" ? m.home : st.preset_name ? m.preset(st.preset_name) : m.free;
   }
 }
 
@@ -51,12 +54,13 @@ export function ptzModeText(st: PtzState): string {
 export function PtzBadge({ cam }: { cam: Camera }) {
   const st = usePtzState(cam);
   const left = useCountdown(st && ["manual", "rule", "patrol"].includes(st.mode) ? st.until : null);
+  const m = useMsgs().ui.ptz;
   if (!st) return null;
   const cls = st.mode === "error" ? "bad" : st.mode === "follow" || st.mode === "rule" ? "warn" : st.view === "home" ? "" : "info";
   return (
-    <span className={`badge ${cls}`} title={st.error ?? (st.view === "home" ? "Zonen, Gegenstände und Sensoren aktiv" : "Nicht in der Grundposition – Zonen, Gegenstände und Sensoren pausieren")}>
+    <span className={`badge ${cls}`} title={st.error ?? (st.view === "home" ? m.homeActive : m.awayPaused)}>
       {st.mode === "follow" ? <Crosshair size={11} /> : st.mode === "patrol" ? <Route size={11} /> : <Move size={11} />}
-      {ptzModeText(st)}{st.moving ? " · fährt" : ""}{left ? ` · ${st.mode === "patrol" ? "noch" : "zurück in"} ${left}` : ""}
+      {ptzModeText(st)}{st.moving ? m.moving : ""}{left ? (st.mode === "patrol" ? m.remaining(left) : m.returnIn(left)) : ""}
     </span>
   );
 }
@@ -68,6 +72,8 @@ const PULSE_MS = 600;
 /** Steuerkreuz über dem Live-Bild (Fokusansicht). Gedrückt halten = weiter bewegen. */
 export function PtzPad({ cam }: { cam: Camera }) {
   const st = usePtzState(cam);
+  const mm = useMsgs();
+  const m = mm.ui.ptz;
   const info = useQuery({ queryKey: ["ptz", cam.id], queryFn: () => api.ptz(cam.id), staleTime: 30_000 });
   const [open, setOpen] = useState(true);
   const timer = useRef<number | undefined>(undefined);
@@ -86,12 +92,12 @@ export function PtzPad({ cam }: { cam: Camera }) {
   const [naming, setNaming] = useState<string | null>(null);   // null = Eingabe zu
   const homeM = useMutation({
     mutationFn: () => api.ptzSetHome(cam.id),
-    onSuccess: () => { setConfirmHome(false); refresh(); toast.success("Grundposition gespeichert", "Zonen, Gegenstände und Sensoren gelten für diesen Blick."); },
+    onSuccess: () => { setConfirmHome(false); refresh(); toast.success(m.homeSaved, m.homeSavedText); },
     onError: (e) => { setConfirmHome(false); fail(e); },
   });
   const saveM = useMutation({
     mutationFn: (name: string) => api.ptzSavePreset(cam.id, name),
-    onSuccess: (p) => { setNaming(null); refresh(); toast.success("Position gespeichert", `„${p.name}“ – anfahrbar hier, in Regeln und in der Patrouille.`); },
+    onSuccess: (p) => { setNaming(null); refresh(); toast.success(m.presetSaved, m.presetSavedText(p.name)); },
     onError: fail,
   });
 
@@ -131,72 +137,70 @@ export function PtzPad({ cam }: { cam: Camera }) {
   const paused = st?.paused_until && (parseTs(st.paused_until)?.getTime() ?? 0) > Date.now();
 
   if (!open) {
-    return <button type="button" className="btn btn-sm ptz-toggle" onClick={() => setOpen(true)} title="PTZ-Steuerung einblenden"><Move size={14} />PTZ</button>;
+    return <button type="button" className="btn btn-sm ptz-toggle" onClick={() => setOpen(true)} title={m.show}><Move size={14} />PTZ</button>;
   }
   return (
     <div className="ptz-pad" onClick={(e) => e.stopPropagation()}>
       <div className="ptz-head">
-        <b><Move size={13} /> Schwenken</b>
+        <b><Move size={13} /> {m.pan}</b>
         <span className="spacer" />
-        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => setOpen(false)} title="Ausblenden"><ChevronDown size={14} /></button>
+        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => setOpen(false)} title={m.hide}><ChevronDown size={14} /></button>
       </div>
-      {info.data && !info.data.connected && <div className="ptz-err">{info.data.error ?? "Kamera nicht verbunden"}</div>}
+      {info.data && !info.data.connected && <div className="ptz-err">{info.data.error ?? m.notConnected}</div>}
       <div className="ptz-cross">
-        {btn({ pan: 0, tilt: 1, zoom: 0 }, <ChevronUp size={18} />, "Nach oben", "up")}
-        {btn({ pan: -1, tilt: 0, zoom: 0 }, <ChevronLeft size={18} />, "Nach links", "left")}
-        <button type="button" className="ptz-btn mid" title="Grundposition" aria-label="Grundposition" disabled={!home || !info.data?.connected}
+        {btn({ pan: 0, tilt: 1, zoom: 0 }, <ChevronUp size={18} />, m.up, "up")}
+        {btn({ pan: -1, tilt: 0, zoom: 0 }, <ChevronLeft size={18} />, m.left, "left")}
+        <button type="button" className="ptz-btn mid" title={m.home} aria-label={m.home} disabled={!home || !info.data?.connected}
           onClick={() => gotoM.mutate(null)}><Home size={16} /></button>
-        {btn({ pan: 1, tilt: 0, zoom: 0 }, <ChevronRight size={18} />, "Nach rechts", "right")}
-        {btn({ pan: 0, tilt: -1, zoom: 0 }, <ChevronDown size={18} />, "Nach unten", "down")}
+        {btn({ pan: 1, tilt: 0, zoom: 0 }, <ChevronRight size={18} />, m.right, "right")}
+        {btn({ pan: 0, tilt: -1, zoom: 0 }, <ChevronDown size={18} />, m.down, "down")}
       </div>
       {caps?.zoom && (
         <div className="row" style={{ gap: 6, justifyContent: "center" }}>
-          {btn({ pan: 0, tilt: 0, zoom: -1 }, <ZoomOut size={16} />, "Zoom heraus", "")}
-          {btn({ pan: 0, tilt: 0, zoom: 1 }, <ZoomIn size={16} />, "Zoom hinein", "")}
+          {btn({ pan: 0, tilt: 0, zoom: -1 }, <ZoomOut size={16} />, m.zoomOut, "")}
+          {btn({ pan: 0, tilt: 0, zoom: 1 }, <ZoomIn size={16} />, m.zoomIn, "")}
         </div>
       )}
       {presets.length > 0 && (
-        <select className="select input-sm" value="" aria-label="Position anfahren" disabled={!info.data?.connected}
+        <select className="select input-sm" value="" aria-label={m.gotoPreset} disabled={!info.data?.connected}
           onChange={(e) => e.target.value && gotoM.mutate(e.target.value)}>
-          <option value="">Position anfahren …</option>
-          {presets.map((p) => <option key={p.token} value={p.token}>{p.name}{p.token === home ? " (Grundposition)" : ""}</option>)}
+          <option value="">{m.gotoPresetOption}</option>
+          {presets.map((p) => <option key={p.token} value={p.token}>{p.name}{p.token === home ? m.homeSuffix : ""}</option>)}
         </select>
       )}
       {naming === null ? (
         <>
           <button type="button" className="btn btn-sm" disabled={!info.data?.connected || !caps?.presets}
-            onClick={() => setConfirmHome(true)} title="Aktuelle Ausrichtung als Grundposition speichern"><Home size={13} />Als Grundposition</button>
+            onClick={() => setConfirmHome(true)} title={m.setHomeTitle}><Home size={13} />{m.setHome}</button>
           <button type="button" className="btn btn-sm" disabled={!info.data?.connected || !caps?.presets}
-            onClick={() => setNaming("")} title="Aktuelle Ausrichtung als weitere Position speichern"><BookmarkPlus size={13} />Position speichern</button>
+            onClick={() => setNaming("")} title={m.savePresetTitle}><BookmarkPlus size={13} />{m.savePreset}</button>
         </>
       ) : (
         <form style={{ display: "flex", flexDirection: "column", gap: 6 }} onSubmit={(e) => { e.preventDefault(); if (naming.trim()) saveM.mutate(naming.trim()); }}>
-          <input className="input input-sm" autoFocus maxLength={40} placeholder="Name, z. B. Fenster" value={naming}
+          <input className="input input-sm" autoFocus maxLength={40} placeholder={m.namePlaceholder} value={naming}
             onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setNaming(null); }} />
           <div className="row" style={{ gap: 6 }}>
             <button type="submit" className="btn btn-sm btn-primary" style={{ flex: 1 }} disabled={!naming.trim() || saveM.isPending}>
-              {saveM.isPending ? <span className="spinner" /> : "Speichern"}
+              {saveM.isPending ? <span className="spinner" /> : mm.common.save}
             </button>
-            <button type="button" className="btn btn-sm btn-ghost btn-icon" onClick={() => setNaming(null)} title="Abbrechen" aria-label="Abbrechen"><X size={14} /></button>
+            <button type="button" className="btn btn-sm btn-ghost btn-icon" onClick={() => setNaming(null)} title={mm.common.cancel} aria-label={mm.common.cancel}><X size={14} /></button>
           </div>
         </form>
       )}
       {st && ["manual", "rule", "follow"].includes(st.mode) && (
-        <button type="button" className="btn btn-sm" onClick={() => resumeM.mutate()}><Play size={13} />Automatik fortsetzen</button>
+        <button type="button" className="btn btn-sm" onClick={() => resumeM.mutate()}><Play size={13} />{m.resume}</button>
       )}
       {automatic && st && !["manual", "rule"].includes(st.mode) && (
         paused
-          ? <button type="button" className="btn btn-sm" onClick={() => pauseM.mutate(0)}><Play size={13} />Automatik wieder an</button>
-          : <button type="button" className="btn btn-sm" onClick={() => pauseM.mutate(60)} title="Patrouille und Verfolgung für 1 Stunde aussetzen"><Pause size={13} />Automatik 1 h pausieren</button>
+          ? <button type="button" className="btn btn-sm" onClick={() => pauseM.mutate(0)}><Play size={13} />{m.unpause}</button>
+          : <button type="button" className="btn btn-sm" onClick={() => pauseM.mutate(60)} title={m.pauseTitle}><Pause size={13} />{m.pause}</button>
       )}
       {confirmHome && (
-        <ConfirmDialog title="Grundposition setzen" confirmLabel="Als Grundposition speichern" danger={false} busy={homeM.isPending}
+        <ConfirmDialog title={m.confirmHomeTitle} confirmLabel={m.confirmHomeLabel} danger={false} busy={homeM.isPending}
           onConfirm={() => homeM.mutate()} onClose={() => setConfirmHome(false)}
           text={<>
-            Die aktuelle Ausrichtung wird zur Grundposition{home ? " und ersetzt die bisherige" : ""}. Dorthin kehrt die Kamera nach
-            Handsteuerung, Regeln, Patrouille und Verfolgung zurück.
-            <br /><br />Zonen, Gegenstände und Sensoren sind auf das Bild der Grundposition eingezeichnet – bei einem anderen
-            Blick bitte prüfen und ggf. neu zeichnen.
+            {m.confirmHomeText1(!!home)}
+            <br /><br />{m.confirmHomeText2}
           </>} />
       )}
     </div>

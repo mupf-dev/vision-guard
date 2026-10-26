@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search, X, Bike, Bird, Bus, Car, Cat, Dog, PawPrint, Truck, User, CircleHelp, Box } from "lucide-react";
 import { labelColor, labelName } from "../lib/labels";
+import { useMsgs } from "../i18n";
 
 /* ---------- Dialog ---------- */
 export function Dialog({
   title, icon, onClose, children, footer, size,
 }: { title: ReactNode; icon?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; size?: "lg" | "xl" }) {
+  const m = useMsgs();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -22,7 +24,7 @@ export function Dialog({
       <div className={`dialog ${size ?? ""}`} role="dialog" aria-modal="true">
         <div className="dialog-head">
           <h2>{icon}{title}</h2>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Schließen"><X size={18} /></button>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label={m.common.close}><X size={18} /></button>
         </div>
         <div className="dialog-body">{children}</div>
         {footer && <div className="dialog-foot">{footer}</div>}
@@ -34,13 +36,14 @@ export function Dialog({
 
 /* ---------- Confirm ---------- */
 export function ConfirmDialog({
-  title, text, confirmLabel = "Löschen", danger = true, busy, onConfirm, onClose,
+  title, text, confirmLabel, danger = true, busy, onConfirm, onClose,
 }: { title: string; text: ReactNode; confirmLabel?: string; danger?: boolean; busy?: boolean; onConfirm: () => void; onClose: () => void }) {
+  const m = useMsgs();
   return (
     <Dialog title={title} onClose={onClose} footer={<>
-      <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
+      <button className="btn btn-ghost" onClick={onClose}>{m.common.cancel}</button>
       <button className={`btn ${danger ? "btn-danger" : "btn-primary"}`} onClick={onConfirm} disabled={busy}>
-        {busy && <span className="spinner" />}{confirmLabel}
+        {busy && <span className="spinner" />}{confirmLabel ?? m.common.delete}
       </button>
     </>}>
       <div className="dim">{text}</div>
@@ -94,8 +97,10 @@ export function ChipSelect<T extends string | number>({
 export interface SSOption { value: number; label: string; image?: string | null; sub?: string }
 
 export function SearchSelect({
-  options, value, onChange, placeholder = "Suchen …", multi, inline,
+  options, value, onChange, placeholder: placeholderProp, multi, inline,
 }: { options: SSOption[]; value: number[]; onChange: (v: number[]) => void; placeholder?: string; multi?: boolean; inline?: boolean }) {
+  const m = useMsgs();
+  const placeholder = placeholderProp ?? m.common.searchPlaceholder;
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hl, setHl] = useState(0);
@@ -140,7 +145,7 @@ export function SearchSelect({
       )}
       {open && (
         <div className={`ss-list ${inline ? "inline" : ""}`}>
-          {filtered.length === 0 && <div className="ss-opt muted">Keine Treffer</div>}
+          {filtered.length === 0 && <div className="ss-opt muted">{m.ui.noMatches}</div>}
           {filtered.map((o, i) => (
             <div key={o.value} className={`ss-opt ${i === hl ? "hl" : ""} ${value.includes(o.value) ? "sel" : ""}`}
               onMouseEnter={() => setHl(i)} onMouseDown={(e) => { e.preventDefault(); pick(o); }}>
@@ -204,8 +209,9 @@ export function Empty({ icon, title, text, children }: { icon?: ReactNode; title
   );
 }
 
-export function Loading({ text = "Lade …" }: { text?: string }) {
-  return <div className="center-load"><div className="row"><span className="spinner" />{text}</div></div>;
+export function Loading({ text }: { text?: string }) {
+  const m = useMsgs();
+  return <div className="center-load"><div className="row"><span className="spinner" />{text ?? m.common.loading}</div></div>;
 }
 
 export function Img({ src, alt = "", className, fallback }: { src?: string | null; alt?: string; className?: string; fallback?: ReactNode }) {

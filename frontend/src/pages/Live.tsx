@@ -17,6 +17,7 @@ import { fmtAgo } from "../lib/format";
 import { HealthBadge, HealthBanner } from "../components/HealthBadge";
 import { AskCameraButton } from "../components/AskCamera";
 import { PtzBadge, PtzPad, useAtHome } from "../components/PtzControls";
+import { fmtNum, useMsgs } from "../i18n";
 
 function useStatus(cam: Camera): CameraStatus | null {
   const live = useLive((s) => s.status[cam.id]);
@@ -24,9 +25,10 @@ function useStatus(cam: Camera): CameraStatus | null {
 }
 
 export function StatusBadge({ status, enabled = true }: { status: CameraStatus | null | undefined; enabled?: boolean }) {
+  const m = useMsgs();
   const st = !enabled ? "disabled" : status?.state ?? "offline";
   const cls = st === "online" ? "ok" : st === "starting" ? "warn" : st === "disabled" ? "" : "bad";
-  const txt = { online: "Online", offline: "Offline", starting: "Startet", disabled: "Deaktiviert" }[st];
+  const txt = { online: m.common.online, offline: m.common.offline, starting: m.common.starting, disabled: m.live.disabled }[st];
   return <span className={`badge ${cls}`}><span className="dot" />{txt}</span>;
 }
 
@@ -37,6 +39,7 @@ function counts(objects: DetObject[]) {
 }
 
 function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; onOpen: () => void }) {
+  const m = useMsgs();
   const status = useStatus(cam);
   const objects = useCameraObjects(cam.id);
   const showZones = useUi((s) => s.showZones);
@@ -59,7 +62,7 @@ function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; o
         <StatusBadge status={status} enabled={cam.enabled} />
       </div>
       {cam.enabled && cam.health_enabled && <HealthBanner health={status?.health} />}
-      <div className="tile-actions"><button className="btn btn-sm btn-icon" title="Fokusansicht"><Maximize2 size={14} /></button></div>
+      <div className="tile-actions"><button className="btn btn-sm btn-icon" title={m.live.focusView}><Maximize2 size={14} /></button></div>
       <div className="tile-bottom">
         {counts(objects).map(([l, n]) => (
           <span key={l} className="tile-count" style={{ ["--lc" as string]: labelColor(l) }} title={labelName(l)}>
@@ -76,6 +79,7 @@ function CameraTile({ cam, compact, onOpen }: { cam: Camera; compact: boolean; o
 }
 
 function EventFeed({ cameraId, onPick, collapsible = true }: { cameraId?: number; onPick: (e: VGEvent) => void; collapsible?: boolean }) {
+  const m = useMsgs();
   const { feedOpen, set } = useUi();
   const feed = useLive((s) => s.feed);
   const seed = useLive((s) => s.seedFeed);
@@ -95,15 +99,15 @@ function EventFeed({ cameraId, onPick, collapsible = true }: { cameraId?: number
   return (
     <aside className={`feed ${open ? "" : "closed"}`} style={!collapsible ? { width: "100%", flex: 1 } : undefined}>
       <div className="feed-head">
-        {collapsible && !open && <button className="btn btn-ghost btn-icon btn-sm" onClick={() => set({ feedOpen: true })} title="Feed einblenden"><ChevronsLeft size={16} /></button>}
-        <h3><Radio size={16} color="var(--bad)" />{cameraId !== undefined ? "Letzte Ereignisse" : "Live-Ereignisse"}</h3>
+        {collapsible && !open && <button className="btn btn-ghost btn-icon btn-sm" onClick={() => set({ feedOpen: true })} title={m.live.showFeed}><ChevronsLeft size={16} /></button>}
+        <h3><Radio size={16} color="var(--bad)" />{cameraId !== undefined ? m.live.recentEvents : m.live.liveEvents}</h3>
         {open && <span className="badge outline">{items.length}</span>}
-        {collapsible && open && <button className="btn btn-ghost btn-icon btn-sm" onClick={() => set({ feedOpen: false })} title="Feed ausblenden"><ChevronRight size={16} /></button>}
+        {collapsible && open && <button className="btn btn-ghost btn-icon btn-sm" onClick={() => set({ feedOpen: false })} title={m.live.hideFeed}><ChevronRight size={16} /></button>}
       </div>
       {open && (
         <div className="feed-list">
           {initial.isLoading && <Loading />}
-          {!initial.isLoading && items.length === 0 && <Empty icon={<Eye size={30} />} title="Noch keine Ereignisse" text="Neue Erkennungen erscheinen hier in Echtzeit." />}
+          {!initial.isLoading && items.length === 0 && <Empty icon={<Eye size={30} />} title={m.live.noEventsTitle} text={m.live.noEventsText} />}
           {items.map((e) => <FeedItem key={e.id} e={e} onClick={() => onPick(e)} />)}
         </div>
       )}
@@ -112,6 +116,7 @@ function EventFeed({ cameraId, onPick, collapsible = true }: { cameraId?: number
 }
 
 function Kpis({ cams }: { cams: Camera[] }) {
+  const m = useMsgs();
   const dets = useLive((s) => s.detections);
   const status = useLive((s) => s.status);
   const [, tick] = useState(0);
@@ -120,10 +125,10 @@ function Kpis({ cams }: { cams: Camera[] }) {
   const all: DetObject[] = Object.values(dets).filter((d) => Date.now() - d.receivedAt < 2500).flatMap((d) => d.objects);
   const g = (grp: string[]) => all.filter((o) => grp.includes(o.label)).length;
   const items = [
-    { k: "Kameras online", v: `${online}/${cams.length}`, c: "var(--accent)", i: <Cctv size={16} /> },
-    { k: "Personen", v: g(["person"]), c: "var(--c-person)", i: <Users size={16} /> },
-    { k: "Fahrzeuge", v: g(["car", "truck", "bus", "motorcycle", "bicycle"]), c: "var(--c-vehicle)", i: <LabelIcon label="car" size={16} /> },
-    { k: "Tiere", v: g(["dog", "cat", "bird", "horse"]), c: "var(--c-animal)", i: <LabelIcon label="dog" size={16} /> },
+    { k: m.live.kpiCamerasOnline, v: `${online}/${cams.length}`, c: "var(--accent)", i: <Cctv size={16} /> },
+    { k: m.live.kpiPeople, v: g(["person"]), c: "var(--c-person)", i: <Users size={16} /> },
+    { k: m.live.kpiVehicles, v: g(["car", "truck", "bus", "motorcycle", "bicycle"]), c: "var(--c-vehicle)", i: <LabelIcon label="car" size={16} /> },
+    { k: m.live.kpiAnimals, v: g(["dog", "cat", "bird", "horse"]), c: "var(--c-animal)", i: <LabelIcon label="dog" size={16} /> },
   ];
   return (
     <div className="kpis">
@@ -141,6 +146,7 @@ const MODE_NAME = { webrtc: "WebRTC", mse: "MSE", mjpeg: "MJPEG", none: "–" } 
 
 /** Fokusansicht: manueller Versatz der Boxen zum Video ("Overlay-Verzögerung"), je Kamera im Browser gespeichert. */
 function OverlaySyncControl({ cameraId }: { cameraId: number }) {
+  const m = useMsgs();
   const [open, setOpen] = useState(false);
   const overlayDelay = useUi((s) => s.overlayDelay);
   const set = useUi((s) => s.set);
@@ -149,23 +155,22 @@ function OverlaySyncControl({ cameraId }: { cameraId: number }) {
   const setManual = (v: number) => set({ overlayDelay: { ...overlayDelay, [cameraId]: Math.round(v * 10) / 10 } });
   return (
     <div className="sync-ctl">
-      <button className={`btn btn-sm ${open || manual ? "active" : ""}`} onClick={() => setOpen(!open)} title="Overlay-Verzögerung: Boxen zeitlich an das Video anpassen">
-        <Clock size={14} />Sync{manual ? ` ${manual > 0 ? "+" : ""}${manual.toFixed(1)} s` : ""}
+      <button className={`btn btn-sm ${open || manual ? "active" : ""}`} onClick={() => setOpen(!open)} title={m.live.syncTitle}>
+        <Clock size={14} />Sync{manual ? ` ${manual > 0 ? "+" : ""}${fmtNum(manual, 1)} s` : ""}
       </button>
       {open && (
         <div className="sync-pop">
-          <b>Overlay-Verzögerung</b>
+          <b>{m.live.overlayDelay}</b>
           <span className="muted">
-            Die Boxen werden automatisch um die gemessene Verzögerung des Videos ({MODE_NAME[f.mode]}: {(f.autoMs / 1000).toFixed(2)} s) verschoben.
-            Laufen sie dem Bild trotzdem voraus (positiv) oder hinterher (negativ), hier nachkorrigieren.
+            {m.live.syncHelp(MODE_NAME[f.mode], fmtNum(f.autoMs / 1000, 2))}
           </span>
           <div className="range">
-            <input type="range" min={OFFSET_MIN_S} max={OFFSET_MAX_S} step={0.1} value={manual} onChange={(e) => setManual(Number(e.target.value))} aria-label="Zusätzliche Verzögerung in Sekunden" />
-            <output>{manual > 0 ? "+" : ""}{manual.toFixed(1)} s</output>
+            <input type="range" min={OFFSET_MIN_S} max={OFFSET_MAX_S} step={0.1} value={manual} onChange={(e) => setManual(Number(e.target.value))} aria-label={m.live.extraDelay} />
+            <output>{manual > 0 ? "+" : ""}{fmtNum(manual, 1)} s</output>
           </div>
-          <span className="muted">Gesamt: {(f.delayMs / 1000).toFixed(2)} s{f.stalled ? " · Video hängt" : ""}</span>
+          <span className="muted">{m.live.total(fmtNum(f.delayMs / 1000, 2))}{f.stalled ? m.live.videoStalled : ""}</span>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button className="btn btn-sm" onClick={() => setManual(0)} disabled={!manual}>Zurücksetzen</button>
+            <button className="btn btn-sm" onClick={() => setManual(0)} disabled={!manual}>{m.live.reset}</button>
           </div>
         </div>
       )}
@@ -174,6 +179,7 @@ function OverlaySyncControl({ cameraId }: { cameraId: number }) {
 }
 
 function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; onPick: (e: VGEvent) => void }) {
+  const m = useMsgs();
   const status = useStatus(cam);
   const objects = useCameraObjects(cam.id);
   const { showZones, set } = useUi();
@@ -183,7 +189,7 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
   return (
     <div className="page-full">
       <div className="live-toolbar" style={{ marginBottom: 14 }}>
-        <button className="btn btn-ghost" onClick={onBack}><ArrowLeft size={16} />Alle Kameras</button>
+        <button className="btn btn-ghost" onClick={onBack}><ArrowLeft size={16} />{m.live.allCameras}</button>
         <h1>{cam.name}</h1>
         <StatusBadge status={status} enabled={cam.enabled} />
         {cam.enabled && cam.health_enabled && <HealthBadge health={status?.health} />}
@@ -191,13 +197,13 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
           <span className="badge outline"><Gauge size={12} />{status.fps?.toFixed(1)} fps</span>
           <span className="badge outline"><Timer size={12} />{status.inference_ms?.toFixed(1)} ms</span>
         </>}
-        {status?.last_seen && status.state !== "online" && <span className="muted">zuletzt {fmtAgo(status.last_seen)}</span>}
+        {status?.last_seen && status.state !== "online" && <span className="muted">{m.live.lastSeen(fmtAgo(status.last_seen))}</span>}
         <PtzBadge cam={cam} />
         <span className="spacer" />
         {counts(objects).map(([l, n]) => (
           <span key={l} className="tile-count" style={{ ["--lc" as string]: labelColor(l), height: 30 }}><LabelIcon label={l} />{n} {labelName(l)}</span>
         ))}
-        <button className={`btn btn-sm ${showZones ? "active" : ""}`} onClick={() => set({ showZones: !showZones })}><Layers size={14} />Zonen</button>
+        <button className={`btn btn-sm ${showZones ? "active" : ""}`} onClick={() => set({ showZones: !showZones })}><Layers size={14} />{m.live.zones}</button>
         {!offline && <OverlaySyncControl cameraId={cam.id} />}
         {!offline && <AskCameraButton camera={cam} />}
       </div>
@@ -215,13 +221,14 @@ function FocusView({ cam, onBack, onPick }: { cam: Camera; onBack: () => void; o
 }
 
 export function LivePage() {
+  const m = useMsgs();
   const { cameraId } = useParams();
   const nav = useNavigate();
   const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras, refetchInterval: 60_000 });
   const { layout, showZones, set } = useUi();
   const [picked, setPicked] = useState<VGEvent | null>(null);
 
-  if (cams.isLoading) return <Loading text="Lade Kameras …" />;
+  if (cams.isLoading) return <Loading text={m.live.loadingCameras} />;
   const list = cams.data ?? [];
   const focus = cameraId ? list.find((c) => String(c.id) === cameraId) : undefined;
 
@@ -233,7 +240,7 @@ export function LivePage() {
   const n = list.length;
   const cols = layout === "auto" ? (n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4) : layout;
   const layouts: { v: typeof layout; icon: React.ReactNode; t: string }[] = [
-    { v: "auto", icon: <LayoutGrid size={14} />, t: "Auto" },
+    { v: "auto", icon: <LayoutGrid size={14} />, t: m.live.auto },
     { v: 1, icon: <Square size={14} />, t: "1" },
     { v: 2, icon: <Grid2x2 size={14} />, t: "2×2" },
     { v: 3, icon: <Grid3x3 size={14} />, t: "3×3" },
@@ -247,17 +254,17 @@ export function LivePage() {
           <div className="live-toolbar">
             <Kpis cams={list} />
             <span className="spacer" />
-            <button className={`btn btn-sm ${showZones ? "active" : ""}`} onClick={() => set({ showZones: !showZones })} title="Zonen anzeigen"><Layers size={14} />Zonen</button>
-            <div className="seg" role="group" aria-label="Layout">
+            <button className={`btn btn-sm ${showZones ? "active" : ""}`} onClick={() => set({ showZones: !showZones })} title={m.live.showZones}><Layers size={14} />{m.live.zones}</button>
+            <div className="seg" role="group" aria-label={m.live.layout}>
               {layouts.map((l) => (
-                <button key={String(l.v)} className={layout === l.v ? "on" : ""} onClick={() => set({ layout: l.v })} title={`Layout ${l.t}`}>{l.icon}{l.t}</button>
+                <button key={String(l.v)} className={layout === l.v ? "on" : ""} onClick={() => set({ layout: l.v })} title={m.live.layoutTitle(l.t)}>{l.icon}{l.t}</button>
               ))}
             </div>
           </div>
           {n === 0 ? (
             <div className="card" style={{ flex: 1 }}>
-              <Empty icon={<Cctv size={44} />} title="Noch keine Kameras" text="Lege unter Administration → Kameras deine erste Kamera an.">
-                <button className="btn btn-primary" onClick={() => nav("/admin/kameras")}><Plus size={16} />Kamera hinzufügen</button>
+              <Empty icon={<Cctv size={44} />} title={m.live.noCamerasTitle} text={m.live.noCamerasText}>
+                <button className="btn btn-primary" onClick={() => nav("/admin/kameras")}><Plus size={16} />{m.live.addCamera}</button>
               </Empty>
             </div>
           ) : (

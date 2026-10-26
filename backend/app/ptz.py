@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlsplit
 
 from sqlalchemy import select
 
+from . import i18n
 from .db import SessionLocal
 from .models import Camera
 from .onvif import OnvifError, OnvifPtz
@@ -170,7 +171,7 @@ class Controller:
     def _connect(self) -> None:
         host, port, user, pw = credentials(self.cam.get("url") or "", self.cfg)
         if not host:
-            raise OnvifError("Kamera-URL enthält keinen Host – ONVIF nicht möglich")
+            raise OnvifError(i18n.t("errors.ptz_no_host_onvif"))
         c = OnvifPtz(host, port, user, pw, self.cfg.get("profile_token"))
         try:
             c.connect()
@@ -186,7 +187,7 @@ class Controller:
 
     def _require(self) -> OnvifPtz:
         if not self.connected or self.client is None:
-            raise PtzUnavailable(self.error or "PTZ-Kamera noch nicht verbunden")
+            raise PtzUnavailable(self.error or i18n.t("errors.ptz_not_connected"))
         return self.client
 
     def _wait(self, fut: Future, timeout: float = 8.0):
@@ -198,7 +199,7 @@ class Controller:
             self._publish_state()
             raise
         except TimeoutError as e:
-            raise OnvifError("Kamera antwortet nicht (Zeitüberschreitung)") from e
+            raise OnvifError(i18n.t("errors.onvif_timeout")) from e
 
     # ------------------------------------------------------------------ öffentliche Befehle
     def presets(self, max_age: float = 30.0) -> list[dict[str, str]]:
@@ -247,9 +248,9 @@ class Controller:
         self._require()
         token = preset if preset is not None else self.cfg.get("home_preset")
         if not token:
-            raise ValueError("Keine Grundposition festgelegt")
+            raise ValueError(i18n.t("errors.ptz_no_home"))
         if self._presets[1] and token not in {p["token"] for p in self.presets(max_age=300)}:
-            raise ValueError(f"Position {token} gibt es auf der Kamera nicht")
+            raise ValueError(i18n.t("errors.ptz_preset_missing", token=token))
         with self.lock:
             if mode == "manual" and token == self.cfg.get("home_preset") and not hold_s:
                 # „Grundposition“ = Automatik fortsetzen (Patrouille/Verfolgung dürfen wieder)
@@ -798,7 +799,7 @@ def probe(url: str, cfg: dict[str, Any]) -> dict[str, Any]:
     host, port, user, pw = credentials(url, cfg)
     if not host:
         return {"ok": False, "port": None, "device": None, "capabilities": None, "presets": [],
-                "error": "Kamera-URL enthält keinen Host"}
+                "error": i18n.t("errors.ptz_no_host")}
     c = OnvifPtz(host, port, user, pw, cfg.get("profile_token"))
     try:
         c.connect()

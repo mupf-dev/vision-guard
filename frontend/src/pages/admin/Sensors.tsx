@@ -7,6 +7,8 @@ import { ConfirmDialog, Dialog, Empty, Img, Loading, Range, Switch } from "../..
 import { REF_NAME, RegionEditor, RegionImage, SENSOR_KIND, STATE_NAME, SensorStateBadge, fmtSensorValue, vlmMeasure } from "../../components/SensorBits";
 import { fmtAgo, fmtShort } from "../../lib/format";
 import { toast } from "../../lib/store";
+import { fmtNum, lang, useMsgs } from "../../i18n";
+import type { InventoryVocabEntry } from "../../lib/types";
 
 /**
  * Administration → Virtuelle Sensoren (W3, A3+C4): Liste mit Zustand, Editor (Bereich, Art, Parameter),
@@ -27,7 +29,6 @@ const QUESTION_TEMPLATES = ["Is the light on?", "Is the window open?", "Is the s
 
 // W4 (C4-VLM-Modus): Bildmodell zählt bzw. erkennt „leer“ (Vorlagen wie backend/app/vlm_measure.py)
 const MEASURES: VlmMeasure[] = ["yesno", "count", "fill"];
-const MEASURE_NAME: Record<VlmMeasure, string> = { yesno: "Ja/Nein", count: "Anzahl", fill: "leer / nicht leer" };
 const ITEM_TEMPLATES: Record<"count" | "fill", string[]> = {
   count: ["bottles", "eggs", "cans", "toilet paper rolls", "jars", "boxes"],
   fill: ["fruit bowl", "jar", "basket", "shelf", "bin", "firewood rack"],
@@ -49,6 +50,12 @@ function vocabItem(labels: string[], vocab: { label: string; prompts: string[] }
   return labels[0] ? `${labels[0].replace(/_/g, " ")}s` : "";
 }
 
+/** Anzeigename eines Vokabular-Eintrags in der aktuellen Sprache (CONTRACT I18N.C) */
+function vocabName(v: Pick<InventoryVocabEntry, "name_de" | "names" | "prompts">): string {
+  const l = lang();
+  return v.names?.[l] ?? (l === "de" ? v.name_de : v.names?.en ?? v.prompts[0] ?? v.name_de);
+}
+
 function fmtSecs(v: number) {
   if (v < 60) return `${v} s`;
   if (v < 3600) return `${Math.round(v / 60)} min`;
@@ -62,29 +69,29 @@ function emptyInput(cams: Camera[]): SensorInput {
 }
 
 function References({ s }: { s: VirtualSensor }) {
+  const t = useMsgs().sensors;
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["sensor-refs", s.id], queryFn: () => api.sensorReferences(s.id) });
   const states: SensorReference["state"][] = s.kind === "reference" ? ["on", "off"] : ["full", "half", "empty"];
   const add = useMutation({
     mutationFn: (st: SensorReference["state"]) => api.addSensorReference(s.id, st),
-    onSuccess: (r) => { toast.success("Referenz aufgenommen", `Zustand „${REF_NAME[r.state]}“`); qc.invalidateQueries({ queryKey: ["sensor-refs", s.id] }); },
-    onError: (e: Error) => toast.error("Nicht aufgenommen", e.message),
+    onSuccess: (r) => { toast.success(t.refCaptured, t.refState(REF_NAME[r.state])); qc.invalidateQueries({ queryKey: ["sensor-refs", s.id] }); },
+    onError: (e: Error) => toast.error(t.notCaptured, e.message),
   });
   const del = useMutation({
     mutationFn: (rid: number) => api.deleteSensorReference(s.id, rid),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sensor-refs", s.id] }),
-    onError: (e: Error) => toast.error("Nicht gelöscht", e.message),
+    onError: (e: Error) => toast.error(t.notDeleted, e.message),
   });
   const refs = q.data ?? [];
   const missing = states.filter((st) => !refs.some((r) => r.state === st));
   return (
-    <fieldset className="fieldset"><legend>Referenzbilder</legend>
+    <fieldset className="fieldset"><legend>{t.references}</legend>
       <div className="muted" style={{ fontSize: 13 }}>
-        Stellen Sie den Zustand vor der Kamera her (z. B. Fenster öffnen) und nehmen Sie dann das aktuelle Bild auf. Bis zu
-        5 Bilder je Zustand; mehrere Bilder (Tag/Nacht, Licht an/aus) machen den Sensor robuster.
-        {s.kind === "fill" ? " Mindestens zwei Stufen (z. B. „voll“ und „leer“) sind nötig." : " Beide Zustände sind nötig."}
+        {t.refHelp}
+        {s.kind === "fill" ? t.refHelpFill : t.refHelpBinary}
       </div>
-      {missing.length > 0 && <div className="hint" style={{ color: "var(--warn)", fontSize: 12 }}>Es fehlen Bilder für: {missing.map((m) => `„${REF_NAME[m]}“`).join(", ")}</div>}
+      {missing.length > 0 && <div className="hint" style={{ color: "var(--warn)", fontSize: 12 }}>{t.refMissing(missing.map((m) => t.quote(REF_NAME[m])).join(", "))}</div>}
       {states.map((st) => (
         <div key={st} className="row-wrap" style={{ gap: 8, alignItems: "center" }}>
           <b style={{ width: 48 }}>{REF_NAME[st]}</b>
@@ -92,11 +99,11 @@ function References({ s }: { s: VirtualSensor }) {
             <div key={r.id} style={{ position: "relative" }} title={fmtShort(r.created_at)}>
               <RegionImage src={r.image_url} region={s.region} height={64} />
               <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,.6)" }}
-                title="Referenz löschen" onClick={() => del.mutate(r.id)}><Trash2 size={13} /></button>
+                title={t.deleteRef} onClick={() => del.mutate(r.id)}><Trash2 size={13} /></button>
             </div>
           ))}
           <button type="button" className="btn btn-sm" disabled={add.isPending || refs.filter((r) => r.state === st).length >= 5}
-            onClick={() => add.mutate(st)}>{add.isPending && add.variables === st ? <span className="spinner" /> : <ImagePlus size={14} />}„{REF_NAME[st]}“ aufnehmen</button>
+            onClick={() => add.mutate(st)}>{add.isPending && add.variables === st ? <span className="spinner" /> : <ImagePlus size={14} />}{t.capture(REF_NAME[st])}</button>
         </div>
       ))}
     </fieldset>
@@ -104,19 +111,20 @@ function References({ s }: { s: VirtualSensor }) {
 }
 
 function SensorHistoryList({ s }: { s: VirtualSensor }) {
+  const t = useMsgs().sensors;
   const q = useQuery({ queryKey: ["sensor-history", s.id], queryFn: () => api.sensorHistory(s.id, 30), refetchInterval: 15000 });
   const rows = q.data ?? [];
   return (
-    <fieldset className="fieldset"><legend><History size={14} style={{ verticalAlign: -2 }} /> Verlauf</legend>
-      {!rows.length ? <span className="muted" style={{ fontSize: 13 }}>Noch keine Einträge.</span> : (
+    <fieldset className="fieldset"><legend><History size={14} style={{ verticalAlign: -2 }} /> {t.history}</legend>
+      {!rows.length ? <span className="muted" style={{ fontSize: 13 }}>{t.noEntries}</span> : (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflow: "auto" }}>
           {rows.map((h, i) => (
             <div key={i} className="row" style={{ gap: 8, fontSize: 13 }}>
               <span className="muted" style={{ width: 120 }}>{fmtShort(h.ts)}</span>
               <span className="badge" style={{ minWidth: 52, justifyContent: "center" }}>{STATE_NAME[h.state]}</span>
               <span className="muted">{fmtSensorValue({ kind: s.kind, value: h.value, params: s.params })}</span>
-              {h.engine && h.engine !== "cheap" && <span className="badge info">{h.engine === "cloud" ? "Cloud" : "Bildmodell"}</span>}
-              {h.snapshot_url && <a href={h.snapshot_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Bild</a>}
+              {h.engine && h.engine !== "cheap" && <span className="badge info">{h.engine === "cloud" ? t.cloud : t.imageModel}</span>}
+              {h.snapshot_url && <a href={h.snapshot_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>{t.image}</a>}
             </div>
           ))}
         </div>
@@ -126,6 +134,8 @@ function SensorHistoryList({ s }: { s: VirtualSensor }) {
 }
 
 function SensorDialog({ sensor, cams, onClose }: { sensor: VirtualSensor | null; cams: Camera[]; onClose: () => void }) {
+  const mm = useMsgs();
+  const t = mm.sensors;
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const vocab = settings.data?.inventory_vocabulary ?? [];
@@ -175,30 +185,30 @@ function SensorDialog({ sensor, cams, onClose }: { sensor: VirtualSensor | null;
       return sensor ? api.updateSensor(sensor.id, body) : api.createSensor(body);
     },
     onSuccess: (s) => {
-      toast.success("Sensor gespeichert", s.name);
+      toast.success(t.saved, s.name);
       qc.invalidateQueries({ queryKey: ["sensors"] });
-      if (!sensor && (s.kind === "reference" || s.kind === "fill")) toast.info("Jetzt Referenzbilder aufnehmen", "Sensor bearbeiten → Referenzbilder");
+      if (!sensor && (s.kind === "reference" || s.kind === "fill")) toast.info(t.captureRefsNow, t.captureRefsHow);
       onClose();
     },
-    onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
+    onError: (e: Error) => toast.error(t.saveFailed, e.message),
   });
 
   return (
-    <Dialog size="xl" onClose={onClose} icon={<Gauge size={18} />} title={sensor ? `Sensor „${sensor.name}“` : "Neuer Sensor"} footer={<>
+    <Dialog size="xl" onClose={onClose} icon={<Gauge size={18} />} title={sensor ? t.dialogTitle(sensor.name) : t.newSensor} footer={<>
       <div className="spacer muted" style={{ fontSize: 13 }}>{SENSOR_KIND[f.kind].text}</div>
-      <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-      <button className="btn btn-primary" disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending && <span className="spinner" />}Speichern</button>
+      <button className="btn btn-ghost" onClick={onClose}>{mm.common.cancel}</button>
+      <button className="btn btn-primary" disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending && <span className="spinner" />}{mm.common.save}</button>
     </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div className="form-grid">
-          <div className="field"><label>Name *</label><input className="input" autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="z. B. Licht Flur, Bad-Fenster, Wasserflaschen" /></div>
-          <div className="field"><label>Kamera *</label>
+          <div className="field"><label>{t.name}</label><input className="input" autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} placeholder={t.namePlaceholder} /></div>
+          <div className="field"><label>{t.camera}</label>
             <select className="select" value={f.camera_id || ""} onChange={(e) => set("camera_id", Number(e.target.value))}>
               {cams.map((c) => <option key={c.id} value={c.id}>{c.name}{c.room ? ` · ${c.room}` : ""}</option>)}
             </select>
           </div>
         </div>
-        <div className="field"><label>Art</label>
+        <div className="field"><label>{t.kindLabel}</label>
           <div className="seg" style={{ flexWrap: "wrap" }}>
             {KINDS.map((k) => (
               <button type="button" key={k} className={f.kind === k ? "on" : ""} onClick={() => setKind(k)} title={SENSOR_KIND[k].text}>
@@ -208,127 +218,127 @@ function SensorDialog({ sensor, cams, onClose }: { sensor: VirtualSensor | null;
           </div>
         </div>
         <div className="sensor-edit-grid">
-          <div className="field"><label>Bereich im Bild *</label>
+          <div className="field"><label>{t.region}</label>
             <RegionEditor cameraId={cam?.id ?? null} region={f.region} onChange={(r) => set("region", r)} />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {f.kind === "brightness" && <>
-              <div className="field"><label>„an“ ab Helligkeit</label>
+              <div className="field"><label>{t.onFromBrightness}</label>
                 <Range value={Number(p.threshold ?? 0.5)} min={0.05} max={0.95} step={0.01} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => setP({ threshold: v })} /></div>
-              <Switch checked={!!p.invert} onChange={(v) => setP({ invert: v })} label={p.invert ? "umgekehrt: dunkel = an" : "hell = an"} />
+              <Switch checked={!!p.invert} onChange={(v) => setP({ invert: v })} label={p.invert ? t.inverted : t.brightIsOn} />
             </>}
             {f.kind === "blink" && <>
-              <div className="field"><label>Mindest-Schwankung</label>
-                <Range value={Number(p.min_std ?? 0.05)} min={0.01} max={0.3} step={0.005} format={(v) => v.toFixed(3)} onChange={(v) => setP({ min_std: v })} /></div>
-              <div className="field"><label>Zeitfenster</label>
+              <div className="field"><label>{t.minFluctuation}</label>
+                <Range value={Number(p.min_std ?? 0.05)} min={0.01} max={0.3} step={0.005} format={(v) => fmtNum(v, 3)} onChange={(v) => setP({ min_std: v })} /></div>
+              <div className="field"><label>{t.timeWindow}</label>
                 <Range value={Number(p.window_s ?? 3)} min={1} max={15} step={1} format={(v) => `${v} s`} onChange={(v) => setP({ window_s: v })} /></div>
             </>}
             {f.kind === "inventory_count" && <>
-              <div className="field"><label>Gegenstände *</label>
+              <div className="field"><label>{t.items}</label>
                 <div className="row-wrap" style={{ gap: 6 }}>
                   {((p.labels ?? []) as string[]).map((l) => (
-                    <button type="button" key={l} className="chip on" title="Entfernen"
+                    <button type="button" key={l} className="chip on" title={mm.common.remove}
                       onClick={() => setP({ labels: ((p.labels ?? []) as string[]).filter((x) => x !== l) })}>
-                      {vocab.find((v) => v.label === l)?.name_de ?? l}<X size={12} />
+                      {(() => { const v = vocab.find((x) => x.label === l); return v ? vocabName(v) : l; })()}<X size={12} />
                     </button>
                   ))}
                   <select className="select input-sm" style={{ width: "auto", minWidth: 150 }} value=""
                     onChange={(e) => e.target.value && setP({ labels: [...((p.labels ?? []) as string[]), e.target.value] })}>
-                    <option value="">+ Gegenstand …</option>
-                    {vocab.filter((v) => !((p.labels ?? []) as string[]).includes(v.label)).map((v) => <option key={v.label} value={v.label}>{v.name_de}</option>)}
+                    <option value="">{t.addItem}</option>
+                    {vocab.filter((v) => !((p.labels ?? []) as string[]).includes(v.label)).map((v) => <option key={v.label} value={v.label}>{vocabName(v)}</option>)}
                   </select>
                 </div>
-                <span className="hint muted" style={{ fontSize: 12 }}>Gezählt werden sichtbare Gegenstände, deren Mitte im Bereich liegt.</span>
+                <span className="hint muted" style={{ fontSize: 12 }}>{t.itemsHint}</span>
               </div>
-              <div className="field"><label>{level ? "„ok“ ab Anzahl" : "„an“ ab Anzahl"}</label>
+              <div className="field"><label>{level ? t.okFromCount : t.onFromCount}</label>
                 <Range value={Number(p.min_count ?? 1)} min={1} max={20} step={1} format={(v) => `${v}`} onChange={(v) => setP({ min_count: v })} /></div>
-              <div className="field"><label>Zustände</label>
+              <div className="field"><label>{t.states}</label>
                 <div className="seg">
-                  <button type="button" className={f.state_set === "binary" ? "on" : ""} onClick={() => setF((x) => ({ ...x, state_set: "binary", supply: false }))}>an/aus</button>
-                  <button type="button" className={f.state_set === "level" ? "on" : ""} onClick={() => set("state_set", "level")}>ok/knapp/leer</button>
+                  <button type="button" className={f.state_set === "binary" ? "on" : ""} onClick={() => setF((x) => ({ ...x, state_set: "binary", supply: false }))}>{t.statesBinary}</button>
+                  <button type="button" className={f.state_set === "level" ? "on" : ""} onClick={() => set("state_set", "level")}>{t.statesLevel}</button>
                 </div>
               </div>
-              {cam && !cam.inventory_enabled && <div className="hint" style={{ color: "var(--warn)", fontSize: 12 }}>Die Gegenstandserkennung ist an dieser Kamera aus (Kameras → Gegenstände) – der Sensor bleibt „unklar“.</div>}
+              {cam && !cam.inventory_enabled && <div className="hint" style={{ color: "var(--warn)", fontSize: 12 }}>{t.inventoryOff}</div>}
               <Switch checked={f.verify_vlm} onChange={(v) => setF((x) => ({ ...x, verify_vlm: v,
                 params: v && !x.params.item ? { ...x.params, item: vocabItem((x.params.labels ?? []) as string[], vocab) } : x.params }))}
-                label="Wechsel vom Bildmodell nachzählen lassen" />
+                label={t.verifyCount} />
               {countVerify && <>
-                <div className="field"><label>Artikel für die Zählfrage (englisch)</label>
+                <div className="field"><label>{t.countItem}</label>
                   <input className="input" value={String(p.item ?? "")} maxLength={80} onChange={(e) => setP({ item: e.target.value })} placeholder="bottles" />
-                  <span className="hint muted" style={{ fontSize: 12 }}>Frage: „{vlmQuestionPreview("count", String(p.item ?? ""), "")}“ – höchstens alle 5 min, nur wenn sich der Zustand ändern würde.</span>
+                  <span className="hint muted" style={{ fontSize: 12 }}>{t.countQuestionHint(vlmQuestionPreview("count", String(p.item ?? ""), ""))}</span>
                 </div>
-                {Number(p.min_count ?? 1) > VLM_COUNT_MAX_MIN && <span className="hint" style={{ color: "var(--bad)", fontSize: 12 }}>Nachzählen nur bis Mindestanzahl {VLM_COUNT_MAX_MIN}: größere Mengen zählt das Bildmodell zu niedrig.</span>}
+                {Number(p.min_count ?? 1) > VLM_COUNT_MAX_MIN && <span className="hint" style={{ color: "var(--bad)", fontSize: 12 }}>{t.countMaxHint(VLM_COUNT_MAX_MIN)}</span>}
               </>}
             </>}
             {f.kind === "fill" && <>
-              <div className="field"><label>„knapp“ unter Füllstand</label>
+              <div className="field"><label>{t.lowBelow}</label>
                 <Range value={Number(p.low_below ?? 0.4)} min={0.1} max={0.9} step={0.05} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => setP({ low_below: v })} /></div>
-              <div className="field"><label>„leer“ unter Füllstand</label>
+              <div className="field"><label>{t.outBelow}</label>
                 <Range value={Number(p.out_below ?? 0.15)} min={0.05} max={0.8} step={0.05} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => setP({ out_below: v })} /></div>
-              {Number(p.out_below) >= Number(p.low_below) && <span className="hint" style={{ color: "var(--bad)", fontSize: 12 }}>„leer“ muss unter „knapp“ liegen.</span>}
+              {Number(p.out_below) >= Number(p.low_below) && <span className="hint" style={{ color: "var(--bad)", fontSize: 12 }}>{t.outBelowLow}</span>}
             </>}
             {f.kind === "vlm" && (
-              <div className="field"><label>Messart</label>
+              <div className="field"><label>{t.measure}</label>
                 <div className="seg">
-                  {MEASURES.map((m) => <button type="button" key={m} className={measure === m ? "on" : ""} onClick={() => setMeasure(m)}>{MEASURE_NAME[m]}</button>)}
+                  {MEASURES.map((m) => <button type="button" key={m} className={measure === m ? "on" : ""} onClick={() => setMeasure(m)}>{t.measureName[m]}</button>)}
                 </div>
               </div>
             )}
             {vlmSupply && (measure === "count" || measure === "fill") && <>
-              <div className="field"><label>Artikel (englisch) *</label>
+              <div className="field"><label>{t.itemEn}</label>
                 <input className="input" value={String(p.item ?? "")} maxLength={80} onChange={(e) => setP({ item: e.target.value })}
                   placeholder={measure === "count" ? "bottles" : "fruit bowl"} />
                 <div className="placeholders">{ITEM_TEMPLATES[measure].map((t) => <code key={t} onClick={() => setP({ item: t })}>{t}</code>)}</div>
               </div>
-              <div className="field"><label>Eigene Frage (optional, englisch)</label>
+              <div className="field"><label>{t.ownQuestion}</label>
                 <input className="input" value={String(p.question ?? "")} maxLength={300} onChange={(e) => setP({ question: e.target.value })}
                   placeholder={vlmQuestionPreview(measure, String(p.item ?? ""), "")} />
-                <span className="hint muted" style={{ fontSize: 12 }}>Frage an das Modell: „{vlmQuestionPreview(measure, String(p.item ?? ""), String(p.question ?? ""))}“</span>
+                <span className="hint muted" style={{ fontSize: 12 }}>{t.questionToModel(vlmQuestionPreview(measure, String(p.item ?? ""), String(p.question ?? "")))}</span>
               </div>
               {measure === "count" ? <>
-                <div className="field"><label>{level ? "„ok“ ab Anzahl" : "„an“ ab Anzahl"}</label>
+                <div className="field"><label>{level ? t.okFromCount : t.onFromCount}</label>
                   <Range value={Math.min(VLM_COUNT_MAX_MIN, Number(p.min_count ?? 1))} min={1} max={VLM_COUNT_MAX_MIN} step={1} format={(v) => `${v}`} onChange={(v) => setP({ min_count: v })} /></div>
-                <div className="field"><label>Zustände</label>
+                <div className="field"><label>{t.states}</label>
                   <div className="seg">
-                    <button type="button" className={f.state_set === "binary" ? "on" : ""} onClick={() => setF((x) => ({ ...x, state_set: "binary", supply: false }))}>an/aus</button>
-                    <button type="button" className={f.state_set === "level" ? "on" : ""} onClick={() => set("state_set", "level")}>ok/knapp/leer</button>
+                    <button type="button" className={f.state_set === "binary" ? "on" : ""} onClick={() => setF((x) => ({ ...x, state_set: "binary", supply: false }))}>{t.statesBinary}</button>
+                    <button type="button" className={f.state_set === "level" ? "on" : ""} onClick={() => set("state_set", "level")}>{t.statesLevel}</button>
                   </div>
                 </div>
-                <span className="hint muted" style={{ fontSize: 12 }}>Das Bildmodell zählt bis etwa 3 Stück zuverlässig, größere Mengen zu niedrig – deshalb liegt die Schwelle bei höchstens {VLM_COUNT_MAX_MIN}. Für Regale mit vielen Artikeln „Gegenstände zählen“ verwenden.</span>
+                <span className="hint muted" style={{ fontSize: 12 }}>{t.countLimitHint(VLM_COUNT_MAX_MIN)}</span>
               </> : (
-                <span className="hint muted" style={{ fontSize: 12 }}>Eingeschränkt: Das Bildmodell erkennt nur „leer“ zuverlässig, Zwischenstufen nicht – dieser Sensor meldet „ok“ oder „leer“, nie „knapp“. Für Füllstände in Stufen die Art „Füllstand“ mit Referenzbildern verwenden.</span>
+                <span className="hint muted" style={{ fontSize: 12 }}>{t.fillLimitHint}</span>
               )}
             </>}
             {(f.kind === "vlm" || ["brightness", "blink", "reference"].includes(f.kind)) && <>
               {f.kind !== "vlm" && (
-                <Switch checked={f.verify_vlm} onChange={(v) => set("verify_vlm", v)} label="Wechsel per Bildmodell bestätigen" />
+                <Switch checked={f.verify_vlm} onChange={(v) => set("verify_vlm", v)} label={t.verifyChange} />
               )}
               {needsQuestion && (
-                <div className="field"><label>Frage (englisch, Ja/Nein) *</label>
+                <div className="field"><label>{t.question}</label>
                   <input className="input" value={String(p.question ?? "")} maxLength={300} onChange={(e) => setP({ question: e.target.value })} placeholder="Is the light on?" />
                   <div className="placeholders">{QUESTION_TEMPLATES.map((q) => <code key={q} onClick={() => setP({ question: q })}>{q}</code>)}</div>
-                  <span className="hint muted" style={{ fontSize: 12 }}>„Ja“ = an, „Nein“ = aus. Das Bildmodell versteht Englisch am besten. Ohne Bildmodell (Dienst „vlm“) bleibt ein reiner Bildmodell-Sensor „unklar“{f.kind !== "vlm" ? ", bei der Bestätigung gilt dann der günstige Befund" : ""}.</span>
+                  <span className="hint muted" style={{ fontSize: 12 }}>{t.questionHint(f.kind !== "vlm")}</span>
                 </div>
               )}
             </>}
             {level && (
-              <Switch checked={f.supply} onChange={(v) => set("supply", v)} label="Vorrat: bei knapp/leer auf die Einkaufsliste" />
+              <Switch checked={f.supply} onChange={(v) => set("supply", v)} label={t.supply} />
             )}
-            <div className="field"><label>Prüfen alle</label>
+            <div className="field"><label>{t.checkEvery}</label>
               <Range value={f.interval_s} min={f.kind === "vlm" ? 60 : 2} max={f.kind === "vlm" ? 3600 : 600} step={f.kind === "vlm" ? 30 : 1} format={fmtSecs} onChange={(v) => set("interval_s", v)} /></div>
-            <div className="field"><label>Wechsel nach gleichen Messungen in Folge</label>
+            <div className="field"><label>{t.confirmN}</label>
               <Range value={f.confirm_n} min={1} max={10} step={1} format={(v) => `${v}×`} onChange={(v) => set("confirm_n", v)} /></div>
             {usesVlm && <>
-              <div className="field"><label>Bildmodell spätestens erneut nach</label>
+              <div className="field"><label>{t.vlmMaxAge}</label>
                 <Range value={f.vlm_max_age_s} min={vlmSupply ? VLM_SUPPLY_MIN_AGE : 60} max={21600} step={60} format={fmtSecs} onChange={(v) => set("vlm_max_age_s", v)} />
-                {vlmSupply && <span className="hint muted" style={{ fontSize: 12 }}>Vorräte mindestens alle 30 min – jede Frage pausiert kurz Gegenstandserkennung und Zeitmaschine. Bei sichtbarer Änderung im Bereich wird früher gefragt.</span>}
+                {vlmSupply && <span className="hint muted" style={{ fontSize: 12 }}>{t.vlmSupplyHint}</span>}
               </div>
               {f.kind !== "inventory_count" && (  /* Zählsensoren: kein Änderungsmaß vom Worker */
-                <div className="field"><label>Bild gilt als verändert ab</label>
+                <div className="field"><label>{t.changeThreshold}</label>
                   <Range value={f.change_threshold} min={0.02} max={0.5} step={0.01} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => set("change_threshold", v)} /></div>
               )}
             </>}
-            <Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? "aktiv" : "ausgeschaltet"} />
+            <Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? t.active : t.off} />
           </div>
         </div>
         {sensor && (sensor.kind === "reference" || sensor.kind === "fill") && sensor.kind === f.kind && <References s={{ ...sensor, region: f.region }} />}
@@ -339,11 +349,13 @@ function SensorDialog({ sensor, cams, onClose }: { sensor: VirtualSensor | null;
 }
 
 function SensorRow({ s, onEdit, onDelete }: { s: VirtualSensor; onEdit: () => void; onDelete: () => void }) {
+  const mm = useMsgs();
+  const t = mm.sensors;
   const qc = useQueryClient();
   const evalM = useMutation({
     mutationFn: () => api.evaluateSensor(s.id),
     onSuccess: (r) => { toast.info(`${r.name}: ${STATE_NAME[r.state]}`, r.state_text); qc.invalidateQueries({ queryKey: ["sensors"] }); },
-    onError: (e: Error) => toast.error("Prüfen fehlgeschlagen", e.message),
+    onError: (e: Error) => toast.error(t.checkFailed, e.message),
   });
   const toggle = useMutation({
     mutationFn: () => {
@@ -352,31 +364,32 @@ function SensorRow({ s, onEdit, onDelete }: { s: VirtualSensor; onEdit: () => vo
       return api.updateSensor(id, { ...rest, enabled: !s.enabled });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sensors"] }),
-    onError: (e: Error) => toast.error("Fehler", e.message),
+    onError: (e: Error) => toast.error(mm.common.error, e.message),
   });
   return (
     <div className={`list-item ${s.enabled ? "" : "disabled"}`}>
       <Switch checked={s.enabled} onChange={() => toggle.mutate()} />
       {s.snapshot_url ? <Img src={s.snapshot_url} className="sensor-thumb" /> : <RegionImage src={null} region={s.region} height={46} />}
       <div className="grow">
-        <div className="title">{s.name} <SensorStateBadge s={s} />{s.supply && <span className="badge accent">Vorrat</span>}</div>
+        <div className="title">{s.name} <SensorStateBadge s={s} />{s.supply && <span className="badge accent">{t.supplyBadge}</span>}</div>
         <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
           <span className="row" style={{ gap: 6, display: "inline-flex" }}>{SENSOR_KIND[s.kind].icon}{SENSOR_KIND[s.kind].name}</span>
           {" · "}{s.state_text}{" · "}{fmtSensorValue(s)}
-          {s.last_eval && <> · geprüft {fmtAgo(s.last_eval)}</>}
-          {s.last_engine && s.last_engine !== "cheap" && <> · {s.last_engine === "cloud" ? "Cloud" : "Bildmodell"}</>}
-          {s.last_answer && <span title="Letzte Antwort des Bildmodells"> · „{s.last_answer.length > 80 ? `${s.last_answer.slice(0, 80)}…` : s.last_answer}“</span>}
+          {s.last_eval && <> · {t.checked(fmtAgo(s.last_eval))}</>}
+          {s.last_engine && s.last_engine !== "cheap" && <> · {s.last_engine === "cloud" ? t.cloud : t.imageModel}</>}
+          {s.last_answer && <span title={t.lastAnswer}> · {t.quote(s.last_answer.length > 80 ? `${s.last_answer.slice(0, 80)}…` : s.last_answer)}</span>}
         </div>
       </div>
-      <button className="btn btn-sm" disabled={evalM.isPending || !s.enabled} onClick={() => evalM.mutate()} title="Sofort bewerten (ohne Hysterese)">
-        {evalM.isPending ? <span className="spinner" /> : <Play size={14} />}Jetzt prüfen</button>
-      <button className="btn btn-sm" onClick={onEdit}><Pencil size={14} />Bearbeiten</button>
-      <button className="btn btn-sm btn-ghost btn-icon" title="Löschen" onClick={onDelete}><Trash2 size={15} /></button>
+      <button className="btn btn-sm" disabled={evalM.isPending || !s.enabled} onClick={() => evalM.mutate()} title={t.evaluateTitle}>
+        {evalM.isPending ? <span className="spinner" /> : <Play size={14} />}{t.checkNow}</button>
+      <button className="btn btn-sm" onClick={onEdit}><Pencil size={14} />{mm.common.edit}</button>
+      <button className="btn btn-sm btn-ghost btn-icon" title={mm.common.delete} onClick={onDelete}><Trash2 size={15} /></button>
     </div>
   );
 }
 
 export function SensorsPage() {
+  const t = useMsgs().sensors;
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["sensors"], queryFn: () => api.sensors(), refetchInterval: 20000 });
   const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
@@ -384,8 +397,8 @@ export function SensorsPage() {
   const [del, setDel] = useState<VirtualSensor | null>(null);
   const delM = useMutation({
     mutationFn: (id: number) => api.deleteSensor(id),
-    onSuccess: () => { toast.success("Sensor gelöscht"); qc.invalidateQueries({ queryKey: ["sensors"] }); setDel(null); },
-    onError: (e: Error) => toast.error("Löschen fehlgeschlagen", e.message),
+    onSuccess: () => { toast.success(t.deleted); qc.invalidateQueries({ queryKey: ["sensors"] }); setDel(null); },
+    onError: (e: Error) => toast.error(t.deleteFailed, e.message),
   });
   const groups = useMemo(() => {
     const g = new Map<number, VirtualSensor[]>();
@@ -397,12 +410,12 @@ export function SensorsPage() {
   return (
     <div>
       <div className="page-header">
-        <div><h1>Virtuelle Sensoren</h1><div className="sub">Bildbereiche als Schalter: Licht an/aus, Fenster offen, Vorrat knapp</div></div>
-        <button className="btn btn-primary" disabled={!camList.length} onClick={() => setEdit("new")}><Plus size={16} />Neuer Sensor</button>
+        <div><h1>{t.title}</h1><div className="sub">{t.subtitle}</div></div>
+        <button className="btn btn-primary" disabled={!camList.length} onClick={() => setEdit("new")}><Plus size={16} />{t.newSensor}</button>
       </div>
       {!q.data?.length ? (
-        <div className="card"><Empty icon={<Gauge size={44} />} title="Noch keine Sensoren"
-          text="Sensoren werten einen Bildbereich aus (Helligkeit, Blinken, Referenzbilder, Gegenstände zählen, Füllstand, Bildmodell). Ihr Zustand steht in Regeln (Auslöser „Sensor“, Bedingung „Sensor ist …“), per MQTT und für KI-Assistenten (MCP) bereit." /></div>
+        <div className="card"><Empty icon={<Gauge size={44} />} title={t.emptyTitle}
+          text={t.emptyText} /></div>
       ) : groups.map(([cid, list]) => (
         <div key={cid} style={{ marginBottom: 18 }}>
           <div className="row muted" style={{ gap: 6, margin: "0 0 8px 2px", fontSize: 13 }}><CamIcon size={14} />{list[0].camera_name}{list[0].room ? ` · ${list[0].room}` : ""}</div>
@@ -412,8 +425,8 @@ export function SensorsPage() {
         </div>
       ))}
       {edit && <SensorDialog sensor={edit === "new" ? null : edit} cams={camList} onClose={() => setEdit(null)} />}
-      {del && <ConfirmDialog title="Sensor löschen?" busy={delM.isPending}
-        text={<>Sensor „{del.name}“ samt Verlauf und Referenzbildern wird gelöscht. Regeln mit diesem Sensor lösen danach nicht mehr aus.</>}
+      {del && <ConfirmDialog title={t.deleteTitle} busy={delM.isPending}
+        text={t.deleteText(del.name)}
         onConfirm={() => delM.mutate(del.id)} onClose={() => setDel(null)} />}
     </div>
   );

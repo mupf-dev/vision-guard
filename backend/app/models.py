@@ -113,15 +113,16 @@ class Identity(Base):
 
     @property
     def display_name(self) -> str:
+        """Name bzw. „Person #12“ – unbenannte werden bei jedem Zugriff in der Sprache der Anfrage bzw. der
+        Systemsprache gebildet (nie gespeichert), CONTRACT „Nachträge: Sprachen“."""
         if self.name:
             return self.name
+        from . import i18n
         if self.kind == "plate":
-            return f"Kennzeichen {self.plate_text or ''}".strip()
-        if self.kind == "pet":
-            return f"Tier #{self.auto_number}"
-        if self.kind == "item":
-            return f"Gegenstand #{self.auto_number}"
-        return f"Person #{self.auto_number}"
+            return i18n.t("identity.display.plate", plate=self.plate_text or "").strip()
+        if self.kind in ("pet", "item"):
+            return i18n.t(f"identity.display.{self.kind}", n=self.auto_number)
+        return i18n.t("identity.display.face", n=self.auto_number)
 
 
 class IdentitySample(Base):

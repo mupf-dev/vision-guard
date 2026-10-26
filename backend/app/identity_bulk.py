@@ -33,7 +33,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from . import identity as ident_svc
-from . import settings_store
+from . import i18n, settings_store
 from .face_match import sample_limit
 from .models import Event, Identity, IdentityMerge, IdentitySample, InventoryItem, utcnow
 from .schemas import iso
@@ -60,7 +60,7 @@ def _lock_rows(s: Session, ids: list[int], missing_ok: bool = False) -> dict[int
     found = {r.id: r for r in rows}
     missing = [i for i in ids if i not in found]
     if missing and not missing_ok:
-        raise BulkError(404, "Identität(en) nicht gefunden: " + ", ".join(str(i) for i in missing))
+        raise BulkError(404, i18n.t("errors.identities_not_found", ids=", ".join(str(i) for i in missing)))
     return found
 
 
@@ -92,7 +92,7 @@ SelectFn = Callable[[Session, dict[int, Identity]], list[int]]
 def bulk_delete(s: Session, ids: list[int], *, select_fn: Optional[SelectFn] = None) -> list[int]:
     uniq = sorted(set(int(i) for i in ids))
     if not uniq:
-        raise BulkError(422, "Keine Identitäten ausgewählt")
+        raise BulkError(422, i18n.t("errors.no_identities_selected"))
     with ident_svc._lock:
         try:
             found = _lock_rows(s, uniq, missing_ok=select_fn is not None)
@@ -156,14 +156,25 @@ def log_merge(s: Session, src: Identity, dst: Identity, *, actor: str, score: Op
     return m
 
 
+def _formerly_variants(name: str) -> list[str]:
+    """Notiz „früher: Anna“ / "formerly: Anna" in allen verfügbaren Sprachen (plus die alte deutsche Form)."""
+    out = [f"früher: {name}"]
+    for lg in i18n.available():
+        v = i18n.t("identity.formerly", lg, name=name)
+        if v not in out:
+            out.append(v)
+    return out
+
+
 def _merge_fields(src: Identity, dst: Identity) -> None:
     """Name/Notizen/Zeiten wie beim klassischen Merge; ein abweichender Quellname landet als „früher: …“ in den Notizen."""
     if src.name:
         if not dst.name:
             dst.name = src.name
         elif src.name != dst.name:
-            line = f"früher: {src.name}"
-            if line not in (dst.notes or ""):
+            # gespeicherter Text → Systemsprache; schon vorhanden (in irgendeiner Sprache) → nicht doppelt
+            line = i18n.t("identity.formerly", i18n.system_lang(), name=src.name)
+            if not any(v in (dst.notes or "") for v in _formerly_variants(src.name)):
                 dst.notes = ((dst.notes or "") + ("\n" if dst.notes else "") + line).strip()
     if src.notes and src.notes not in (dst.notes or ""):
         dst.notes = ((dst.notes or "") + ("\n" if dst.notes else "") + src.notes).strip()
@@ -186,14 +197,14 @@ def bulk_merge(s: Session, ids: list[int], into_id: int, *, actor: str = "bulk",
     into_id = int(into_id)
     srcs = sorted(set(int(i) for i in ids) - {into_id})
     if not srcs:
-        raise BulkError(422, "Keine Quellen ausgewählt")
+        raise BulkError(422, i18n.t("errors.no_sources_selected"))
     copied: list[str] = []
     with ident_svc._lock:
         try:
             found = _lock_rows(s, sorted(set(srcs) | {into_id}))
             dst = found[into_id]
             if any(found[i].kind != dst.kind for i in srcs):
-                raise BulkError(422, "Nur Identitäten gleicher Art können zusammengeführt werden")
+                raise BulkError(422, i18n.t("errors.merge_kind_mismatch"))
             if guard is not None:
                 guard(s, found)
             kind = dst.kind
@@ -206,7 +217,7 @@ def bulk_merge(s: Session, ids: list[int], into_id: int, *, actor: str = "bulk",
             manual = s.scalar(select(func.count()).select_from(IdentitySample).where(
                 IdentitySample.identity_id.in_([into_id, *srcs]), IdentitySample.manual.is_(True))) or 0
             if manual > limit:
-                raise BulkError(422, f"max. {limit} Bilder – erst alte löschen")
+                raise BulkError(422, i18n.t("errors.max_images", limit=limit))
 
             samples = s.scalars(select(IdentitySample).where(IdentitySample.identity_id.in_(srcs))
                                 .order_by(IdentitySample.id)).all()
@@ -323,8 +334,8 @@ def _restore_target(m: IdentityMerge, dst: Identity) -> None:
     """Name/Notizen/Zeiten des Ziels zurücksetzen, soweit sie noch dem Stand direkt nach dem Merge entsprechen."""
     # „früher: <Quellname>“ aus den Notizen des Ziels wieder entfernen
     if m.src_name and dst.notes:
-        line = f"früher: {m.src_name}"
-        dst.notes = "\n".join(x for x in dst.notes.split("\n") if x.strip() != line).strip()
+        lines = set(_formerly_variants(m.src_name))   # in jeder Sprache (geschrieben in der damaligen Systemsprache)
+        dst.notes = "\n".join(x for x in dst.notes.split("\n") if x.strip() not in lines).strip()
     before = m.dst_before
     if not isinstance(before, dict):
         return   # Altdaten (vor der Prüfung 07) – nur die Zeile oben
@@ -346,14 +357,14 @@ def undo_merge(s: Session, merge_id: int) -> tuple[Identity, Identity]:
         try:
             m = s.get(IdentityMerge, merge_id, with_for_update=True)
             if m is None:
-                raise BulkError(404, "Zusammenführung nicht gefunden")
+                raise BulkError(404, i18n.t("errors.merge_not_found"))
             if m.undone_at is not None:
-                raise BulkError(409, "Diese Zusammenführung wurde bereits zurückgesetzt")
+                raise BulkError(409, i18n.t("errors.merge_already_undone"))
             dst = s.get(Identity, m.into_id, with_for_update=True)
             if dst is None:
-                raise BulkError(409, "Ziel existiert nicht mehr – zuerst die spätere Zusammenführung zurücksetzen")
+                raise BulkError(409, i18n.t("errors.merge_target_gone"))
             if s.get(Identity, m.src_id) is not None:
-                raise BulkError(409, "Die Quell-Identität existiert bereits wieder")
+                raise BulkError(409, i18n.t("errors.merge_source_exists"))
             src = Identity(id=m.src_id, kind=m.kind, name=m.src_name, auto_number=m.src_auto_number or 0,
                            notes=m.src_notes or "", first_seen=m.src_first_seen or utcnow(),
                            last_seen=m.src_last_seen or utcnow(), learning_locked=bool(m.src_learning_locked),

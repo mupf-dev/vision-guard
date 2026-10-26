@@ -7,6 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import pet_diary
 from ..auth import require_user
 from ..db import get_db
@@ -31,7 +32,7 @@ def list_visits(identity_id: Optional[int] = Query(None, description="Tier-Ident
     if purposes:
         bad = [p for p in purposes if p not in pet_diary.PURPOSES]
         if bad:
-            raise HTTPException(422, f"Unbekannter Zweck: {', '.join(bad)} (erlaubt: food, water, litter)")
+            raise HTTPException(422, i18n.t("errors.unknown_purpose", purposes=", ".join(bad)))
         q = q.where(PetVisit.purpose.in_(purposes))
     if camera_id is not None:
         q = q.where(PetVisit.camera_id == camera_id)

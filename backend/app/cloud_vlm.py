@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from . import i18n
 from . import llm_client, settings_store
 from .config import config
 
@@ -56,9 +57,9 @@ def ask(image: bytes, question: str, region: Optional[list[float]], mode: str) -
                                   max_tokens=200, temperature=0.0, timeout=40)
     except llm_client.LLMError as e:
         log.warning("Cloud-Bildmodell: %s", e)
-        raise AskError(503, f"Bildmodell nicht verfügbar (Cloud: {e})") from None
+        raise AskError(503, i18n.t("errors.vlm_unavailable_detail", detail=f"Cloud: {e}")) from None
     except Exception as e:  # noqa: BLE001
         log.warning("Cloud-Bildmodell: %s", type(e).__name__)
-        raise AskError(503, "Bildmodell nicht verfügbar (Cloud)") from None
+        raise AskError(503, i18n.t("errors.vlm_unavailable_detail", detail="Cloud")) from None
     answer = (res.text or "").strip()
     return {"answer": answer, "yes_no": parse_yes_no(answer), "model": res.model or model, "ms": res.ms}

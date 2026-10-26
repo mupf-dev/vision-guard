@@ -1,10 +1,21 @@
+import { groupName } from "../lib/labels";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Camera as CamIcon, Check, ImagePlus, Package, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
-import type { Identity, InventoryItem, Sample } from "../lib/types";
+import type { Identity, InventoryItem, InventoryVocabEntry, Sample } from "../lib/types";
 import { Dialog, Img, Loading } from "./ui";
 import { toast } from "../lib/store";
+import { lang, msgs, useMsgs } from "../i18n";
+
+/** Anzeigename eines Gegenstands (CONTRACT I18N.C): `name` (Sprache der Anfrage), sonst `name_de`. */
+export const itemName = (it: { name?: string | null; name_de: string }): string => it.name ?? it.name_de;
+
+/** Anzeigename eines Vokabular-Eintrags: names[L] → (de: name_de) → names.en → erster Prompt. */
+export function vocabName(v: Pick<InventoryVocabEntry, "name_de" | "prompts" | "names">): string {
+  const l = lang();
+  return v.names?.[l] ?? (l === "de" ? v.name_de : v.names?.en ?? v.prompts[0] ?? v.name_de);
+}
 
 /**
  * „Eigenen Gegenstand anlernen“ (W2, B4): Name + Label, Handyfotos (Rechteck je Foto aufziehen) und/oder aktuelle
@@ -26,7 +37,7 @@ async function prepareImage(file: File, rect: Rect | null): Promise<Blob> {
   try {
     bmp = await createImageBitmap(file);
   } catch {
-    throw new Error(`„${file.name}“: Bildformat wird von diesem Browser nicht unterstützt`);
+    throw new Error(msgs().items.formatUnsupported(file.name));
   }
   const [x1, y1, x2, y2] = rect ?? [0, 0, 1, 1];
   const mx = rect ? (x2 - x1) * 0.05 : 0, my = rect ? (y2 - y1) * 0.05 : 0;
@@ -38,7 +49,7 @@ async function prepareImage(file: File, rect: Rect | null): Promise<Blob> {
   canvas.height = Math.max(1, Math.round(sh * scale));
   canvas.getContext("2d")!.drawImage(bmp, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   bmp.close();
-  return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error("Bild konnte nicht erzeugt werden"))), "image/jpeg", 0.9));
+  return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error(msgs().items.imageCreateFailed))), "image/jpeg", 0.9));
 }
 
 /** Bild mit aufziehbarem Rechteck (Maus/Touch); ohne Rechteck zählt das ganze Foto. */
@@ -75,6 +86,7 @@ function RectPicker({ src, rect, onChange }: { src: string; rect: Rect | null; o
 
 /** Kamera-Ausschnitt zur Auswahl; misst die Größe des Gegenstands im Bild (Crop enthält 25 % Rand je Seite). */
 function CameraPick({ it, on, minPx, onToggle }: { it: InventoryItem; on: boolean; minPx: number; onToggle: () => void }) {
+  const m = useMsgs().items;
   const [px, setPx] = useState<number | null>(null);
   const small = px !== null && px < minPx;
   return (
@@ -90,7 +102,7 @@ function CameraPick({ it, on, minPx, onToggle }: { it: InventoryItem; on: boolea
       <span style={{ fontSize: 12, textAlign: "left" }}>{it.camera_name}{it.relation ? ` · ${it.relation.text}` : ""}</span>
       <span className="row" style={{ gap: 4, fontSize: 11 }}>
         {on && <Check size={12} />}
-        {small ? <span style={{ color: "#fbbf24" }}>sehr klein ({px} px)</span> : px !== null ? <span className="muted">{px} px</span> : null}
+        {small ? <span style={{ color: "#fbbf24" }}>{m.verySmall(px)}</span> : px !== null ? <span className="muted">{px} px</span> : null}
       </span>
     </button>
   );
@@ -103,6 +115,8 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
   fromItem?: InventoryItem | null;
   onClose: () => void;
 }) {
+  const m = useMsgs().items;
+  const c = useMsgs().common;
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const vocab = settings.data?.inventory_vocabulary ?? [];
@@ -141,7 +155,7 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
   const removeSample = async (s: Sample) => {
     if (!identity) return;
     try { await api.deleteSample(identity.id, s.id); qc.invalidateQueries({ queryKey: ["samples", identity.id] }); qc.invalidateQueries({ queryKey: ["identities"] }); }
-    catch (e) { toast.error("Bild nicht entfernt", (e as Error).message); }
+    catch (e) { toast.error(m.imageNotRemoved, (e as Error).message); }
   };
 
   const save = async () => {
@@ -164,10 +178,10 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
       }
       if (created && ok === 0) {
         await api.deleteIdentity(ident.id).catch(() => undefined);
-        throw new Error(errors[0] ?? "Kein Bild gespeichert");
+        throw new Error(errors[0] ?? m.noImageSaved);
       }
-      if (errors.length) toast.error(`${errors.length} Bild(er) nicht gespeichert`, errors[0]);
-      toast.success(created ? "Gegenstand angelegt" : "Bilder gespeichert", `${ident.display_name}: ${ok} Bild(er)`);
+      if (errors.length) toast.error(m.imagesNotSaved(errors.length), errors[0]);
+      toast.success(created ? m.itemCreated : m.imagesSaved, m.imagesSavedDetail(ident.display_name, ok));
       qc.invalidateQueries({ queryKey: ["identities"] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
       onClose();
@@ -180,49 +194,44 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
 
   return (
     <Dialog size="xl" onClose={onClose} icon={<Package size={18} />}
-      title={identity ? `Bilder – ${identity.display_name}` : "Eigenen Gegenstand anlernen"}
+      title={identity ? m.imagesOf(identity.display_name) : m.teachTitle}
       footer={<>
-        <span className="muted" style={{ fontSize: 12 }}>{total} neue Bild(er)</span>
+        <span className="muted" style={{ fontSize: 12 }}>{m.newImages(total)}</span>
         <span className="spacer" />
-        <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-        <button className="btn btn-primary" disabled={!canSave} onClick={save}>{busy && <span className="spinner" />}{identity ? "Bilder speichern" : "Anlegen"}</button>
+        <button className="btn btn-ghost" onClick={onClose}>{c.cancel}</button>
+        <button className="btn btn-primary" disabled={!canSave} onClick={save}>{busy && <span className="spinner" />}{identity ? m.saveImages : m.create}</button>
       </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {!identity && (
           <div className="form-grid">
-            <div className="field"><label>Name *</label>
-              <input className="input" autoFocus value={name} maxLength={200} placeholder="z. B. Annas Rucksack" onChange={(e) => setName(e.target.value)} />
+            <div className="field"><label>{m.nameReq}</label>
+              <input className="input" autoFocus value={name} maxLength={200} placeholder={m.namePlaceholder} onChange={(e) => setName(e.target.value)} />
             </div>
-            <div className="field"><label>Art des Gegenstands *</label>
+            <div className="field"><label>{m.typeReq}</label>
               <select className="select" value={label} onChange={(e) => { setLabel(e.target.value); setPicked([]); }}>
-                <option value="">– bitte wählen –</option>
-                {vocab.map((v) => <option key={v.label} value={v.label}>{v.name_de}{v.group ? ` (${v.group})` : ""}</option>)}
+                <option value="">{m.pleaseChoose}</option>
+                {vocab.map((v) => <option key={v.label} value={v.label}>{vocabName(v)}{v.group ? ` (${groupName(v.group)})` : ""}</option>)}
               </select>
-              <span className="hint">Erkannt wird zuerst die Art (z. B. Rucksack); danach unterscheidet VisionGuard Ihr Exemplar von anderen.</span>
+              <span className="hint">{m.typeHint}</span>
             </div>
           </div>
         )}
         <div className="test-result" style={{ background: "var(--bg-1)", border: "1px solid var(--line)", alignItems: "flex-start" }}>
           <AlertTriangle size={16} color="#fbbf24" style={{ flex: "none", marginTop: 2 }} />
-          <span style={{ fontSize: 13 }}>
-            Funktioniert gut bei größeren Dingen (Rucksack, Tasche, Jacke, Lampe, Gerät), die im Kamerabild mindestens
-            etwa {minPx} px groß sind. Schlüssel, Brillen und ähnlich kleine Dinge lassen sich meist nicht von gleichartigen
-            unterscheiden. Mehrere Fotos aus verschiedenen Blickwinkeln helfen; unsichere Treffer fragt VisionGuard unter
-            „Bitte bestätigen“ nach.
-          </span>
+          <span style={{ fontSize: 13 }}>{m.teachNote(minPx)}</span>
         </div>
 
         {identity && (
           <div>
-            <div className="section-title">Gespeicherte Bilder ({samples.data?.length ?? identity.sample_count})</div>
+            <div className="section-title">{m.storedImagesCount(samples.data?.length ?? identity.sample_count)}</div>
             {samples.isLoading ? <Loading /> : (
               <div className="chips">
                 {(samples.data ?? []).map((s) => (
                   <div key={s.id} style={{ position: "relative", width: 84, height: 84, borderRadius: 6, overflow: "hidden", background: "var(--bg-4)" }}
-                    title={s.negative ? "Gegenbeispiel (nicht dieses Exemplar)" : s.source === "upload" ? "Foto/Übernahme" : s.source === "review" ? "aus Rückfrage" : "automatisch gelernt"}>
+                    title={s.negative ? m.sampleNegative : s.source === "upload" ? m.sampleUpload : s.source === "review" ? m.sampleReview : m.sampleAuto}>
                     <Img src={s.image_url} className="fill-img" />
-                    {s.negative && <span className="badge bad" style={{ position: "absolute", left: 2, bottom: 2, fontSize: 10 }}>nein</span>}
-                    <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ position: "absolute", right: 0, top: 0 }} onClick={() => removeSample(s)} aria-label="Bild entfernen"><X size={13} /></button>
+                    {s.negative && <span className="badge bad" style={{ position: "absolute", left: 2, bottom: 2, fontSize: 10 }}>{m.negativeBadge}</span>}
+                    <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ position: "absolute", right: 0, top: 0 }} onClick={() => removeSample(s)} aria-label={m.removeImage}><X size={13} /></button>
                   </div>
                 ))}
               </div>
@@ -232,17 +241,17 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
 
         <div>
           <div className="row" style={{ marginBottom: 8 }}>
-            <div className="section-title" style={{ margin: 0, flex: 1 }}>Fotos (Handy)</div>
-            <button type="button" className="btn btn-sm" onClick={() => fileRef.current?.click()}><ImagePlus size={14} />Fotos wählen</button>
+            <div className="section-title" style={{ margin: 0, flex: 1 }}>{m.photosPhone}</div>
+            <button type="button" className="btn btn-sm" onClick={() => fileRef.current?.click()}><ImagePlus size={14} />{m.choosePhotos}</button>
             <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
           </div>
-          {photos.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>Noch keine Fotos. Tipp: Gegenstand formatfüllend fotografieren; im Foto ein Rechteck um den Gegenstand ziehen.</div> : (
+          {photos.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>{m.noPhotos}</div> : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
               {photos.map((p) => (
                 <div key={p.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <RectPicker src={p.url} rect={p.rect} onChange={(r) => setPhotos((l) => l.map((x) => (x.key === p.key ? { ...x, rect: r } : x)))} />
                   <div className="row" style={{ fontSize: 12 }}>
-                    <span className="muted" style={{ flex: 1 }}>{p.rect ? "Ausschnitt gewählt" : "ganzes Foto"}</span>
+                    <span className="muted" style={{ flex: 1 }}>{p.rect ? m.cropChosen : m.wholePhoto}</span>
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => { URL.revokeObjectURL(p.url); setPhotos((l) => l.filter((x) => x.key !== p.key)); }}><Trash2 size={13} /></button>
                   </div>
                 </div>
@@ -252,9 +261,9 @@ export function ItemTeachDialog({ identity, fromItem, onClose }: {
         </div>
 
         <div>
-          <div className="section-title"><CamIcon size={12} style={{ verticalAlign: -1, marginRight: 6 }} />Von Kamera übernehmen</div>
-          {!label ? <div className="muted" style={{ fontSize: 13 }}>Zuerst die Art des Gegenstands wählen.</div>
-            : cands.isLoading ? <Loading /> : camItems.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>Keine Kamera hat diese Art bisher erkannt.</div> : (
+          <div className="section-title"><CamIcon size={12} style={{ verticalAlign: -1, marginRight: 6 }} />{m.fromCamera}</div>
+          {!label ? <div className="muted" style={{ fontSize: 13 }}>{m.chooseTypeFirst}</div>
+            : cands.isLoading ? <Loading /> : camItems.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>{m.noCameraSawType}</div> : (
               <div className="chips">
                 {camItems.map((it) => (
                   <CameraPick key={it.id} it={it} minPx={minPx} on={picked.includes(it.id)}

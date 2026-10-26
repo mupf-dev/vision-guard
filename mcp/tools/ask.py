@@ -18,11 +18,10 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .cameras import SNAPSHOT_MAX_WIDTH, _shrink_jpeg
-from .common import (AUTH_ERROR, READ_ONLY, BackendError, _auth_header, _detail, api, cameras, fail, find_camera,
-                     http, log)
+from .common import (READ_ONLY, BackendError, _auth_header, _detail, api, auth_error, cameras, fail, find_camera,
+                     http, log, mapped, t, unreachable_error, where)
 
 ASK_TIMEOUT_S = 60.0
-YES_NO_DE = {"yes": "ja", "no": "nein", "unknown": "unklar"}
 
 
 async def _post_ask(ctx: Context, cam_id: int, body: dict) -> dict:
@@ -31,18 +30,18 @@ async def _post_ask(ctx: Context, cam_id: int, body: dict) -> dict:
                                  headers={"Authorization": _auth_header(ctx), "X-VG-Source": "mcp"})
     except httpx.HTTPError as e:
         log.warning("Backend nicht erreichbar (ask): %s", type(e).__name__)
-        raise BackendError("VisionGuard-Backend ist nicht erreichbar.") from e
+        raise BackendError(unreachable_error()) from e
     if resp.status_code == 401:
-        raise BackendError(AUTH_ERROR)
+        raise BackendError(auth_error(), 401)
     if resp.status_code in (403, 404, 409, 429, 502, 503):
         detail = _detail(resp)
-        if resp.status_code == 403 and "Cloud" not in detail:
-            raise BackendError(AUTH_ERROR)
-        if resp.status_code == 429 and detail.startswith("Zu viele"):
-            detail += " – bitte etwas warten."
-        raise BackendError(detail + ("." if not detail.endswith((".", "!", "?")) else ""))
+        if resp.status_code == 403 and "cloud" not in detail.casefold():
+            raise BackendError(auth_error(), 403)
+        if resp.status_code == 429:   # Rate-Limit oder Modell beschäftigt
+            detail += t("ask.please_wait")
+        raise BackendError(detail + ("." if not detail.endswith((".", "!", "?")) else ""), resp.status_code)
     if resp.status_code >= 400:
-        raise BackendError(f"Backend-Fehler: {_detail(resp)}")
+        raise BackendError(t("common.backend_error", detail=_detail(resp)), resp.status_code)
     return resp.json()
 
 
@@ -51,21 +50,21 @@ def register(mcp: MCPServer) -> None:
     async def ask_camera(ctx: Context, question: str, camera_id: Optional[int] = None,
                          camera_name: Optional[str] = None, region: Optional[list[float]] = None,
                          allow_cloud: bool = False) -> CallToolResult:
-        """Stellt eine Frage zum AKTUELLEN Bild einer Kamera und beantwortet sie mit einem lokalen Bildmodell,
-        z. B. "Is the light on?", "Is the window open?", "Is there a person on the sofa?". Bitte die Frage auf
-        ENGLISCH stellen (das lokale Modell versteht Englisch am besten); Ja/Nein-Fragen liefern zusätzlich
-        yes_no. Kamera per camera_id oder camera_name (auch Raumname). Optional region = [x1, y1, x2, y2]
-        (normiert 0..1) für einen Bildausschnitt. allow_cloud=true erlaubt den Cloud-Fallback, falls die Kamera
-        dafür freigegeben ist. Höchstens 10 Fragen pro Minute; Antwort dauert meist 1–5 s."""
+        """Ask a question about the CURRENT image of a camera; a local vision model answers it, e.g. "Is the
+        light on?", "Is the window open?", "Is there a person on the sofa?". Please ask in ENGLISH (the local model
+        understands English best); yes/no questions additionally return yes_no. The model's answer is not
+        translated. Camera by camera_id or camera_name (room name works too). Optional region = [x1, y1, x2, y2]
+        (normalized 0..1) for an image crop. allow_cloud=true allows the cloud fallback if the camera is enabled
+        for it. At most 10 questions per minute; an answer usually takes 1–5 s."""
         q = (question or "").strip()
         if not q:
-            return fail("Bitte eine Frage angeben.")
+            return fail(t("ask.question_required"))
         if len(q) > 300:
-            return fail("Die Frage ist zu lang (max. 300 Zeichen).")
+            return fail(t("ask.question_too_long"))
         if region is not None:
             if len(region) != 4 or not all(0.0 <= float(v) <= 1.0 for v in region) \
                     or region[2] <= region[0] or region[3] <= region[1]:
-                return fail("region muss [x1, y1, x2, y2] mit Werten 0..1 sein (x2 > x1, y2 > y1).")
+                return fail(t("ask.bad_region"))
         try:
             cam = find_camera(await cameras(ctx), camera_id, camera_name)
             res = await _post_ask(ctx, int(cam["id"]), {"question": q, "region": region,
@@ -90,11 +89,11 @@ def register(mcp: MCPServer) -> None:
                                                     mime_type="image/jpeg"))
                 except httpx.HTTPError:
                     pass
-            where = f"Kamera {res.get('camera_name') or cam.get('name')}"
-            engine = "Cloud" if res.get("engine") == "cloud" else "lokal"
+            place = where(res.get("camera_name") or cam.get("name"), None)
+            engine = t("ask.engine_cloud") if res.get("engine") == "cloud" else t("ask.engine_local")
             yn = res.get("yes_no") or "unknown"
-            text = (f"{where}, Frage „{q}“: {res.get('answer') or '(keine Antwort)'}"
-                    + (f" [Ja/Nein: {YES_NO_DE.get(yn, yn)}]" if yn != "unknown" else "")
+            text = (t("ask.answer", where=place, question=q, answer=res.get("answer") or t("ask.no_answer"))
+                    + (" " + t("ask.yes_no", value=mapped("ask.yn", yn)) if yn != "unknown" else "")
                     + f" ({engine}, {res.get('model')}, {round(float(res.get('ms') or 0))} ms)")
             content.append(TextContent(type="text", text=text))
             return CallToolResult(content=content, structured_content=structured)

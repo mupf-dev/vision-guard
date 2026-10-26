@@ -1,1 +1,81 @@
-{}
+{
+  "camera": "camera",
+  "camera_n": "Camera {id}",
+  "sensor_n": "Sensor {id}",
+  "join_and": "{first} and {last}",
+  "posture": {
+    "lying": "lying",
+    "sitting": "sitting",
+    "standing": "standing",
+    "unknown": "unknown"
+  },
+  "gesture": {
+    "arms_up": "both arms up",
+    "arm_left": "left arm out",
+    "arm_right": "right arm out",
+    "arms_cross": "arms crossed above the head"
+  },
+  "sensor_state": {
+    "on": "on",
+    "off": "off",
+    "ok": "ok",
+    "low": "low",
+    "out": "empty",
+    "unknown": "unclear"
+  },
+  "cond": {
+    "unavailable": "{type}: not available",
+    "failed": "{type}: evaluation failed",
+    "not_visible": "{items}: not visible",
+    "visible": "{items}: visible ({place}, score {score})",
+    "still_visible": "{items}: still visible ({place})",
+    "not_visible_last": "{items}: not visible (last seen: {place})",
+    "never_seen": "{items}: never seen",
+    "appeared_after": "{items}: only appeared after {since}",
+    "touched_since": "{items}: touched since {since} ({why})",
+    "person_in_zone": "{items}: person in the zone at {time}",
+    "untouched_since": "{items}: untouched since {since} ({place})",
+    "weather_no_location": "Weather: no location set",
+    "weather_unknown": "Weather unknown",
+    "weather_unknown_err": "Weather unknown ({error})",
+    "weather": "Weather: {text} (threshold {min} % within {hours} h)",
+    "came_from_no_track": "came from zone: no track",
+    "came_from": "came from {zones}",
+    "not_came_from": "did not come from {zones}",
+    "sensor_unknown": "Sensor {id} unknown",
+    "sensor": "Sensor {name}: {state}",
+    "sensor_wanted": "Sensor {name}: {state} (required: {wanted})"
+  },
+  "untouched": {
+    "not_visible": "not visible",
+    "appeared_later": "only appeared after the reference time",
+    "elsewhere_after_gap": "in a different place after a gap",
+    "gone_for": "gone for {n} min in between",
+    "moved": "moved",
+    "untouched": "untouched"
+  },
+  "weather": {
+    "no_rain": "no rain expected",
+    "at_most": "at most {p} % rain",
+    "next_hours": "{p} % rain in the next {hours} h",
+    "now": "{p} % rain, already now",
+    "from_today": "{p} % rain from {hour}:00",
+    "from_tomorrow": "{p} % rain from tomorrow {hour}:00",
+    "from_date": "{p} % rain from {date} {hour}:00",
+    "date_fmt": "%d/%m"
+  },
+  "check": {
+    "track_only": "checked only when the rule fires (path of the track)"
+  },
+  "notify": {
+    "check_lost_title": "Rule “{rule}”: check skipped",
+    "check_lost_message": "The delayed condition check fell into a system restart and was not carried out.",
+    "label_at_camera": "{label} at {camera}"
+  },
+  "demo": {
+    "camera_entrance": "Demo entrance",
+    "camera_street": "Demo street",
+    "rule_person": "Person detected → snapshot + MQTT",
+    "rule_vehicle": "Vehicle → clip"
+  }
+}

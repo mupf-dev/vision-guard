@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from . import registry, rules, settings_store
+from . import i18n, registry, rules, settings_store
 from .schemas import GestureTriggerOptions, PostureTriggerOptions
 from .ws import hub
 
@@ -31,11 +31,13 @@ GESTURE_DE = {"arms_up": "beide Arme hoch", "arm_left": "linker Arm seitlich",
 
 
 def posture_de(p: Optional[str]) -> str:
-    return POSTURE_DE.get(p or "", "") if p else ""
+    """Platzhalter {posture} in der aktuellen Sprache (Systemsprache bei Regel-Aktionen), z. B. „liegt“/"lying"."""
+    return i18n.t(f"rules.posture.{p}") if p in POSTURE_DE else ""
 
 
 def gesture_de(g: Optional[str]) -> str:
-    return GESTURE_DE.get(g or "", g or "")
+    """Platzhalter {gesture} in der aktuellen Sprache, z. B. „beide Arme hoch“/"both arms up"."""
+    return i18n.t(f"rules.gesture.{g}") if g in GESTURE_DE else (g or "")
 
 
 # ------------------------------------------------------------------ Evaluatoren

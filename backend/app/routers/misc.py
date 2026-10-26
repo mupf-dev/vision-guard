@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import sensors, settings_store, state, vlm
 from ..auth import require_user
 from ..config import VERSION, config
@@ -64,7 +65,7 @@ def put_settings(body: SettingsPatch, request: Request, db: Session = Depends(ge
     if _is_token(request):
         blocked = [k for k in SESSION_ONLY_SETTINGS if k in patch]
         if blocked:
-            raise HTTPException(403, f"Nur mit Anmeldung im Browser änderbar: {', '.join(blocked)}")
+            raise HTTPException(403, i18n.t("errors.browser_login_only_fields", fields=", ".join(blocked)))
     if "push_targets" in patch:   # "***" → gespeicherter Wert desselben Ziels (gleiche id, gleicher Server)
         try:
             patch["push_targets"] = unmask_push_targets(patch["push_targets"],

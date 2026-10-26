@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import go2rtc, settings_store
 from .. import health as camera_health
 from ..auth import require_user
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/api/cameras", tags=["cameras"], dependencies=[Depend
 def _get(db: Session, cam_id: int) -> Camera:
     c = db.get(Camera, cam_id)
     if c is None:
-        raise HTTPException(404, "Kamera nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.camera_not_found"))
     return c
 
 
@@ -38,7 +39,7 @@ def _check_inventory_labels(labels: list[str], previous: list[str] | None = None
         if lb not in known:
             if lb in (previous or []):
                 continue
-            raise HTTPException(422, f"Unbekannter Gegenstand: {lb}")
+            raise HTTPException(422, i18n.t("errors.unknown_item", item=lb))
         if lb not in out:
             out.append(lb)
     return out
@@ -147,7 +148,7 @@ async def snapshot(cam_id: int, db: Session = Depends(get_db)):
         data = await go2rtc.fetch_frame(go2rtc.stream_name(cam_id), timeout=15)
     except Exception as e:  # noqa: BLE001
         log.info("Standbild Kamera %s nicht verfügbar: %s", cam_id, e)
-        raise HTTPException(502, "Kamerabild nicht verfügbar") from e
+        raise HTTPException(502, i18n.t("errors.camera_image_unavailable")) from e
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
@@ -174,5 +175,5 @@ def camera_health_reference(cam_id: int, body: HealthReferenceIn | None = None, 
     Wartet bis zu 8 s auf das Ergebnis: `ok` true/false (mit `error`), `null` = Worker hat noch nicht geantwortet."""
     c = _get(db, cam_id)
     if not c.enabled:
-        raise HTTPException(409, "Kamera ist deaktiviert")
+        raise HTTPException(409, i18n.t("errors.camera_disabled"))
     return camera_health.request_reference(cam_id, (body or HealthReferenceIn()).mode)

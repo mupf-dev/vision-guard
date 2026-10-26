@@ -1,1 +1,10 @@
-{}
+{
+  "display": {
+    "face": "Person #{n}",
+    "plate": "Kennzeichen {plate}",
+    "pet": "Tier #{n}",
+    "item": "Gegenstand #{n}"
+  },
+  "formerly": "früher: {name}",
+  "review_same_person": "Ist „{src}“ dieselbe Person wie „{dst}“?"
+}

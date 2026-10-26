@@ -1,5 +1,12 @@
-/** Namensbereich (Englisch = Quelle). Texte mit Parametern als Funktion, z. B. count: (n: number) => `${n} items`. */
+/** Namensbereich „admin“: Unternavigation der Administration (pages/admin/AdminLayout.tsx). */
 const admin = {
+  title: "Administration",
+  cameras: "Cameras",
+  rules: "Rules",
+  sensors: "Sensors",
+  settings: "Settings",
+  system: "System",
+  tokens: "API access",
 };
 
 export type AdminMessages = typeof admin;

@@ -1,1 +1,131 @@
-{}
+{
+  "weekdays": {
+    "0": "Monday",
+    "1": "Tuesday",
+    "2": "Wednesday",
+    "3": "Thursday",
+    "4": "Friday",
+    "5": "Saturday",
+    "6": "Sunday"
+  },
+  "date_head": "%d/%m",
+  "title_daily": "Daily report {head}",
+  "title_manual": "Report {head}",
+  "and": "and",
+  "more": "{n} more",
+  "camera": "Camera {id}",
+  "labels": {
+    "person": {
+      "one": "person",
+      "other": "people"
+    },
+    "car": {
+      "one": "car",
+      "other": "cars"
+    },
+    "truck": {
+      "one": "truck",
+      "other": "trucks"
+    },
+    "bus": {
+      "one": "bus",
+      "other": "buses"
+    },
+    "motorcycle": {
+      "one": "motorcycle",
+      "other": "motorcycles"
+    },
+    "bicycle": {
+      "one": "bicycle",
+      "other": "bicycles"
+    },
+    "dog": {
+      "one": "dog",
+      "other": "dogs"
+    },
+    "cat": {
+      "one": "cat",
+      "other": "cats"
+    },
+    "bird": {
+      "one": "bird",
+      "other": "birds"
+    },
+    "horse": {
+      "one": "horse",
+      "other": "horses"
+    }
+  },
+  "purpose": {
+    "food": "food bowl",
+    "water": "water bowl",
+    "litter": "litter box"
+  },
+  "source": {
+    "health": "camera health",
+    "pet": "animals",
+    "review": "questions",
+    "sensor": "sensors",
+    "rule": "rules",
+    "report": "reports"
+  },
+  "sec": {
+    "people": "People",
+    "vehicles": "Vehicles",
+    "animals": "Animals",
+    "inventory": "Items",
+    "rules": "Rules",
+    "system": "Notifications",
+    "quiet": "Quiet period"
+  },
+  "people_none": "none detected.",
+  "people_detected": "detected {times}",
+  "people_known": "known: {list}",
+  "people_unknown": {
+    "one": "1 unknown face",
+    "other": "{n} unknown faces"
+  },
+  "people_new": ", {n} of them new",
+  "people_no_face": "{times} without a recognised face",
+  "last": "last {time}",
+  "vehicle_item": "{n} {label} (last {time})",
+  "plates": "licence plates: {list}",
+  "animals_total": "in total",
+  "bowls": "bowls/litter box: {list}",
+  "visit": "{who} at the {place} {times} (last {time})",
+  "inv_unavailable": "not available ({error}).",
+  "inventory_unavailable": "Items not available",
+  "rule_once": "“{name}” {time}",
+  "rule_many": "“{name}” {times} (last {time})",
+  "notif_item": "{times} {source}",
+  "offline": {
+    "one": "Camera {names} is currently offline.",
+    "other": "Cameras {names} are currently offline."
+  },
+  "quiet_text": "no people, vehicles, animals, rules or changes.",
+  "no_llm": "No language model configured",
+  "problem": {
+    "auto_name": "“{text}” is not in the facts",
+    "plate": "Licence plate “{text}” is not in the facts",
+    "date": "Date “{text}” is not in the facts",
+    "time": "Time “{text}” is not in the facts",
+    "number": "Number “{text}” is not in the facts",
+    "name": "Name “{text}” is not in the facts",
+    "not_prose": "not prose (JSON, list or Markdown)",
+    "too_long": "too long ({n} words)"
+  },
+  "deliver": {
+    "mqtt_not_connected": "MQTT not connected",
+    "duplicate": "Notification not created (duplicate)",
+    "no_push_target": "no push target selected for “daily report”",
+    "push_unknown": "Push target(s) unknown or disabled",
+    "webhook_timeout": "no response within {s} s",
+    "webhook_unreachable": "not reachable ({error})",
+    "smtp_not_configured": "SMTP not configured",
+    "smtp_auth": "SMTP login failed",
+    "smtp_starttls": "Server does not support STARTTLS (VG_SMTP_STARTTLS=0?)",
+    "smtp_error": "SMTP error ({error})",
+    "smtp_unreachable": "SMTP not reachable ({error})",
+    "internal": "internal error ({error})"
+  }
+}

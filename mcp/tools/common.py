@@ -1,6 +1,8 @@
-"""Gemeinsame Bausteine der MCP-Tools: Backend-Zugriff (Bearer-Key durchreichen), Formatierung, Ergebnisse.
+"""Gemeinsame Bausteine der MCP-Tools: Backend-Zugriff (Bearer-Key durchreichen), Sprache, Formatierung, Ergebnisse.
 
 Jedes Themen-Modul unter `tools/` importiert von hier und bringt eine Funktion `register(mcp)` mit.
+Antworttexte kommen über `t("<bereich>.<schlüssel>")` aus `locales/<code>.json` (Systemsprache des Backends);
+jeder Backend-Aufruf schickt `Accept-Language` in dieser Sprache (I18N.D).
 """
 
 from __future__ import annotations
@@ -9,46 +11,85 @@ import hashlib
 import logging
 import os
 import time
-from datetime import datetime, timezone
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
 import httpx
 from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
+import i18n
+from i18n import LOCAL_TZ, fmt_ago, fmt_datetime, fmt_num, fmt_time, mapped, t, t_list  # noqa: F401 (Re-Export)
+
 log = logging.getLogger("vg.mcp")
 
 BACKEND_URL = os.environ.get("VG_BACKEND_URL", "http://backend:8000").rstrip("/")
-try:
-    LOCAL_TZ = ZoneInfo(os.environ.get("TZ") or "Europe/Berlin")
-except Exception:  # noqa: BLE001
-    LOCAL_TZ = ZoneInfo("Europe/Berlin")
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 # W2: Tools mit Wirkung (quittieren, Rückfrage beantworten …) – vorher `await require_write(ctx)`
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
-WRITE_ERROR = "API-Key ohne Schreibrecht."
 SCOPE_CACHE_S = 30.0
 _scopes: dict[str, tuple[float, list[str]]] = {}   # sha256(Authorization) → (gültig bis, scopes)
 
-AUTH_ERROR = "API-Key ungültig oder ohne Berechtigung."
+LANG_CACHE_S = 60.0
+LANG_RETRY_S = 10.0
+_lang_until = 0.0
+
+
+def auth_error() -> str:
+    return t("common.auth_error")
+
+
+def write_error() -> str:
+    return t("common.write_error")
+
+
+def unreachable_error() -> str:
+    return t("common.backend_unreachable")
+
 
 _http: Optional[httpx.AsyncClient] = None
+
+
+async def _accept_language(request: httpx.Request) -> None:
+    """Jede Backend-Anfrage in der Antwortsprache (Texte wie status_text, answer, display_name)."""
+    request.headers["Accept-Language"] = i18n.current()
 
 
 def http() -> httpx.AsyncClient:
     global _http
     if _http is None:
-        _http = httpx.AsyncClient(base_url=BACKEND_URL, timeout=httpx.Timeout(20.0, connect=5.0))
+        _http = httpx.AsyncClient(base_url=BACKEND_URL, timeout=httpx.Timeout(20.0, connect=5.0),
+                                  event_hooks={"request": [_accept_language]})
     return _http
+
+
+async def ensure_language(auth: str) -> str:
+    """Systemsprache aus `GET /api/settings` → `language` (60 s gecacht, Rückfall Englisch). Mit dem Key des Clients."""
+    global _lang_until
+    now = time.monotonic()
+    if now < _lang_until:
+        return i18n.current()
+    _lang_until = now + LANG_RETRY_S
+    try:
+        resp = await http().get("/api/settings", headers={"Authorization": auth}, timeout=5.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            i18n.set_lang(data.get("language") if isinstance(data, dict) else None)
+            _lang_until = now + LANG_CACHE_S
+    except (httpx.HTTPError, ValueError):
+        pass
+    return i18n.current()
 
 
 # ------------------------------------------------------------------ Backend-Zugriff
 
 
 class BackendError(Exception):
-    """Fehler mit deutscher Meldung, wird als Tool-Ergebnis mit isError zurückgegeben."""
+    """Fehler mit Meldung in der Antwortsprache, wird als Tool-Ergebnis mit isError zurückgegeben."""
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
 
 
 def _auth_header(ctx: Context) -> str:
@@ -65,7 +106,7 @@ def _auth_header(ctx: Context) -> str:
     except Exception:  # noqa: BLE001
         value = ""
     if not value.lower().startswith("bearer "):
-        raise BackendError(AUTH_ERROR)
+        raise BackendError(auth_error())
     return value
 
 
@@ -86,13 +127,13 @@ async def api(ctx: Context, path: str, params: Optional[dict] = None, *, raw: bo
         resp = await http().get("/api" + path, params=params, headers={"Authorization": _auth_header(ctx)})
     except httpx.HTTPError as e:
         log.warning("Backend nicht erreichbar (%s): %s", path, type(e).__name__)
-        raise BackendError("VisionGuard-Backend ist nicht erreichbar.") from e
+        raise BackendError(unreachable_error()) from e
     if resp.status_code in (401, 403):
-        raise BackendError(AUTH_ERROR)
+        raise BackendError(auth_error(), resp.status_code)
     if resp.status_code == 404:
-        raise BackendError(not_found or "Nicht gefunden.")
+        raise BackendError(not_found or t("common.not_found"), 404)
     if resp.status_code >= 400:
-        raise BackendError(f"Backend-Fehler: {_detail(resp)}")
+        raise BackendError(t("common.backend_error", detail=_detail(resp)), resp.status_code)
     return resp if raw else resp.json()
 
 
@@ -105,15 +146,15 @@ async def api_send(ctx: Context, method: str, path: str, *, json: Optional[dict]
                                     headers={"Authorization": _auth_header(ctx)})
     except httpx.HTTPError as e:
         log.warning("Backend nicht erreichbar (%s %s): %s", method, path, type(e).__name__)
-        raise BackendError("VisionGuard-Backend ist nicht erreichbar.") from e
+        raise BackendError(unreachable_error()) from e
     if resp.status_code == 401:
-        raise BackendError(AUTH_ERROR)
+        raise BackendError(auth_error(), 401)
     if resp.status_code == 403:
-        raise BackendError(WRITE_ERROR if "write" in _detail(resp) else AUTH_ERROR)
+        raise BackendError(write_error() if "write" in _detail(resp) else auth_error(), 403)
     if resp.status_code == 404:
-        raise BackendError(not_found or "Nicht gefunden.")
+        raise BackendError(not_found or t("common.not_found"), 404)
     if resp.status_code >= 400:
-        raise BackendError(f"Backend-Fehler: {_detail(resp)}")
+        raise BackendError(t("common.backend_error", detail=_detail(resp)), resp.status_code)
     if resp.status_code == 204 or not resp.content:
         return None
     return resp.json()
@@ -137,56 +178,20 @@ async def scopes(ctx: Context) -> list[str]:
 
 
 async def require_write(ctx: Context) -> None:
-    """W2-Regel für Schreibwerkzeuge: ohne Scope `write` → BackendError „API-Key ohne Schreibrecht.“"""
+    """W2-Regel für Schreibwerkzeuge: ohne Scope `write` → BackendError (`common.write_error`)."""
     if "write" not in await scopes(ctx):
-        raise BackendError(WRITE_ERROR)
+        raise BackendError(write_error(), 403)
 
 
 # ------------------------------------------------------------------ Formatierung
 
-
-def _parse_ts(value: Any) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def fmt_time(value: Any) -> str:
-    """„14:02“ für heute, sonst „23.10. 14:02“ (Ortszeit)."""
-    dt = _parse_ts(value)
-    if dt is None:
-        return "?"
-    local = dt.astimezone(LOCAL_TZ)
-    if local.date() == datetime.now(LOCAL_TZ).date():
-        return local.strftime("%H:%M")
-    return local.strftime("%d.%m. %H:%M")
-
-
-def fmt_ago(value: Any) -> str:
-    dt = _parse_ts(value)
-    if dt is None:
-        return "zu unbekannter Zeit"
-    s = max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
-    if s < 90:
-        return "gerade eben"
-    if s < 3600:
-        return f"vor {round(s / 60)} min"
-    if s < 48 * 3600:
-        return f"vor {round(s / 3600)} h"
-    return f"vor {round(s / 86400)} Tagen"
+_parse_ts = i18n.parse_ts   # bisheriger Name (reports, history)
 
 
 def where(camera_name: Any, room: Any) -> str:
-    text = f"Kamera {camera_name or '?'}"
     if room:
-        text += f" (Raum {room})"
-    return text
+        return t("common.where_room", camera=camera_name or "?", room=room)
+    return t("common.where", camera=camera_name or "?")
 
 
 def compact_item(it: dict) -> dict:
@@ -194,6 +199,7 @@ def compact_item(it: dict) -> dict:
     return {
         "id": it.get("id"),
         "name_de": it.get("name_de") or it.get("label"),
+        "name": it.get("name") or it.get("name_de") or it.get("label"),   # I18N.C: Anzeigename in der Antwortsprache
         "label": it.get("label"),
         "camera_id": it.get("camera_id"),
         "camera_name": it.get("camera_name"),
@@ -212,33 +218,27 @@ def compact_item(it: dict) -> dict:
 
 def item_sentence(c: dict) -> str:
     """„Fernbedienung: aktuell sichtbar in Kamera Wohnzimmer (Raum Wohnzimmer), vermutlich auf dem Tisch, seit 14:02“."""
-    name = c.get("name_de") or c.get("label") or "Gegenstand"
+    name = c.get("name") or c.get("name_de") or c.get("label") or t("inventory.item")
     if c.get("identity_name"):
         name = f"{c['identity_name']} ({name})"
     place = where(c.get("camera_name"), c.get("room"))
     if c.get("state") == "present":
-        parts = [f"{name}: aktuell sichtbar in {place}"]
+        parts = [t("inventory.visible_in", name=name, place=place)]
         if c.get("relation_text"):
             parts.append(str(c["relation_text"]))
         if c.get("zones"):
-            parts.append("Zone " + ", ".join(map(str, c["zones"])))
+            parts.append(t("common.zone", zones=", ".join(map(str, c["zones"]))))
         if c.get("first_seen"):
-            parts.append(f"seit {fmt_time(c['first_seen'])}")
+            parts.append(t("common.since", time=fmt_time(c["first_seen"])))
         text = ", ".join(parts)
     else:
-        text = f"{name}: zuletzt gesehen {fmt_ago(c.get('last_seen'))} ({fmt_time(c.get('last_seen'))}) in {place}"
-        if c.get("state") == "stale":
-            text += " – Kamera liefert derzeit keine Daten"
-        else:
-            text += " – derzeit nicht sichtbar"
+        text = t("inventory.last_seen_in", name=name, ago=fmt_ago(c.get("last_seen")),
+                 time=fmt_time(c.get("last_seen")), place=place)
+        text += t("inventory.stale_suffix") if c.get("state") == "stale" else t("inventory.missing_suffix")
     text += f" [id {c.get('id')}]"
     if c.get("crop_url"):
-        text += f" Bild: {c['crop_url']}"
+        text += " " + t("common.image", url=c["crop_url"])
     return text
-
-
-def n_de(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
 
 
 def ok(text: str, data: dict) -> CallToolResult:
@@ -259,10 +259,10 @@ def find_camera(cams: list[dict], camera_id: Optional[int], camera_name: Optiona
         for c in cams:
             if c.get("id") == camera_id:
                 return c
-        raise BackendError(f"Kamera {camera_id} ist unbekannt.")
+        raise BackendError(t("common.camera_unknown_id", id=camera_id))
     needle = (camera_name or "").strip().casefold()
     if not needle:
-        raise BackendError("Bitte camera_id oder camera_name angeben.")
+        raise BackendError(t("common.camera_required"))
     for key in ("name", "room"):
         hits = [c for c in cams if str(c.get(key) or "").casefold() == needle]
         if len(hits) == 1:
@@ -271,7 +271,7 @@ def find_camera(cams: list[dict], camera_id: Optional[int], camera_name: Optiona
             or needle in str(c.get("room") or "").casefold()]
     if len(hits) == 1:
         return hits[0]
-    names = ", ".join(f"{c.get('name')} (id {c.get('id')})" for c in cams) or "keine"
+    names = ", ".join(f"{c.get('name')} (id {c.get('id')})" for c in cams) or t("common.none")
     if not hits:
-        raise BackendError(f"Kamera „{camera_name}“ ist unbekannt. Vorhanden: {names}.")
-    raise BackendError(f"Kamera „{camera_name}“ ist nicht eindeutig. Vorhanden: {names}.")
+        raise BackendError(t("common.camera_unknown_name", name=camera_name, names=names))
+    raise BackendError(t("common.camera_ambiguous", name=camera_name, names=names))

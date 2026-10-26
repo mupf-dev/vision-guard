@@ -1,1 +1,40 @@
-{}
+{
+  "q_label": "Erkannt als „{name}“ – stimmt das?",
+  "q_instance": "Ist das „{name}“?",
+  "q_match": {
+    "face": "Ist „{src}“ dieselbe Person wie „{dst}“?",
+    "pet": "Ist „{src}“ dasselbe Tier wie „{dst}“?"
+  },
+  "push_title": "Bitte bestätigen",
+  "kind": {
+    "inventory_label": "Gegenstand richtig erkannt?",
+    "inventory_identity": "Ist das dieses Exemplar?",
+    "identity_match": "Dieselbe Person bzw. dasselbe Tier?"
+  },
+  "err_answer_invalid": "Antwort muss yes, no oder skip sein",
+  "err_not_found": "Rückfrage nicht gefunden",
+  "err_not_open": "Frage ist nicht mehr offen",
+  "err_expired": "Frage ist abgelaufen",
+  "err_apply": "Antwort konnte nicht angewendet werden: {error}",
+  "err_unknown_item": "Unbekannter Gegenstand: {label}",
+  "err_instance_gone": "Das Exemplar existiert nicht mehr",
+  "err_identity_gone": "Eine der Identitäten existiert nicht mehr",
+  "err_kind_mismatch": "Nur Identitäten gleicher Art können zusammengeführt werden",
+  "page": {
+    "title_invalid": "Link ungültig",
+    "invalid": "Link ungültig oder abgelaufen",
+    "title_unknown": "Unbekannt",
+    "gone": "Diese Frage gibt es nicht mehr.",
+    "title_done": "Erledigt",
+    "done": "Diese Frage ist bereits beantwortet oder abgelaufen.",
+    "title_confirm": "Bitte bestätigen",
+    "answer": "Antwort",
+    "submit": "{answer} – absenden",
+    "title_failed": "Nicht möglich",
+    "title_thanks": "Danke",
+    "thanks": "Danke!",
+    "saved": "gespeichert.",
+    "yes": "Ja",
+    "no": "Nein"
+  }
+}

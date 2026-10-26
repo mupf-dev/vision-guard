@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from . import registry, settings_store
+from . import i18n, registry, settings_store
 from .config import config
 from .db import SessionLocal
 from .models import ReviewRequest, utcnow
@@ -88,16 +88,18 @@ for _k, _l in (("inventory_label", "Gegenstand richtig erkannt?"),
 
 
 def review_json(r: ReviewRequest, signed: bool = False) -> dict[str, Any]:
-    from .inventory_names import display_name, vocab_map
+    from .inventory_names import display_name, localized_name, vocab_map
 
     cam = registry.get(r.camera_id) if r.camera_id is not None else None
-    name_de = None
+    name_de = name = None
     if r.label:
-        name_de = display_name(r.label, vocab_map(settings_store.get().get("inventory_vocabulary") or []))
+        vocab = vocab_map(settings_store.get().get("inventory_vocabulary") or [])
+        name_de = display_name(r.label, vocab)
+        name = localized_name(r.label, vocab)      # I18N.C: Anzeigename in der Sprache der Anfrage
     data = {
         "id": r.id, "kind": r.kind, "status": r.status, "question": r.question,
         "camera_id": r.camera_id, "camera_name": cam["name"] if cam else None,
-        "label": r.label, "name_de": name_de,
+        "label": r.label, "name_de": name_de, "name": name,
         "inventory_item_id": r.inventory_item_id, "identity_id": r.identity_id,
         "source_identity_id": r.source_identity_id,
         "score": round(float(r.score), 4) if r.score is not None else None,
@@ -205,19 +207,19 @@ def create(*, kind: str, dedup_key: str, question: str, priority: float = 0.0,
 def answer(s: Session, review_id: int, answer: str, *, source: str = "ui",
            correct_label: Optional[str] = None) -> dict[str, Any]:
     if answer not in ANSWERS:
-        raise ReviewError(422, "Antwort muss yes, no oder skip sein")
+        raise ReviewError(422, i18n.t("review.err_answer_invalid"))
     if source not in SOURCES:
         source = "api"
     r = s.get(ReviewRequest, review_id)
     if r is None:
-        raise ReviewError(404, "Rückfrage nicht gefunden")
+        raise ReviewError(404, i18n.t("review.err_not_found"))
     if r.status != "open":
-        raise ReviewError(409, "Frage ist nicht mehr offen")
+        raise ReviewError(409, i18n.t("review.err_not_open"))
     if r.expires_at is not None and r.expires_at <= utcnow():
         r.status = "expired"
         s.commit()
         _broadcast("expired", r)
-        raise ReviewError(409, "Frage ist abgelaufen")
+        raise ReviewError(409, i18n.t("review.err_expired"))
     r.status = {"yes": "yes", "no": "no", "skip": "skipped"}[answer]
     r.answered_at = utcnow()
     r.answer_source = source
@@ -232,7 +234,7 @@ def answer(s: Session, review_id: int, answer: str, *, source: str = "ui",
         except Exception as e:
             s.rollback()
             log.exception("Rückfrage %s: Antwort-Wirkung fehlgeschlagen", review_id)
-            raise ReviewError(422, f"Antwort konnte nicht angewendet werden: {e}") from e
+            raise ReviewError(422, i18n.t("review.err_apply", error=e)) from e
     s.commit()
     s.refresh(r)
     out = review_json(r)

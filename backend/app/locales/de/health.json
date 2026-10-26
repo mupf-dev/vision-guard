@@ -1,1 +1,39 @@
-{}
+{
+  "label": {
+    "dark": "zu dunkel",
+    "blur": "unscharf",
+    "covered": "verdeckt",
+    "frozen": "Bild eingefroren",
+    "moved": "verschoben"
+  },
+  "text": {
+    "dark": "Zu dunkel",
+    "blur": "Unscharf",
+    "covered": "Verdeckt",
+    "frozen": "Bild eingefroren",
+    "moved": "Verschoben"
+  },
+  "hint": {
+    "dark": "Licht aus oder Linse abgedeckt?",
+    "blur": "Linse verschmutzt, beschlagen oder Fokus verstellt?",
+    "covered": "Linse abgedeckt oder Kamera zugestellt?",
+    "frozen": "Die Kamera liefert seit einiger Zeit dasselbe Bild – ggf. neu starten.",
+    "moved": "Kamera bewegt oder verdreht? Falls gewollt: Referenz neu setzen."
+  },
+  "since_today": "seit {time}",
+  "since_other": "seit {date} {time}",
+  "date_short": "%d.%m.",
+  "moved_dir": "Verschoben ({dir})",
+  "moved_unknown": "Verschoben oder verdreht",
+  "shift": "Bild ca. {pct} % nach {dir}",
+  "dir": {
+    "right": "rechts",
+    "left": "links",
+    "down": "unten",
+    "up": "oben"
+  },
+  "camera": "Kamera {id}",
+  "title_warn": "Kamera {name}: {label}",
+  "title_ok": "Kamera {name}: wieder in Ordnung",
+  "msg_ok": "{text} – behoben nach ca. {mins} min."
+}

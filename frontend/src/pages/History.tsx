@@ -6,20 +6,19 @@ import { api } from "../lib/api";
 import type { HistoryEpisode } from "../lib/types";
 import { fmtShort, fmtTime, localToIso, parseTs } from "../lib/format";
 import { Dialog, Empty, Loading } from "../components/ui";
+import { fmtNum, intlLocale, msgs, useMsgs, type Messages } from "../i18n";
 
 /**
  * Seite „Zeitmaschine“ (W3/B1): Textsuche im Bildgedächtnis („roter Karton im Flur“) → Zeiträume je Kamera mit
  * Vorschau und Übereinstimmung; Klick → Filmstreifen ±10 min und Link zu den Ereignissen im selben Zeitraum.
  */
 
-const PERIODS: { k: string; label: string }[] = [
-  { k: "today", label: "Heute" },
-  { k: "7d", label: "7 Tage" },
-  { k: "all", label: "Alles" },
-  { k: "custom", label: "Eigener Zeitraum" },
+const periods = (m: Messages["history"]): { k: string; label: string }[] => [
+  { k: "today", label: m.periodToday },
+  { k: "7d", label: m.period7d },
+  { k: "all", label: m.periodAll },
+  { k: "custom", label: m.periodCustom },
 ];
-
-const EXAMPLES = ["Person mit Rucksack", "roter Karton", "Hund auf dem Sofa", "Auto in der Einfahrt", "offene Tür", "Licht an"];
 
 function periodSince(k: string): string | undefined {
   const now = new Date();
@@ -40,28 +39,29 @@ function spanText(e: { start_ts: string; end_ts: string }): string {
   const a = parseTs(e.start_ts), b = parseTs(e.end_ts);
   if (!a) return "–";
   const sameDay = b && a.toDateString() === b.toDateString();
-  const day = a.toDateString() === new Date().toDateString() ? "Heute" : fmtShort(e.start_ts).split(",")[0];
+  const day = a.toDateString() === new Date().toDateString() ? msgs().history.today : fmtShort(e.start_ts).split(",")[0];
   if (!b || b.getTime() - a.getTime() < 60_000) return `${day}, ${fmtTime(e.start_ts).slice(0, 5)}`;
   return sameDay ? `${day}, ${fmtTime(e.start_ts).slice(0, 5)} – ${fmtTime(e.end_ts).slice(0, 5)}` : `${fmtShort(e.start_ts)} – ${fmtShort(e.end_ts)}`;
 }
 
 function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
-  return `${(n / 1024 ** 3).toFixed(2).replace(".", ",")} GB`;
+  if (n < 1024 ** 3) return `${fmtNum(n / 1024 / 1024, 1)} MB`;
+  return `${fmtNum(n / 1024 ** 3, 2)} GB`;
 }
 
 /** Vorschau (256 px) mit optionalem Rahmen der Kachel, in der der Treffer lag */
 function Preview({ src, bbox, alt, height }: { src: string | null; bbox?: [number, number, number, number] | null; alt: string; height?: number }) {
+  const m = useMsgs().history;
   const [err, setErr] = useState(false);
   useEffect(() => setErr(false), [src]);
   return (
     <div style={{ position: "relative", aspectRatio: height ? undefined : "16 / 9", height, borderRadius: 8, overflow: "hidden", background: "var(--bg-4)", display: "grid", placeItems: "center" }}>
       {src && !err
         ? <img src={src} alt={alt} loading="lazy" onError={() => setErr(true)} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-        : <span className="muted" style={{ fontSize: 12 }}>keine Vorschau</span>}
+        : <span className="muted" style={{ fontSize: 12 }}>{m.noPreview}</span>}
       {bbox && src && !err && (
-        <div title="Treffer in diesem Bildausschnitt" style={{
+        <div title={m.hitArea} style={{
           position: "absolute", left: `${bbox[0] * 100}%`, top: `${bbox[1] * 100}%`, width: `${(bbox[2] - bbox[0]) * 100}%`,
           height: `${(bbox[3] - bbox[1]) * 100}%`, border: "2px solid var(--accent)", borderRadius: 4, boxShadow: "0 0 0 9999px rgba(0,0,0,.25)",
         }} />
@@ -71,9 +71,10 @@ function Preview({ src, bbox, alt, height }: { src: string | null; bbox?: [numbe
 }
 
 function ScoreBar({ score }: { score: number }) {
+  const m = useMsgs().history;
   const c = score >= 70 ? "var(--ok)" : score >= 40 ? "var(--accent)" : "var(--text-3)";
   return (
-    <div className="row" style={{ gap: 8, alignItems: "center" }} title="Ähnlichkeit zwischen Suchtext und Bild (keine sichere Erkennung)">
+    <div className="row" style={{ gap: 8, alignItems: "center" }} title={m.scoreHint}>
       <div style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--bg-4)", overflow: "hidden" }}>
         <div style={{ width: `${Math.max(3, score)}%`, height: "100%", background: c }} />
       </div>
@@ -83,10 +84,11 @@ function ScoreBar({ score }: { score: number }) {
 }
 
 function EpisodeCard({ e, rank, onOpen }: { e: HistoryEpisode; rank: number; onOpen: () => void }) {
+  const m = useMsgs().history;
   const place = e.room && e.room !== e.camera_name ? `${e.room} · ${e.camera_name}` : e.camera_name;
   return (
     <div className="card" role="button" tabIndex={0} style={{ padding: 10, cursor: "pointer" }}
-      onClick={onOpen} onKeyDown={(k) => k.key === "Enter" && onOpen()} title="Filmstreifen anzeigen">
+      onClick={onOpen} onKeyDown={(k) => k.key === "Enter" && onOpen()} title={m.showFilmstrip}>
       <Preview src={e.thumb_url} bbox={e.tile_bbox} alt={`${place} ${spanText(e)}`} />
       <div className="row" style={{ justifyContent: "space-between", marginTop: 8, gap: 8 }}>
         <span style={{ fontWeight: 600 }}>{spanText(e)}</span>
@@ -94,7 +96,7 @@ function EpisodeCard({ e, rank, onOpen }: { e: HistoryEpisode; rank: number; onO
       </div>
       <div className="row muted" style={{ gap: 5, fontSize: 12.5, marginTop: 3, minWidth: 0 }}>
         {e.room ? <Home size={12} /> : <CamIcon size={12} />}<span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{place}</span>
-        <span>· {e.frames} {e.frames === 1 ? "Bild" : "Bilder"}</span>
+        <span>· {m.frames(e.frames)}</span>
       </div>
       <div style={{ marginTop: 8 }}><ScoreBar score={e.score} /></div>
     </div>
@@ -102,6 +104,8 @@ function EpisodeCard({ e, rank, onOpen }: { e: HistoryEpisode; rank: number; onO
 }
 
 function FilmStrip({ e, onClose }: { e: HistoryEpisode; onClose: () => void }) {
+  const m = useMsgs().history;
+  const c = useMsgs().common;
   const q = useQuery({ queryKey: ["history", "frames", e.camera_id, e.best_ts], queryFn: () => api.historyFrames(e.camera_id, e.best_ts, 10) });
   const best = parseTs(e.best_ts)?.getTime() ?? 0;
   const items = q.data?.items ?? [];
@@ -121,10 +125,10 @@ function FilmStrip({ e, onClose }: { e: HistoryEpisode; onClose: () => void }) {
   return (
     <Dialog title={`${e.camera_name} · ${spanText(e)}`} icon={<Film size={18} />} onClose={onClose} size="xl"
       footer={<>
-        <Link className="btn btn-ghost" to={eventsLink}><ListVideo size={15} />Ereignisse in diesem Zeitraum</Link>
-        <button className="btn btn-primary" onClick={onClose}>Schließen</button>
+        <Link className="btn btn-ghost" to={eventsLink}><ListVideo size={15} />{m.eventsInPeriod}</Link>
+        <button className="btn btn-primary" onClick={onClose}>{c.close}</button>
       </>}>
-      {q.isLoading ? <Loading /> : q.isError ? <Empty title="Filmstreifen nicht verfügbar" text={(q.error as Error).message} /> : (
+      {q.isLoading ? <Loading /> : q.isError ? <Empty title={m.filmstripUnavailable} text={(q.error as Error).message} /> : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {cur ? (
             <div>
@@ -132,11 +136,11 @@ function FilmStrip({ e, onClose }: { e: HistoryEpisode; onClose: () => void }) {
                 <Preview src={cur.thumb_url} bbox={sel < 0 || sel === bestIdx ? e.tile_bbox : null} alt={fmtTime(cur.ts)} />
               </div>
               <div className="muted" style={{ textAlign: "center", fontSize: 12.5, marginTop: 6 }}>
-                {fmtShort(cur.ts)}{cur.last_ts && cur.last_ts !== cur.ts ? ` – unverändert bis ${fmtTime(cur.last_ts)}` : ""}
-                {(sel < 0 || sel === bestIdx) && " · bester Treffer"}
+                {fmtShort(cur.ts)}{cur.last_ts && cur.last_ts !== cur.ts ? m.unchangedUntil(fmtTime(cur.last_ts)) : ""}
+                {(sel < 0 || sel === bestIdx) && m.bestMatch}
               </div>
             </div>
-          ) : <Empty title="Keine Bilder in diesem Zeitraum" text="Die Bilder wurden inzwischen gelöscht (Aufbewahrung)." />}
+          ) : <Empty title={m.noImagesInPeriod} text={m.imagesDeleted} />}
           {items.length > 0 && (
             <div ref={stripRef} style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, width: 0, minWidth: "100%" }}>
               {items.map((f, i) => (
@@ -150,8 +154,7 @@ function FilmStrip({ e, onClose }: { e: HistoryEpisode; onClose: () => void }) {
             </div>
           )}
           <div className="muted" style={{ fontSize: 12 }}>
-            Gespeichert sind nur kleine Vorschaubilder ({items.length} im Bereich ±10 min um den besten Treffer), kein Video.
-            Bilder, die sich kaum vom vorherigen unterscheiden, werden nicht erneut gespeichert.
+            {m.storedNote(items.length)}
           </div>
         </div>
       )}
@@ -160,6 +163,7 @@ function FilmStrip({ e, onClose }: { e: HistoryEpisode; onClose: () => void }) {
 }
 
 export function HistoryPage() {
+  const m = useMsgs().history;
   const [sp, setSp] = useSearchParams();
   const query = sp.get("q") ?? "";
   const camera = sp.get("camera") ?? "";
@@ -183,7 +187,7 @@ export function HistoryPage() {
     enabled: !!query, retry: false, placeholderData: keepPreviousData, staleTime: 30_000,
   });
   const camList = cams.data ?? [];
-  const rooms = [...new Set(camList.map((c) => c.room).filter((r): r is string => !!r))].sort();
+  const rooms = [...new Set(camList.map((c) => c.room).filter((r): r is string => !!r))].sort((a, b) => a.localeCompare(b, intlLocale()));
   const active = camList.filter((c) => c.history_enabled);
   const st = stats.data;
 
@@ -192,40 +196,40 @@ export function HistoryPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Zeitmaschine</h1><div className="sub">Was war wann zu sehen? Suche mit eigenen Worten im Bildgedächtnis der Kameras</div></div>
+        <div><h1>{m.title}</h1><div className="sub">{m.subtitle}</div></div>
       </div>
 
       <form className="row-wrap" style={{ gap: 8, marginBottom: 12 }} onSubmit={(e) => { e.preventDefault(); submit(text); }}>
         <div style={{ position: "relative", flex: 1, minWidth: 220 }}>
           <Search size={16} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--text-3)" }} />
-          <input className="input" style={{ width: "100%", paddingLeft: 34 }} placeholder="z. B. roter Karton im Flur" value={text}
-            onChange={(e) => setText(e.target.value)} maxLength={200} aria-label="Suchtext" />
+          <input className="input" style={{ width: "100%", paddingLeft: 34 }} placeholder={m.searchPlaceholder} value={text}
+            onChange={(e) => setText(e.target.value)} maxLength={200} aria-label={m.searchText} />
         </div>
         <button className="btn btn-primary" type="submit" disabled={!text.trim() || res.isFetching}>
-          {res.isFetching ? <span className="spinner" /> : <Search size={15} />}Suchen
+          {res.isFetching ? <span className="spinner" /> : <Search size={15} />}{m.search}
         </button>
       </form>
 
       <div className="card filters" style={{ marginBottom: 16 }}>
-        <div className="field"><label>Zeitraum</label>
+        <div className="field"><label>{m.period}</label>
           <div className="seg">
-            {PERIODS.map((p) => <button key={p.k} type="button" className={period === p.k ? "on" : ""} onClick={() => setP("period", p.k === "all" ? "" : p.k)}>{p.label}</button>)}
+            {periods(m).map((p) => <button key={p.k} type="button" className={period === p.k ? "on" : ""} onClick={() => setP("period", p.k === "all" ? "" : p.k)}>{p.label}</button>)}
           </div>
         </div>
         {custom && <>
-          <div className="field"><label>Von</label><input type="datetime-local" className="input input-sm" value={from} onChange={(e) => setP("from", e.target.value)} /></div>
-          <div className="field"><label>Bis (leer = jetzt)</label><input type="datetime-local" className="input input-sm" value={to} onChange={(e) => setP("to", e.target.value)} /></div>
+          <div className="field"><label>{m.from}</label><input type="datetime-local" className="input input-sm" value={from} onChange={(e) => setP("from", e.target.value)} /></div>
+          <div className="field"><label>{m.toEmptyNow}</label><input type="datetime-local" className="input input-sm" value={to} onChange={(e) => setP("to", e.target.value)} /></div>
         </>}
-        <div className="field"><label>Kamera</label>
+        <div className="field"><label>{m.camera}</label>
           <select className="select input-sm" value={camera} onChange={(e) => setP("camera", e.target.value)}>
-            <option value="">Alle Kameras</option>
-            {camList.map((c) => <option key={c.id} value={c.id}>{c.name}{c.history_enabled ? "" : " (Zeitmaschine aus)"}</option>)}
+            <option value="">{m.allCameras}</option>
+            {camList.map((c) => <option key={c.id} value={c.id}>{c.name}{c.history_enabled ? "" : m.historyOff}</option>)}
           </select>
         </div>
         {rooms.length > 0 && (
-          <div className="field"><label>Raum</label>
+          <div className="field"><label>{m.room}</label>
             <select className="select input-sm" value={room} onChange={(e) => setP("room", e.target.value)}>
-              <option value="">Alle Räume</option>
+              <option value="">{m.allRooms}</option>
               {rooms.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
@@ -233,35 +237,34 @@ export function HistoryPage() {
       </div>
 
       {st && !st.enabled ? (
-        <Empty icon={<HistoryIcon size={44} />} title="Zeitmaschine nicht verfügbar" text="Die Datenbank hat keine Vektorsuche (pgvector). Siehe scripts/db-migrate-pgvector.sh." />
+        <Empty icon={<HistoryIcon size={44} />} title={m.unavailable} text={m.unavailableText} />
       ) : !query ? (
-        <Empty icon={<HistoryIcon size={44} />} title="Wonach suchen Sie?"
+        <Empty icon={<HistoryIcon size={44} />} title={m.whatToSearch}
           text={active.length
-            ? <>Beschreiben Sie, was zu sehen war – kurze, gegenständliche Beschreibungen funktionieren am besten. Aktiv auf {active.map((c) => c.name).join(", ")}; gespeichert: {st?.frames ?? 0} Bilder ({fmtBytes(st?.thumb_bytes ?? 0)}).</>
-            : <>Noch keine Kamera zeichnet für die Zeitmaschine auf. Einschalten unter Administration → Kameras → „Zeitmaschine“.</>}>
+            ? m.activeText(active.map((c) => c.name).join(", "), st?.frames ?? 0, fmtBytes(st?.thumb_bytes ?? 0))
+            : m.noCameraText}>
           <div className="chips" style={{ justifyContent: "center", marginTop: 12 }}>
-            {EXAMPLES.map((x) => <button key={x} type="button" className="chip" onClick={() => submit(x)}><Sparkles size={12} />{x}</button>)}
+            {m.examples.map((x) => <button key={x} type="button" className="chip" onClick={() => submit(x)}><Sparkles size={12} />{x}</button>)}
           </div>
         </Empty>
-      ) : res.isLoading ? <Loading text="Suche im Bildgedächtnis …" /> : res.isError ? (
-        <Empty icon={<HistoryIcon size={44} />} title="Suche nicht möglich" text={(res.error as Error).message} />
+      ) : res.isLoading ? <Loading text={m.searching} /> : res.isError ? (
+        <Empty icon={<HistoryIcon size={44} />} title={m.searchFailed} text={(res.error as Error).message} />
       ) : res.data && res.data.items.length ? (
         <>
           <div className="muted row-wrap" style={{ fontSize: 12.5, marginBottom: 10, gap: 6 }}>
-            <Clock size={13} />{res.data.items.length} Zeiträume, beste Übereinstimmung zuerst
-            {res.data.queries && res.data.queries.length > 1 && <span>· gesucht auch als „{res.data.queries.slice(1).join("“, „")}“</span>}
+            <Clock size={13} />{m.resultsLine(res.data.items.length)}
+            {res.data.queries && res.data.queries.length > 1 && <span>{m.alsoSearchedAs(res.data.queries.slice(1))}</span>}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
             {res.data.items.map((e, i) => <EpisodeCard key={`${e.camera_id}-${e.start_ts}`} e={e} rank={i + 1} onOpen={() => setOpen(e)} />)}
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 12 }}>
-            Die Übereinstimmung misst, wie gut Bild und Beschreibung zusammenpassen – keine sichere Erkennung. Kleine Gegenstände
-            findet die Suche eher bei Kameras mit eingeschalteten Kacheln.
+            {m.scoreNote}
           </div>
         </>
       ) : (
-        <Empty icon={<HistoryIcon size={44} />} title="Nichts gefunden"
-          text={`Für „${query}“ gibt es im gewählten Zeitraum keine gespeicherten Bilder${camera || room ? " dieser Kamera/dieses Raums" : ""}.`} />
+        <Empty icon={<HistoryIcon size={44} />} title={m.nothingFound}
+          text={m.nothingFoundText(query, !!(camera || room))} />
       )}
 
       {open && <FilmStrip e={open} onClose={() => setOpen(null)} />}

@@ -21,6 +21,7 @@ from xml.sax.saxutils import escape
 
 import httpx
 
+from . import i18n
 from .config import config
 
 log = logging.getLogger("vg.tv")
@@ -83,7 +84,7 @@ def _control_url(description_url: str) -> str:
         r.raise_for_status()
         root = ET.fromstring(r.content)
     except Exception as e:  # noqa: BLE001
-        raise TvError(f"Fernseher {_host(description_url)} nicht erreichbar (eingeschaltet?)") from e
+        raise TvError(i18n.t("errors.tv_unreachable", host=_host(description_url))) from e
     ns = {"d": "urn:schemas-upnp-org:device-1-0"}
     for svc in root.iter("{urn:schemas-upnp-org:device-1-0}service"):
         if (svc.findtext("d:serviceType", default="", namespaces=ns) or "").startswith(
@@ -91,7 +92,7 @@ def _control_url(description_url: str) -> str:
             ctl = urljoin(description_url, svc.findtext("d:controlURL", default="", namespaces=ns))
             _ctl_cache[description_url] = (now, ctl)
             return ctl
-    raise TvError("Gerät ist kein DLNA-Abspieler (kein AVTransport-Dienst)")
+    raise TvError(i18n.t("errors.tv_not_dlna"))
 
 
 def _soap(description_url: str, action: str, args: str, timeout: float = 8.0) -> str:
@@ -106,12 +107,12 @@ def _soap(description_url: str, action: str, args: str, timeout: float = 8.0) ->
             "Content-Type": 'text/xml; charset="utf-8"', "SOAPAction": f'"{AVT}#{action}"'})
     except Exception as e:  # noqa: BLE001
         _ctl_cache.pop(description_url, None)
-        raise TvError(f"Fernseher {_host(description_url)} nicht erreichbar (eingeschaltet?)") from e
+        raise TvError(i18n.t("errors.tv_unreachable", host=_host(description_url))) from e
     if r.status_code != 200:
         m = re.search(r"<errorDescription>(.*?)</errorDescription>", r.text or "", re.S)
         code = re.search(r"<errorCode>(\d+)</errorCode>", r.text or "")
-        raise TvError(f"Fernseher lehnt {action} ab (HTTP {r.status_code}"
-                      f"{', UPnP ' + code.group(1) if code else ''}{': ' + m.group(1).strip() if m else ''})")
+        raise TvError(i18n.t("errors.tv_rejected", action=action, status=r.status_code,
+                             detail=f"{', UPnP ' + code.group(1) if code else ''}{': ' + m.group(1).strip() if m else ''}"))
     return r.text
 
 
@@ -168,7 +169,7 @@ def normalize_description_url(v: str) -> str:
         host, _, port = v.partition(":")
         return f"http://{host}:{port or 9197}/dmr"
     if not re.match(r"^https?://[^\s/]+", v):
-        raise ValueError("Adresse des Fernsehers: IP-Adresse oder http://…-URL der Gerätebeschreibung")
+        raise ValueError(i18n.t("errors.tv_address_invalid"))
     return v
 
 
@@ -194,7 +195,7 @@ def probe(description_url: str) -> dict[str, Any]:
     except TvError as e:
         out["error"] = str(e)
     except Exception:  # noqa: BLE001
-        out["error"] = f"Fernseher {_host(url)} nicht erreichbar oder keine UPnP-Gerätebeschreibung (eingeschaltet?)"
+        out["error"] = i18n.t("errors.tv_probe_unreachable", host=_host(url))
     return out
 
 
@@ -249,12 +250,12 @@ def show(target_id: str, camera_id: int, duration_s: float, *, source: str = "ma
         raise KeyError(target_id)
     base = (_settings().get("tv_stream_base_url") or "").rstrip("/")
     if not base:
-        raise TvError("Adresse für Fernseher (tv_stream_base_url) ist nicht eingestellt")
+        raise TvError(i18n.t("errors.tv_stream_base_url_missing"))
     duration_s = max(10.0, min(float(duration_s), 3600.0))
     url, token = stream_url(base, camera_id, int(duration_s) + 30)
-    name = _camera_name(camera_id) or f"Kamera {camera_id}"
+    name = _camera_name(camera_id) or i18n.t("tv.camera_n", id=camera_id)
     try:
-        play(t["description_url"], url, f"VisionGuard – {name}")
+        play(t["description_url"], url, i18n.t("tv.title", camera=name))
     except TvError as e:
         _errors[target_id] = str(e)
         raise

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import inventory_diff
 from .. import inventory_names as names
 from .. import settings_store
@@ -30,7 +31,7 @@ def _vocab() -> tuple[list[dict], dict[str, dict]]:
 
 
 def _sort_key(d: dict):
-    return ((d.get("room") or "￿").lower(), (d.get("name_de") or "").lower(), d.get("camera_id") or 0,
+    return ((d.get("room") or "￿").lower(), (d.get("name") or d.get("name_de") or "").lower(), d.get("camera_id") or 0,
             d.get("id") or 0)
 
 
@@ -59,7 +60,7 @@ def list_inventory(
     if states:
         bad = [x for x in states if x not in _STATES]
         if bad:
-            raise HTTPException(422, f"Unbekannter Zustand: {bad[0]} (erlaubt: present, missing, stale)")
+            raise HTTPException(422, i18n.t("errors.inventory_unknown_state", state=bad[0]))
         conds.append(InventoryItem.state.in_(states))
     if visible is not None:
         conds.append(InventoryItem.state == "present" if visible else InventoryItem.state != "present")
@@ -159,7 +160,7 @@ def search_inventory(q: str = Query(..., min_length=1, max_length=200),
 
 @router.get("/labels")
 def inventory_labels(db: Session = Depends(get_db)):
-    vocab, _ = _vocab()
+    vocab, vmap = _vocab()
     custom = settings_store.get().get("inventory_synonyms") or {}
     counts: dict[str, list[int]] = {}
     for lb, st, n in db.execute(select(InventoryItem.label, InventoryItem.state, func.count())
@@ -174,12 +175,14 @@ def inventory_labels(db: Session = Depends(get_db)):
         lb = e["label"]
         seen.add(lb)
         c = counts.get(lb, [0, 0])
-        out.append({"label": lb, "name_de": e.get("name_de") or lb, "group": e.get("group") or "",
+        out.append({"label": lb, "name_de": e.get("name_de") or lb, "name": names.localized_name(lb, vmap),
+                    "group": e.get("group") or "",
                     "prompts": list(e.get("prompts") or []), "synonyms": names.synonyms_for(lb, custom),
                     "count_present": c[0], "count_total": c[1]})
     for lb in sorted(set(counts) - seen):
         c = counts[lb]
-        out.append({"label": lb, "name_de": names.display_name(lb), "group": "", "prompts": [],
+        out.append({"label": lb, "name_de": names.display_name(lb), "name": names.localized_name(lb, vmap),
+                    "group": "", "prompts": [],
                     "synonyms": names.synonyms_for(lb, custom), "count_present": c[0], "count_total": c[1]})
     return out
 
@@ -210,7 +213,7 @@ def inventory_changes(
 def _get(db: Session, item_id: int) -> InventoryItem:
     it = db.get(InventoryItem, item_id)
     if it is None:
-        raise HTTPException(404, "Gegenstand nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.item_not_found"))
     return it
 
 

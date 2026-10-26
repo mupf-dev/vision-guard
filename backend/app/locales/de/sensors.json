@@ -1,1 +1,44 @@
-{}
+{
+  "state": {
+    "on": "an",
+    "off": "aus",
+    "ok": "ok",
+    "low": "knapp",
+    "out": "leer",
+    "unknown": "unklar"
+  },
+  "kind": {
+    "brightness": "Helligkeit",
+    "blink": "Blinken",
+    "reference": "Referenzbilder",
+    "inventory_count": "Gegenstände zählen",
+    "fill": "Füllstand",
+    "vlm": "Bildmodell"
+  },
+  "since": "seit {time}",
+  "since_date": "seit {date} {time}",
+  "day_month_format": "%d.%m.",
+  "disabled": "deaktiviert",
+  "last_check": "(letzte Prüfung: {reason})",
+  "occluded_now": "(gerade verdeckt)",
+  "camera_fallback": "Kamera {id}",
+  "sensor_fallback": "Sensor {id}",
+  "supply_title": "Vorrat {name}: {state}",
+  "supply_message": "{name} ist {state} ({camera}).",
+  "supply_on_list": "Steht auf der Einkaufsliste.",
+  "reason": {
+    "no_measurement_yet": "noch keine Messung",
+    "no_references": "Referenzbilder fehlen",
+    "no_value": "kein Messwert",
+    "vlm_error": "Bildmodell-Fehler",
+    "vlm_no_answer": "Bildmodell ohne Aussage",
+    "answer_unclear": "Antwort unklar",
+    "answer_unclear_quoted": "Antwort unklar („{answer}“)",
+    "no_labels": "keine Gegenstände gewählt",
+    "camera_disabled": "Kamera deaktiviert",
+    "inventory_off": "Gegenstandserkennung der Kamera ist aus",
+    "inventory_stale": "Gegenstandserkennung ruht (Stand unklar)",
+    "no_values": "keine Messwerte (Kamera offline oder Analyse ruht)",
+    "config_changed": "Art oder Kamera geändert"
+  }
+}

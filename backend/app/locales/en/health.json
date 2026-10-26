@@ -1,1 +1,39 @@
-{}
+{
+  "label": {
+    "dark": "too dark",
+    "blur": "blurry",
+    "covered": "covered",
+    "frozen": "image frozen",
+    "moved": "moved"
+  },
+  "text": {
+    "dark": "Too dark",
+    "blur": "Blurry",
+    "covered": "Covered",
+    "frozen": "Image frozen",
+    "moved": "Moved"
+  },
+  "hint": {
+    "dark": "Light off or lens covered?",
+    "blur": "Lens dirty, fogged up or focus changed?",
+    "covered": "Lens covered or camera blocked?",
+    "frozen": "The camera has been delivering the same image for a while – restart it if necessary.",
+    "moved": "Camera moved or rotated? If intended: set a new reference."
+  },
+  "since_today": "since {time}",
+  "since_other": "since {date} {time}",
+  "date_short": "%d/%m",
+  "moved_dir": "Moved ({dir})",
+  "moved_unknown": "Moved or rotated",
+  "shift": "image shifted approx. {pct} % {dir}",
+  "dir": {
+    "right": "right",
+    "left": "left",
+    "down": "down",
+    "up": "up"
+  },
+  "camera": "Camera {id}",
+  "title_warn": "Camera {name}: {label}",
+  "title_ok": "Camera {name}: back to normal",
+  "msg_ok": "{text} – resolved after approx. {mins} min."
+}

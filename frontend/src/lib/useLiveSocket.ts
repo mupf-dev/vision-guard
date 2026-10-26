@@ -5,6 +5,7 @@ import type { Camera, WsMessage } from "./types";
 import { labelName } from "./labels";
 import { pushDetection } from "./overlaySync";
 import { GESTURE_NAME, POSTURE_NAME, eventAlert } from "./pose";
+import { fmtNum, msgs } from "../i18n";
 
 // W2 C1: Notfall-Toast je Event und Wiederholung nur einmal
 const alertToasted = new Set<string>();
@@ -55,6 +56,7 @@ function refreshIdentities(qc: QueryClient, bulk: boolean) {
 
 function handle(msg: WsMessage, qc: QueryClient) {
   const s = useLive.getState();
+  const m = msgs().ui.ws;
   switch (msg.type) {
     case "detections":
       pushDetection(msg);
@@ -81,7 +83,7 @@ function handle(msg: WsMessage, qc: QueryClient) {
         const e = msg.event;
         toast.event(
           `${labelName(e.label)} – ${e.camera_name}`,
-          `${e.identity?.display_name ?? ""}${e.identity ? " · " : ""}Regel: ${e.rules.join(", ")}`,
+          `${e.identity?.display_name ?? ""}${e.identity ? " · " : ""}${m.rule(e.rules.join(", "))}`,
           e.thumb_url,
         );
       }
@@ -90,8 +92,8 @@ function handle(msg: WsMessage, qc: QueryClient) {
         const k = `${msg.event.id}:${al.repeat}`;
         if (!alertToasted.has(k)) {
           alertToasted.add(k);
-          const what = al.posture ? `Person ${POSTURE_NAME[al.posture]}` : al.rule;
-          toast.event(`Notfall: ${what}`, `Kamera ${msg.event.camera_name} · Regel „${al.rule}“${al.repeat ? ` · Wiederholung ${al.repeat}` : ""}`,
+          const what = al.posture ? `${m.person} ${POSTURE_NAME[al.posture]}` : al.rule;
+          toast.event(m.emergency(what), m.emergencyText(msg.event.camera_name, al.rule, al.repeat),
             msg.event.snapshot_url ?? msg.event.thumb_url);
         }
       }
@@ -115,7 +117,7 @@ function handle(msg: WsMessage, qc: QueryClient) {
       qc.invalidateQueries({ queryKey: ["notifications"] });
       if (msg.action === "new" && "title" in msg.notification && useUi.getState().eventToasts) {
         const n = msg.notification;
-        toast.event(n.title || "Hinweis", n.message, n.image_url);
+        toast.event(n.title || m.notification, n.message, n.image_url);
       }
       break;
     }
@@ -127,8 +129,8 @@ function handle(msg: WsMessage, qc: QueryClient) {
       // D1: kurz im Live-Overlay am Track einblenden + Toast (wenn Alarm-Benachrichtigungen an)
       s.setGesture(msg);
       if (useUi.getState().eventToasts) {
-        const who = msg.identity?.display_name ?? "Person";
-        toast.event(`Geste: ${GESTURE_NAME[msg.gesture] ?? msg.gesture}`, `${who} · Kamera ${msg.camera_name ?? msg.camera_id} · ${msg.held_s.toFixed(1)} s gehalten`);
+        const who = msg.identity?.display_name ?? m.person;
+        toast.event(m.gesture(GESTURE_NAME[msg.gesture] ?? msg.gesture), m.gestureText(who, String(msg.camera_name ?? msg.camera_id), fmtNum(msg.held_s, 1)));
       }
       break;
     }

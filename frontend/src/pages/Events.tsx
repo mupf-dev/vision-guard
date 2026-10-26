@@ -8,10 +8,12 @@ import { ALL_LABELS, KIND_NAME, labelColor, labelName } from "../lib/labels";
 import { fmtDateTime, fmtDuration, fmtShort, localToIso } from "../lib/format";
 import { Empty, Img, LabelIcon, LabelPill, Loading, SearchSelect } from "../components/ui";
 import { AlertBadge, EventDetailDialog } from "../components/EventBits";
+import { fmtNum, useMsgs } from "../i18n";
 
 const PAGE = 48;
 
 export function EventGrid({ items, onPick }: { items: VGEvent[]; onPick: (e: VGEvent) => void }) {
+  const m = useMsgs();
   return (
     <div className="ev-grid">
       {items.map((e, i) => {
@@ -23,14 +25,14 @@ export function EventGrid({ items, onPick }: { items: VGEvent[]; onPick: (e: VGE
               <div className="corner">
                 <LabelPill label={e.label} score={e.score} />
                 <span className="spacer" />
-                {e.active && <span className="badge bad"><span className="dot" />aktiv</span>}
+                {e.active && <span className="badge bad"><span className="dot" />{m.common.active}</span>}
                 {e.clip_url && <span className="badge"><Film size={12} /></span>}
               </div>
             </div>
             <div className="body">
               <div className="who">
                 {e.thumb_url && e.snapshot_url && <img src={e.thumb_url} alt="" className="avatar" style={{ width: 24, height: 24, borderRadius: 6 }} />}
-                {e.identity?.display_name ?? (e.attributes?.plate_text ? String(e.attributes.plate_text) : <span className="muted">Unbekannt</span>)}
+                {e.identity?.display_name ?? (e.attributes?.plate_text ? String(e.attributes.plate_text) : <span className="muted">{m.common.unknown}</span>)}
               </div>
               <div className="meta"><span className="row" style={{ gap: 4 }}><CamIcon />{e.camera_name}</span><span className="row" style={{ gap: 4 }}><Clock />{fmtShort(e.start_ts)}</span></div>
               {e.rules?.length > 0 && <div className="meta" style={{ color: "var(--warn)" }}><Zap />{e.rules.join(", ")}</div>}
@@ -44,10 +46,11 @@ export function EventGrid({ items, onPick }: { items: VGEvent[]; onPick: (e: VGE
 }
 
 function EventTable({ items, onPick }: { items: VGEvent[]; onPick: (e: VGEvent) => void }) {
+  const m = useMsgs();
   return (
     <div className="card" style={{ overflow: "auto" }}>
       <table className="table">
-        <thead><tr><th></th><th>Objekt</th><th>Identität</th><th>Kamera</th><th>Zeit</th><th>Dauer</th><th>Regeln</th><th>Medien</th></tr></thead>
+        <thead><tr><th></th><th>{m.events.object}</th><th>{m.events.identity}</th><th>{m.events.camera}</th><th>{m.events.colTime}</th><th>{m.events.colDuration}</th><th>{m.events.colRules}</th><th>{m.events.colMedia}</th></tr></thead>
         <tbody>
           {items.map((e) => (
             <tr key={e.id} className="clickable" onClick={() => onPick(e)} role="button" tabIndex={0} onKeyDown={(k) => k.key === "Enter" && onPick(e)}>
@@ -56,7 +59,7 @@ function EventTable({ items, onPick }: { items: VGEvent[]; onPick: (e: VGEvent) 
               <td>{e.identity?.display_name ?? (e.attributes?.plate_text ? String(e.attributes.plate_text) : <span className="muted">–</span>)}</td>
               <td>{e.camera_name}</td>
               <td className="mono" style={{ whiteSpace: "nowrap" }}>{fmtDateTime(e.start_ts)}</td>
-              <td>{e.active ? <span className="badge bad"><span className="dot" />aktiv</span> : fmtDuration(e.start_ts, e.end_ts)}</td>
+              <td>{e.active ? <span className="badge bad"><span className="dot" />{m.common.active}</span> : fmtDuration(e.start_ts, e.end_ts)}</td>
               <td>{e.rules?.length ? <span className="badge warn"><Zap size={11} />{e.rules.length}</span> : <span className="muted">–</span>} <AlertBadge e={e} /></td>
               <td><span className="feed-icons" style={{ margin: 0 }}><ImageIcon className={e.snapshot_url ? "has" : ""} /><Film className={e.clip_url ? "has" : ""} /></span></td>
             </tr>
@@ -68,6 +71,7 @@ function EventTable({ items, onPick }: { items: VGEvent[]; onPick: (e: VGEvent) 
 }
 
 export function EventsPage() {
+  const m = useMsgs();
   const [sp, setSp] = useSearchParams();
   const [view, setView] = useState<"grid" | "list">((localStorage.getItem("vg.evview") as "grid" | "list") ?? "grid");
   useEffect(() => localStorage.setItem("vg.evview", view), [view]);
@@ -118,49 +122,49 @@ export function EventsPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Ereignisse</h1><div className="sub">{total.toLocaleString("de-DE")} Ereignisse{hasFilter ? " (gefiltert)" : ""}</div></div>
+        <div><h1>{m.events.title}</h1><div className="sub">{m.events.count(fmtNum(total), total)}{hasFilter ? m.events.filtered : ""}</div></div>
         <div className="seg">
-          <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")}><LayoutGrid size={14} />Kacheln</button>
-          <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}><List size={14} />Liste</button>
+          <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")}><LayoutGrid size={14} />{m.events.grid}</button>
+          <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}><List size={14} />{m.events.list}</button>
         </div>
       </div>
       <div className="card filters">
-        <div className="field"><label>Kamera</label>
+        <div className="field"><label>{m.events.camera}</label>
           <select className="select input-sm" value={f.camera_id} onChange={(e) => setF("camera", e.target.value)}>
-            <option value="">Alle Kameras</option>
+            <option value="">{m.events.allCameras}</option>
             {cams.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
-        <div className="field"><label>Objekt</label>
+        <div className="field"><label>{m.events.object}</label>
           <select className="select input-sm" value={f.label} onChange={(e) => setF("label", e.target.value)}>
-            <option value="">Alle Objekte</option>
+            <option value="">{m.events.allObjects}</option>
             {ALL_LABELS.map((l) => <option key={l} value={l}>{labelName(l)}</option>)}
           </select>
         </div>
-        <div className="field" style={{ minWidth: 220 }}><label>Identität</label>
-          <SearchSelect placeholder="Alle Identitäten" value={f.identity_id ? [Number(f.identity_id)] : []}
+        <div className="field" style={{ minWidth: 220 }}><label>{m.events.identity}</label>
+          <SearchSelect placeholder={m.events.allIdentities} value={f.identity_id ? [Number(f.identity_id)] : []}
             onChange={(v) => setF("identity", v[0] ? String(v[0]) : "")}
             options={(idents.data ?? []).map((i) => ({ value: i.id, label: i.display_name, image: i.cover_url, sub: KIND_NAME[i.kind] }))} />
         </div>
-        <div className="field"><label>Von</label><input type="datetime-local" className="input input-sm" value={f.since} onChange={(e) => setF("since", e.target.value)} /></div>
-        <div className="field"><label>Bis</label><input type="datetime-local" className="input input-sm" value={f.until} onChange={(e) => setF("until", e.target.value)} /></div>
-        <div className="field"><label>Medien</label>
+        <div className="field"><label>{m.events.from}</label><input type="datetime-local" className="input input-sm" value={f.since} onChange={(e) => setF("since", e.target.value)} /></div>
+        <div className="field"><label>{m.events.until}</label><input type="datetime-local" className="input input-sm" value={f.until} onChange={(e) => setF("until", e.target.value)} /></div>
+        <div className="field"><label>{m.events.media}</label>
           <select className="select input-sm" value={f.media} onChange={(e) => setF("media", e.target.value)}>
-            <option value="">Alle</option><option value="snapshot">Nur mit Snapshot</option><option value="clip">Nur mit Clip</option>
+            <option value="">{m.common.all}</option><option value="snapshot">{m.events.onlySnapshot}</option><option value="clip">{m.events.onlyClip}</option>
           </select>
         </div>
-        {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => setSp(new URLSearchParams(), { replace: true })}><RotateCcw size={14} />Zurücksetzen</button>}
+        {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => setSp(new URLSearchParams(), { replace: true })}><RotateCcw size={14} />{m.events.reset}</button>}
       </div>
 
-      {q.isLoading ? <Loading /> : q.isError ? <Empty title="Fehler beim Laden" text={(q.error as Error).message} />
-        : items.length === 0 ? <Empty icon={<History size={44} />} title="Keine Ereignisse" text={hasFilter ? "Für diese Filter wurde nichts gefunden." : "Sobald Objekte erkannt werden, erscheinen sie hier."} />
+      {q.isLoading ? <Loading /> : q.isError ? <Empty title={m.events.loadError} text={(q.error as Error).message} />
+        : items.length === 0 ? <Empty icon={<History size={44} />} title={m.events.emptyTitle} text={hasFilter ? m.events.emptyFiltered : m.events.emptyText} />
         : view === "grid" ? <EventGrid items={items} onPick={setPicked} /> : <EventTable items={items} onPick={setPicked} />}
 
       {pages > 1 && (
         <div className="pager">
-          <button className="btn btn-sm" disabled={f.page <= 0} onClick={() => setF("page", String(f.page - 1))}><ChevronLeft size={15} />Zurück</button>
-          <span>Seite {f.page + 1} von {pages}</span>
-          <button className="btn btn-sm" disabled={f.page + 1 >= pages} onClick={() => setF("page", String(f.page + 1))}>Weiter<ChevronRight size={15} /></button>
+          <button className="btn btn-sm" disabled={f.page <= 0} onClick={() => setF("page", String(f.page - 1))}><ChevronLeft size={15} />{m.events.prev}</button>
+          <span>{m.events.pageOf(f.page + 1, pages)}</span>
+          <button className="btn btn-sm" disabled={f.page + 1 >= pages} onClick={() => setF("page", String(f.page + 1))}>{m.events.next}<ChevronRight size={15} /></button>
         </div>
       )}
       {picked && <EventDetailDialog event={picked} onClose={closePicked} />}

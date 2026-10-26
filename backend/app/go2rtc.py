@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import httpx
 
+from . import i18n
 from . import youtube
 from .config import config
 
@@ -239,7 +240,7 @@ async def probe(url: str, timeout: float = 20) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "width": None, "height": None, "codec": None, "error": None}
     src = await source_for(url)
     if src is None:
-        result["error"] = "YouTube-Livestream nicht verfügbar (offline oder kein Livestream)"
+        result["error"] = i18n.t("errors.youtube_unavailable")
         return result
     url = src
     try:
@@ -263,7 +264,7 @@ async def probe(url: str, timeout: float = 20) -> dict[str, Any]:
                         result["width"], result["height"] = size
                     result["ok"] = True
                 else:
-                    msg = r.text.strip()[:300] if r.status_code != 200 else "Kein Bild erhalten"
+                    msg = r.text.strip()[:300] if r.status_code != 200 else i18n.t("errors.no_image_received")
                     result["error"] = msg or f"HTTP {r.status_code}"
             finally:
                 try:
@@ -271,7 +272,7 @@ async def probe(url: str, timeout: float = 20) -> dict[str, Any]:
                 except Exception:
                     pass
     except httpx.TimeoutException:
-        result["error"] = "Zeitüberschreitung beim Verbindungsaufbau"
+        result["error"] = i18n.t("errors.connect_timeout")
         await _cleanup(name)
     except Exception as e:  # noqa: BLE001
         result["error"] = str(e) or e.__class__.__name__

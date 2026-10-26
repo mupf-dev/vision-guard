@@ -8,6 +8,7 @@ import { Empty, Loading } from "../components/ui";
 import { RegionImage, SENSOR_KIND, SensorStateBadge, fmtSensorValue, vlmMeasure } from "../components/SensorBits";
 import { fmtAgo } from "../lib/format";
 import { toast } from "../lib/store";
+import { intlLocale, useMsgs } from "../i18n";
 
 /**
  * Seite „Vorräte“ (W3, C4): Vorrats-Sensoren (Ampel ok/knapp/leer, Füllbalken) und die Einkaufsliste zum Abhaken
@@ -27,6 +28,7 @@ function fillShare(s: VirtualSensor): number | null {
 }
 
 function SupplyCard({ s }: { s: VirtualSensor }) {
+  const m = useMsgs().supplies;
   const share = s.state === "unknown" || !s.enabled ? null : fillShare(s);
   const cls = s.state === "low" ? "low" : s.state === "out" ? "out" : "";
   return (
@@ -40,20 +42,22 @@ function SupplyCard({ s }: { s: VirtualSensor }) {
         {share !== null && <div className={`fill-bar ${cls}`}><span style={{ width: `${Math.round(share * 100)}%` }} /></div>}
         <div className="muted" style={{ fontSize: 12 }}>
           {s.state_text} · {fmtSensorValue(s)}<br />
-          {SENSOR_KIND[s.kind].name} · {s.room ?? s.camera_name}{s.last_eval ? ` · geprüft ${fmtAgo(s.last_eval)}` : ""}
+          {SENSOR_KIND[s.kind].name} · {s.room ?? s.camera_name}{s.last_eval ? ` · ${m.checkedAgo(fmtAgo(s.last_eval))}` : ""}
         </div>
       </div>
     </div>
   );
 }
 
-const SOURCE_ICON: Record<ShoppingItem["source"], React.ReactNode> = {
-  auto: <span title="automatisch (Vorrat knapp/leer)"><Wand2 size={13} /></span>,
-  manual: null,
-  mcp: <span title="vom KI-Assistenten (MCP)"><Bot size={13} /></span>,
-};
+function SourceIcon({ source }: { source: ShoppingItem["source"] }) {
+  const m = useMsgs().supplies;
+  if (source === "auto") return <span title={m.sourceAuto}><Wand2 size={13} /></span>;
+  if (source === "mcp") return <span title={m.sourceMcp}><Bot size={13} /></span>;
+  return null;
+}
 
 export function SuppliesPage() {
+  const m = useMsgs().supplies;
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [showDone, setShowDone] = useState(false);
@@ -64,65 +68,62 @@ export function SuppliesPage() {
   const add = useMutation({
     mutationFn: () => api.addShoppingItem(name.trim()),
     onSuccess: () => { setName(""); refresh(); },
-    onError: (e: Error) => toast.error("Nicht hinzugefügt", e.message),
+    onError: (e: Error) => toast.error(m.notAdded, e.message),
   });
   const upd = useMutation({
     mutationFn: ({ id, done }: { id: number; done: boolean }) => api.updateShoppingItem(id, { done }),
     onSuccess: refresh,
-    onError: (e: Error) => toast.error("Nicht gespeichert", e.message),
+    onError: (e: Error) => toast.error(m.notSaved, e.message),
   });
   const del = useMutation({
     mutationFn: (id: number) => api.deleteShoppingItem(id),
     onSuccess: refresh,
-    onError: (e: Error) => toast.error("Nicht gelöscht", e.message),
+    onError: (e: Error) => toast.error(m.notDeleted, e.message),
   });
   if (sensors.isLoading || list.isLoading) return <Loading />;
   const items = list.data?.items ?? [];
   const supplies = [...(sensors.data ?? [])].sort((a, b) => {
     const rank = { out: 0, low: 1, unknown: 2, ok: 3, on: 3, off: 3 } as const;
-    return rank[a.state] - rank[b.state] || a.name.localeCompare(b.name);
+    return rank[a.state] - rank[b.state] || a.name.localeCompare(b.name, intlLocale());
   });
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Vorräte</h1><div className="sub">Vorräte im Blick und die Einkaufsliste dazu</div></div>
+        <div><h1>{m.title}</h1><div className="sub">{m.subtitle}</div></div>
       </div>
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-head"><ShoppingCart size={18} color="var(--accent)" /><h3>Einkaufsliste</h3><span className="badge">{list.data?.open_count ?? 0} offen</span>
+        <div className="card-head"><ShoppingCart size={18} color="var(--accent)" /><h3>{m.shoppingList}</h3><span className="badge">{m.openCount(list.data?.open_count ?? 0)}</span>
           <span className="spacer" />
           <label className="row muted" style={{ gap: 6, fontSize: 13, cursor: "pointer" }}>
-            <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />erledigte zeigen
+            <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />{m.showDone}
           </label>
         </div>
         <div className="card-body">
           <form className="row-wrap" style={{ gap: 8, marginBottom: 12 }} onSubmit={(e) => { e.preventDefault(); if (name.trim()) add.mutate(); }}>
-            <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder="Artikel hinzufügen" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
-            <button className="btn" type="submit" disabled={!name.trim() || add.isPending}><Plus size={15} />Hinzufügen</button>
+            <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder={m.addPlaceholder} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+            <button className="btn" type="submit" disabled={!name.trim() || add.isPending}><Plus size={15} />{m.add}</button>
           </form>
-          {!items.length ? <span className="muted">Die Liste ist leer.</span> : items.map((i) => (
+          {!items.length ? <span className="muted">{m.listEmpty}</span> : items.map((i) => (
             <div key={i.id} className={`shop-row ${i.done ? "done" : ""}`}>
-              <input type="checkbox" checked={i.done} onChange={(e) => upd.mutate({ id: i.id, done: e.target.checked })} title={i.done ? "wieder offen" : "erledigt"} />
+              <input type="checkbox" checked={i.done} onChange={(e) => upd.mutate({ id: i.id, done: e.target.checked })} title={i.done ? m.reopen : m.markDone} />
               <span className="name" style={{ flex: 1, minWidth: 0 }}>{i.name}{i.note ? <span className="muted"> – {i.note}</span> : null}</span>
-              <span className="muted row" style={{ gap: 6, fontSize: 12 }}>{SOURCE_ICON[i.source]}{fmtAgo(i.done_at ?? i.created_at)}</span>
-              <button className="btn btn-ghost btn-icon btn-sm" title="Entfernen" onClick={() => del.mutate(i.id)}><Trash2 size={14} /></button>
+              <span className="muted row" style={{ gap: 6, fontSize: 12 }}><SourceIcon source={i.source} />{fmtAgo(i.done_at ?? i.created_at)}</span>
+              <button className="btn btn-ghost btn-icon btn-sm" title={m.remove} aria-label={m.remove} onClick={() => del.mutate(i.id)}><Trash2 size={14} /></button>
             </div>
           ))}
           {settings.data && !settings.data.shopping_list_auto && (
-            <div className="hint muted" style={{ fontSize: 12, marginTop: 8 }}>Automatische Einträge sind ausgeschaltet (Einstellungen → Sensoren und Vorräte).</div>
+            <div className="hint muted" style={{ fontSize: 12, marginTop: 8 }}>{m.autoOff}</div>
           )}
         </div>
       </div>
       {!supplies.length ? (
-        <div className="card"><Empty icon={<Package size={44} />} title="Noch keine Vorräte"
-          text={<>Legen Sie unter <Link to="/admin/sensoren">Administration → Sensoren</Link> einen Sensor mit „Vorrat“ an – z. B. Flaschen im
-            Regal zählen, den Füllstand einer Obstschale mit Referenzbildern „voll/halb/leer“ vergleichen oder das Bildmodell kleine Mengen
-            zählen lassen („How many eggs?“). Knappe Vorräte landen dann automatisch auf der Einkaufsliste.</>} /></div>
+        <div className="card"><Empty icon={<Package size={44} />} title={m.noSupplies}
+          text={<>{m.emptyBefore}<Link to="/admin/sensoren">{m.emptyLink}</Link>{m.emptyAfter}</>} /></div>
       ) : (
         <div className="supply-grid">{supplies.map((s) => <SupplyCard key={s.id} s={s} />)}</div>
       )}
       <div className="hint muted" style={{ fontSize: 12, marginTop: 12 }}>
-        Die Messung ist eine Schätzung: verdeckte hintere Reihen, Spiegelungen und unbekannte Verpackungen können das Ergebnis verfälschen.
-        Steht eine Person im Bereich, wird nicht gemessen.
+        {m.estimateNote}
       </div>
     </div>
   );

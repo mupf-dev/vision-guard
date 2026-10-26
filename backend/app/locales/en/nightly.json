@@ -1,1 +1,78 @@
-{}
+{
+  "aborted_restart": "Aborted (backend restart)",
+  "notify_title": "Night run (faces)",
+  "err": {
+    "running": "A night run is already in progress",
+    "report_not_found": "Report not found",
+    "only_done_preview": "Only a finished dry run can be applied",
+    "already_applied": "This dry run has already been applied"
+  },
+  "skip": {
+    "target_gone": "Target no longer exists",
+    "target_locked": "Target has learning lock (review only)",
+    "source_gone": "Source no longer exists",
+    "source_named": "Source has been named in the meantime",
+    "source_locked": "Source has been locked in the meantime",
+    "pair_rejected": "Pair was answered with “No”",
+    "source_no_features": "Source has no face features",
+    "score_now": "Similarity now {score} (below {min})",
+    "direct_now": "Similarity to target now {score}",
+    "target_locked_now": "Target locked in the meantime",
+    "source_named_or_locked": "Source {id} named or locked in the meantime",
+    "pair_rejected_ids": "Pair {src}/{dst} was answered with “No”",
+    "both_named": "Both named in the meantime",
+    "identity_gone": "Identity no longer exists",
+    "review_not_created": "Reviews off, limit reached or pair already asked",
+    "locked": "Learning lock active",
+    "samples_changed": "Images changed in the meantime",
+    "no_longer_named": "No longer named",
+    "cleanup_changed": "Named, locked, seen or given events in the meantime",
+    "error": "Error: {error}"
+  },
+  "text": {
+    "preview": {
+      "prefix": "Dry run: {parts}.",
+      "merges": {
+        "one": "1 fragment would be merged",
+        "other": "{n} fragments would be merged"
+      },
+      "reviews": {
+        "one": "1 review would be asked",
+        "other": "{n} reviews would be asked"
+      },
+      "curated": "gallery of {names} would be updated",
+      "thresholds": {
+        "one": "1 per-person threshold would be adjusted",
+        "other": "{n} per-person thresholds would be adjusted"
+      },
+      "cleanup": {
+        "one": "1 old single-image fragment would be deleted",
+        "other": "{n} old single-image fragments would be deleted"
+      }
+    },
+    "done": {
+      "prefix": "Night run: {parts}.",
+      "merges": {
+        "one": "1 fragment merged",
+        "other": "{n} fragments merged"
+      },
+      "reviews": {
+        "one": "1 review",
+        "other": "{n} reviews"
+      },
+      "curated": "gallery of {names} updated",
+      "thresholds": {
+        "one": "1 per-person threshold adjusted",
+        "other": "{n} per-person thresholds adjusted"
+      },
+      "cleanup": {
+        "one": "1 old single-image fragment deleted",
+        "other": "{n} old single-image fragments deleted"
+      }
+    },
+    "merge_targets": " (incl. into {names})",
+    "nothing": "nothing to do",
+    "skipped": "{n} skipped",
+    "aborted_suffix": " (aborted)"
+  }
+}

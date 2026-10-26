@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from .. import settings_store, state
+from .. import i18n, settings_store, state
 from ..models import utcnow
 from ..schemas import iso
 
@@ -59,7 +59,7 @@ def _mqtt(report: dict[str, Any], date: str, counts: dict[str, int]) -> dict[str
     from ..mqtt_bus import bus   # zyklischen Import vermeiden
 
     if not bus.client or not state.mqtt_connected:
-        return _err("MQTT nicht verbunden")
+        return _err(i18n.t("report.deliver.mqtt_not_connected"))
     prefix = settings_store.get().get("mqtt_prefix") or "visionguard"
     try:
         bus.publish(f"{prefix}/report", {"date": date, "text": report["text"], "report_id": report["id"],
@@ -77,12 +77,12 @@ def _push(report: dict[str, Any], title: str) -> dict[str, Any]:
                              data={"report_id": report["id"], "generator": report.get("generator")},
                              dedup_key=f"report:{report['id']}", dedup_s=60)
     if n is None:
-        return _err("Hinweis nicht angelegt (Dublette)")
+        return _err(i18n.t("report.deliver.duplicate"))
     targets = len(n.get("delivery") or [])
     if not routes:
-        return _ok(notification_id=n["id"], targets=0, note="kein Push-Ziel für „Tagesbericht“ gewählt")
+        return _ok(notification_id=n["id"], targets=0, note=i18n.t("report.deliver.no_push_target"))
     if not targets:
-        return _err("Push-Ziel(e) unbekannt oder deaktiviert", notification_id=n["id"], targets=0)
+        return _err(i18n.t("report.deliver.push_unknown"), notification_id=n["id"], targets=0)
     return _ok(notification_id=n["id"], targets=targets)
 
 
@@ -94,9 +94,9 @@ def _webhook(url: str, report: dict[str, Any], date: str, counts: dict[str, int]
     try:
         r = httpx.post(url, json=body, timeout=WEBHOOK_TIMEOUT_S, follow_redirects=True)
     except httpx.TimeoutException:
-        return _err(f"keine Antwort binnen {WEBHOOK_TIMEOUT_S} s")
+        return _err(i18n.t("report.deliver.webhook_timeout", s=WEBHOOK_TIMEOUT_S))
     except httpx.HTTPError as e:
-        return _err(f"nicht erreichbar ({type(e).__name__})")
+        return _err(i18n.t("report.deliver.webhook_unreachable", error=type(e).__name__))
     if r.status_code >= 400:
         return _err(f"HTTP {r.status_code}")
     return _ok(status=r.status_code)
@@ -105,7 +105,7 @@ def _webhook(url: str, report: dict[str, Any], date: str, counts: dict[str, int]
 def _mail(to: list[str], report: dict[str, Any], subject: str) -> dict[str, Any]:
     c = smtp_config()
     if not (c["host"] and c["from"]):
-        return _err("SMTP nicht konfiguriert")
+        return _err(i18n.t("report.deliver.smtp_not_configured"))
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = c["from"]
@@ -128,13 +128,13 @@ def _mail(to: list[str], report: dict[str, Any], subject: str) -> dict[str, Any]
                 srv.login(c["user"], c["password"])
             srv.send_message(msg)
     except smtplib.SMTPAuthenticationError:
-        return _err("SMTP-Anmeldung fehlgeschlagen")
+        return _err(i18n.t("report.deliver.smtp_auth"))
     except smtplib.SMTPNotSupportedError:
-        return _err("Server unterstützt STARTTLS nicht (VG_SMTP_STARTTLS=0?)")
+        return _err(i18n.t("report.deliver.smtp_starttls"))
     except smtplib.SMTPException as e:
-        return _err(f"SMTP-Fehler ({type(e).__name__})")
+        return _err(i18n.t("report.deliver.smtp_error", error=type(e).__name__))
     except OSError as e:
-        return _err(f"SMTP nicht erreichbar ({type(e).__name__})")
+        return _err(i18n.t("report.deliver.smtp_unreachable", error=type(e).__name__))
     return _ok(recipients=len(to))
 
 
@@ -156,7 +156,7 @@ def deliver(report: dict[str, Any], *, date: str, counts: dict[str, int], title:
             out[name] = fn()
         except Exception as e:  # noqa: BLE001 – ein Kanal darf die anderen nie stoppen
             log.exception("Bericht %s: Kanal %s fehlgeschlagen", report.get("id"), name)
-            out[name] = _err(f"interner Fehler ({type(e).__name__})")
+            out[name] = _err(i18n.t("report.deliver.internal", error=type(e).__name__))
         if not out[name].get("ok"):
             log.warning("Bericht %s: %s nicht zugestellt – %s", report.get("id"), name, out[name].get("error"))
     return out

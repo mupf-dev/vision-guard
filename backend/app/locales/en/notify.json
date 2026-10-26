@@ -1,1 +1,14 @@
-{}
+{
+  "daily_limit": "Daily limit reached ({limit} pushes per rule)",
+  "secret_reuse": "Server or type of the push target changed – please re-enter the credentials (token/topic/key)",
+  "open_in": "Open in VisionGuard",
+  "push_unknown_type": "Unknown push type: {type}",
+  "push_disabled": "Target disabled",
+  "push_unknown_error": "unknown error",
+  "push_connection_failed": "Connection failed ({error})",
+  "push_error": "Error ({error})",
+  "test_title": "VisionGuard – Test",
+  "test_message": "Test notification: push works.",
+  "action_yes": "Yes",
+  "action_no": "No"
+}

@@ -7,6 +7,8 @@ import type { Camera, NotificationLevel, NotificationSource, PushDelivery, VGNot
 import { fmtAgo, fmtDateTime, parseTs } from "../lib/format";
 import { ConfirmDialog, Dialog, Empty, Img, Loading } from "../components/ui";
 import { toast } from "../lib/store";
+import { itemName } from "../components/ItemTeachDialog";
+import { intlLocale, msgs, useMsgs } from "../i18n";
 
 /**
  * Seite „Hinweise“ (A1): alle proaktiven Meldungen – Regeln mit Bedingungen/Push, Zeit-Regeln, Kamera-Zustand
@@ -14,19 +16,21 @@ import { toast } from "../lib/store";
  * Detailansicht mit großem Bild, betroffenen Gegenständen, Ereignis-Link und Zustellstatus.
  */
 
-export const SOURCE_NAME: Record<NotificationSource, string> = {
-  rule: "Regel", health: "Kamera-Zustand", pet: "Tiere", review: "Rückfrage", report: "Bericht", sensor: "Sensor",
-};
-const LEVEL_NAME: Record<NotificationLevel, string> = { info: "Info", warning: "Warnung", alarm: "Alarm" };
-const PERIODS: { id: string; name: string; hours: number | null }[] = [
-  { id: "", name: "Alle", hours: null }, { id: "24h", name: "24 h", hours: 24 }, { id: "7d", name: "7 Tage", hours: 168 },
-  { id: "30d", name: "30 Tage", hours: 720 },
+const SOURCES: NotificationSource[] = ["rule", "health", "pet", "review", "report", "sensor"];
+const LEVELS: NotificationLevel[] = ["info", "warning", "alarm"];
+const sourceName = (s: string): string => (msgs().notifications.source as Record<string, string>)[s] ?? s;
+const levelName = (l: string): string => (msgs().notifications.level as Record<string, string>)[l] ?? l;
+const PERIODS: { id: string; name: () => string; hours: number | null }[] = [
+  { id: "", name: () => msgs().notifications.periodAll, hours: null },
+  { id: "24h", name: () => msgs().notifications.period24h, hours: 24 },
+  { id: "7d", name: () => msgs().notifications.period7d, hours: 168 },
+  { id: "30d", name: () => msgs().notifications.period30d, hours: 720 },
 ];
 const PAGE = 50;
 
 function DeliveryBadge({ d }: { d: PushDelivery }) {
   const cls = d.status === "sent" ? "ok" : d.status === "failed" ? "bad" : d.status === "skipped" ? "outline" : "warn";
-  const txt = { sent: "zugestellt", failed: "fehlgeschlagen", skipped: "übersprungen", pending: "wird gesendet" }[d.status];
+  const txt = useMsgs().notifications.delivery[d.status];
   return <span className={`badge ${cls}`} title={d.error ?? undefined}><Send size={11} />{d.target}: {txt}</span>;
 }
 
@@ -40,17 +44,19 @@ function dayLabel(ts: string): string {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const day = new Date(d); day.setHours(0, 0, 0, 0);
   const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
-  if (diff === 0) return "Heute";
-  if (diff === 1) return "Gestern";
-  return d.toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" });
+  if (diff === 0) return msgs().notifications.today;
+  if (diff === 1) return msgs().notifications.yesterday;
+  return d.toLocaleDateString(intlLocale(), { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function camName(cams: Camera[], id: number | null) {
   if (id === null) return null;
-  return cams.find((c) => c.id === id)?.name ?? `Kamera ${id}`;
+  return cams.find((c) => c.id === id)?.name ?? msgs().notifications.cameraN(id);
 }
 
 function NotificationDetail({ n, cams, onDelete, onClose }: { n: VGNotification; cams: Camera[]; onDelete: () => void; onClose: () => void }) {
+  const m = useMsgs().notifications;
+  const c = useMsgs().common;
   const items = useQuery({
     queryKey: ["notification-items", n.id, n.item_ids],
     enabled: n.item_ids.length > 0,
@@ -59,10 +65,10 @@ function NotificationDetail({ n, cams, onDelete, onClose }: { n: VGNotification;
   });
   const cam = camName(cams, n.camera_id);
   return (
-    <Dialog size="lg" onClose={onClose} icon={<BellRing size={18} />} title={n.title || "Hinweis"} footer={<>
+    <Dialog size="lg" onClose={onClose} icon={<BellRing size={18} />} title={n.title || m.notification} footer={<>
       <div className="spacer" />
-      <button className="btn btn-ghost" onClick={onDelete}><Trash2 size={15} />Löschen</button>
-      <button className="btn" onClick={onClose}>Schließen</button>
+      <button className="btn btn-ghost" onClick={onDelete}><Trash2 size={15} />{c.delete}</button>
+      <button className="btn" onClick={onClose}>{c.close}</button>
     </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {n.image_url && (
@@ -72,22 +78,22 @@ function NotificationDetail({ n, cams, onDelete, onClose }: { n: VGNotification;
         )}
         {n.message && <div style={{ fontSize: 15 }}>{n.message}</div>}
         <div className="row-wrap" style={{ gap: 8 }}>
-          <span className={`badge ${levelBadge(n)}`}>{LEVEL_NAME[n.level] ?? n.level}</span>
-          <span className="badge outline">{SOURCE_NAME[n.source] ?? n.source}</span>
+          <span className={`badge ${levelBadge(n)}`}>{levelName(n.level)}</span>
+          <span className="badge outline">{sourceName(n.source)}</span>
           <span className="badge outline" title={fmtDateTime(n.ts)}><Clock size={11} />{fmtDateTime(n.ts)}</span>
           {cam && <span className="badge outline"><CamIcon size={11} />{cam}</span>}
-          {n.data?.trigger === "time" && <span className="badge outline">Zeit-Regel</span>}
+          {n.data?.trigger === "time" && <span className="badge outline">{m.timeRule}</span>}
         </div>
         {(n.rule || n.event_id) && (
           <div className="row-wrap" style={{ gap: 8 }}>
-            {n.rule && n.rule_id !== null && <Link className="btn btn-sm" to="/admin/regeln"><Workflow size={14} />Regel „{n.rule}“</Link>}
-            {n.event_id && <Link className="btn btn-sm" to={`/ereignisse?ev=${encodeURIComponent(n.event_id)}`}><ExternalLink size={14} />Ereignis ansehen</Link>}
+            {n.rule && n.rule_id !== null && <Link className="btn btn-sm" to="/admin/regeln"><Workflow size={14} />{m.ruleLink(n.rule)}</Link>}
+            {n.event_id && <Link className="btn btn-sm" to={`/ereignisse?ev=${encodeURIComponent(n.event_id)}`}><ExternalLink size={14} />{m.viewEvent}</Link>}
           </div>
         )}
         {n.item_ids.length > 0 && (
           <div>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Betroffene Gegenstände</div>
-            {items.isLoading ? <Loading /> : !items.data?.length ? <div className="muted" style={{ fontSize: 13 }}>Nicht mehr vorhanden.</div> : (
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{m.affectedItems}</div>
+            {items.isLoading ? <Loading /> : !items.data?.length ? <div className="muted" style={{ fontSize: 13 }}>{m.noLongerAvailable}</div> : (
               <div className="row-wrap" style={{ gap: 10 }}>
                 {items.data.map((it) => (
                   <Link key={it.id} to={`/gegenstaende?label=${encodeURIComponent(it.label)}&camera=${it.camera_id}`} className="card"
@@ -96,8 +102,8 @@ function NotificationDetail({ n, cams, onDelete, onClose }: { n: VGNotification;
                       <Img src={it.crop_url} className="cover-img" fallback={<Package size={20} />} />
                     </div>
                     <div style={{ minWidth: 0 }}>
-                      <b>{it.name_de}</b>
-                      <div className="muted" style={{ fontSize: 12 }}>{it.status_text ?? (it.visible ? "aktuell sichtbar" : "nicht sichtbar")}</div>
+                      <b>{itemName(it)}</b>
+                      <div className="muted" style={{ fontSize: 12 }}>{it.status_text ?? (it.visible ? m.visibleNow : m.notVisible)}</div>
                       <div className="muted" style={{ fontSize: 12 }}>{[it.room ?? it.camera_name, ...(it.zone_names ?? [])].filter(Boolean).join(", ")}</div>
                     </div>
                   </Link>
@@ -107,8 +113,8 @@ function NotificationDetail({ n, cams, onDelete, onClose }: { n: VGNotification;
           </div>
         )}
         <div>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Zustellung</div>
-          {!n.delivery.length ? <div className="muted" style={{ fontSize: 13 }}>Kein Push (nur hier angezeigt).</div> : (
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{m.deliveryTitle}</div>
+          {!n.delivery.length ? <div className="muted" style={{ fontSize: 13 }}>{m.noPush}</div> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
               {n.delivery.map((d) => (
                 <div key={d.target} className="row" style={{ gap: 8 }}>
@@ -126,6 +132,8 @@ function NotificationDetail({ n, cams, onDelete, onClose }: { n: VGNotification;
 }
 
 export function NotificationsPage() {
+  const m = useMsgs().notifications;
+  const c = useMsgs().common;
   const qc = useQueryClient();
   const [sp, setSp] = useSearchParams();
   const f = { source: sp.get("source") ?? "", level: sp.get("level") ?? "", rule: sp.get("rule") ?? "", period: sp.get("period") ?? "" };
@@ -153,7 +161,7 @@ export function NotificationsPage() {
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteNotification(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["notifications"] }); setDel(null); setOpen(null); },
-    onError: (e: Error) => toast.error("Löschen fehlgeschlagen", e.message),
+    onError: (e: Error) => toast.error(m.deleteFailed, e.message),
   });
   const items = q.data?.items ?? [];
   const total = q.data?.total ?? 0;
@@ -172,29 +180,29 @@ export function NotificationsPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div><h1>Hinweise</h1><div className="sub">Meldungen aus Regeln, Kamera-Zustand und weiteren Quellen{q.data ? ` · ${total}` : ""}</div></div>
+        <div><h1>{m.title}</h1><div className="sub">{m.subtitle}{q.data ? ` · ${total}` : ""}</div></div>
       </div>
       <div className="row-wrap" style={{ gap: 10, marginBottom: 14 }}>
         <select className="select input-sm" style={{ width: "auto" }} value={f.source} onChange={(e) => setF("source", e.target.value)}>
-          <option value="">Alle Quellen</option>
-          {(Object.keys(SOURCE_NAME) as NotificationSource[]).map((s) => <option key={s} value={s}>{SOURCE_NAME[s]}</option>)}
+          <option value="">{m.allSources}</option>
+          {SOURCES.map((s) => <option key={s} value={s}>{m.source[s]}</option>)}
         </select>
         <select className="select input-sm" style={{ width: "auto" }} value={f.level} onChange={(e) => setF("level", e.target.value)}>
-          <option value="">Alle Stufen</option>
-          {(Object.keys(LEVEL_NAME) as NotificationLevel[]).map((s) => <option key={s} value={s}>{LEVEL_NAME[s]}</option>)}
+          <option value="">{m.allLevels}</option>
+          {LEVELS.map((s) => <option key={s} value={s}>{m.level[s]}</option>)}
         </select>
         <select className="select input-sm" style={{ width: "auto", maxWidth: 240 }} value={f.rule} onChange={(e) => setF("rule", e.target.value)}>
-          <option value="">Alle Regeln</option>
+          <option value="">{m.allRules}</option>
           {(rules.data ?? []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select>
         <div className="seg">
-          {PERIODS.map((p) => <button key={p.id} className={f.period === p.id ? "on" : ""} onClick={() => setF("period", p.id)}>{p.name}</button>)}
+          {PERIODS.map((p) => <button key={p.id} className={f.period === p.id ? "on" : ""} onClick={() => setF("period", p.id)}>{p.name()}</button>)}
         </div>
-        {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => setSp(new URLSearchParams(), { replace: true })}><RotateCcw size={14} />Zurücksetzen</button>}
+        {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => setSp(new URLSearchParams(), { replace: true })}><RotateCcw size={14} />{m.reset}</button>}
       </div>
       {q.isLoading ? <Loading /> : !items.length ? (
-        <Empty icon={<BellRing size={28} />} title={hasFilter ? "Keine passenden Hinweise" : "Keine Hinweise"}
-          text="Hinweise entstehen durch Regeln mit der Aktion „Push“ oder mit Bedingungen („Nur wenn …“), durch Zeit-Regeln sowie durch Warnungen zum Kamera-Zustand." />
+        <Empty icon={<BellRing size={28} />} title={hasFilter ? m.noMatching : m.none}
+          text={m.emptyText} />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {groups.map((g) => (
@@ -208,19 +216,19 @@ export function NotificationsPage() {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                        <b>{n.title || "Hinweis"}</b>
-                        <span className={`badge ${levelBadge(n)}`}>{SOURCE_NAME[n.source] ?? n.source}</span>
-                        {n.rule && n.source === "rule" && n.rule !== n.title && <span className="muted">Regel: {n.rule}</span>}
+                        <b>{n.title || m.notification}</b>
+                        <span className={`badge ${levelBadge(n)}`}>{sourceName(n.source)}</span>
+                        {n.rule && n.source === "rule" && n.rule !== n.title && <span className="muted">{m.ruleColon(n.rule)}</span>}
                       </div>
                       {n.message && <div style={{ marginTop: 4 }}>{n.message}</div>}
                       <div className="row muted" style={{ gap: 12, marginTop: 6, fontSize: 12, flexWrap: "wrap" }}>
                         <span className="row" style={{ gap: 4 }} title={fmtDateTime(n.ts)}><Clock size={12} />{fmtAgo(n.ts)}</span>
                         {n.camera_id !== null && <span className="row" style={{ gap: 4 }}><CamIcon size={12} />{camName(camList, n.camera_id)}</span>}
-                        {n.item_ids.length > 0 && <span className="row" style={{ gap: 4 }}><Package size={12} />{n.item_ids.length === 1 ? "1 Gegenstand" : `${n.item_ids.length} Gegenstände`}</span>}
+                        {n.item_ids.length > 0 && <span className="row" style={{ gap: 4 }}><Package size={12} />{m.itemCount(n.item_ids.length)}</span>}
                         {n.delivery.map((d) => <DeliveryBadge key={d.target} d={d} />)}
                       </div>
                     </div>
-                    <button className="btn btn-ghost btn-icon btn-sm" title="Hinweis löschen" onClick={(e) => { e.stopPropagation(); setDel(n); }}><Trash2 size={15} /></button>
+                    <button className="btn btn-ghost btn-icon btn-sm" title={m.deleteNotification} aria-label={m.deleteNotification} onClick={(e) => { e.stopPropagation(); setDel(n); }}><Trash2 size={15} /></button>
                   </div>
                 </div>
               ))}
@@ -228,14 +236,14 @@ export function NotificationsPage() {
           ))}
           {total > items.length && (
             <button className="btn" style={{ alignSelf: "center" }} disabled={q.isFetching} onClick={() => setLimit((l) => l + PAGE)}>
-              {q.isFetching && <span className="spinner" />}Weitere laden ({total - items.length})
+              {q.isFetching && <span className="spinner" />}{m.loadMore(total - items.length)}
             </button>
           )}
         </div>
       )}
       {open && <NotificationDetail n={open} cams={camList} onDelete={() => setDel(open)} onClose={() => setOpen(null)} />}
       {del && (
-        <ConfirmDialog title="Hinweis löschen?" text={`„${del.title}“ vom ${fmtDateTime(del.ts)} wird entfernt.`}
+        <ConfirmDialog title={m.deleteTitle} confirmLabel={c.delete} text={m.deleteText(del.title, fmtDateTime(del.ts))}
           busy={remove.isPending} onConfirm={() => remove.mutate(del.id)} onClose={() => setDel(null)} />
       )}
     </div>

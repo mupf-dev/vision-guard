@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from . import go2rtc, media_sign, notifications, registry, rules, settings_store, state, tv
+from . import go2rtc, i18n, media_sign, notifications, registry, rules, settings_store, state, tv
 from .db import SessionLocal
 from .models import KV, Event, Identity, utcnow
 from .rules import TrackState
@@ -900,9 +900,8 @@ class Processor:
                         datetime.fromtimestamp(float(c.get("due") or 0), timezone.utc).isoformat())
             try:
                 notifications.create(
-                    source="rule", level="warning", title=f"Regel „{c.get('rule')}“: Prüfung entfallen",
-                    message="Die verzögerte Bedingungsprüfung fiel in einen Neustart des Systems und wurde nicht "
-                            "ausgeführt.", rule_id=c.get("rule_id"), rule_name=c.get("rule"),
+                    source="rule", level="warning", title=i18n.t("rules.notify.check_lost_title", rule=c.get("rule")),
+                    message=i18n.t("rules.notify.check_lost_message"), rule_id=c.get("rule_id"), rule_name=c.get("rule"),
                     camera_id=c.get("camera_id"), push_enabled=False)
             except Exception:  # noqa: BLE001
                 log.exception("Hinweis zu entfallener Prüfung nicht angelegt")
@@ -978,7 +977,7 @@ class Processor:
             want = opts.get("state") or "on"
             if want != "any" and want != new_state:
                 continue
-            ctx = {"sensor": sensor.get("name") or f"Sensor {sid}", "sensor_state": rules.sensor_state_de(new_state)}
+            ctx = {"sensor": sensor.get("name") or i18n.t("rules.sensor_n", id=sid), "sensor_state": rules.sensor_state_de(new_state)}
             cam_id = sensor.get("camera_id")
             image = sensor.get("snapshot_path")
             _cond_pool.submit(self._run_eventless_safe, int(rule["id"]), "sensor", ctx, cam_id, image,
@@ -1154,7 +1153,8 @@ def _cond_message(ctx: dict[str, Any]) -> str:
     if ctx.get("sensor"):
         parts.append(f"{ctx['sensor']}: {ctx.get('sensor_state') or ''}".rstrip(": "))
     if not parts and ctx.get("label"):
-        parts.append(f"{ctx['label']} an {ctx.get('camera') or 'Kamera'}")
+        parts.append(i18n.t("rules.notify.label_at_camera", label=i18n.label(str(ctx["label"])),
+                            camera=ctx.get("camera") or i18n.t("rules.camera")))
     return " · ".join(parts)
 
 

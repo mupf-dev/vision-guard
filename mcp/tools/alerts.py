@@ -15,9 +15,7 @@ import re
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
-from .common import READ_ONLY, WRITE, BackendError, api, api_send, fail, fmt_ago, fmt_time, n_de, ok, require_write
-
-POSTURE_DE = {"lying": "liegt", "sitting": "sitzt", "standing": "steht"}
+from .common import READ_ONLY, WRITE, BackendError, api, api_send, fail, fmt_ago, fmt_time, mapped, ok, require_write, t
 _EVENT_ID = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 
 
@@ -39,31 +37,31 @@ def compact_alert(e: dict) -> dict:
 
 
 def alert_sentence(a: dict) -> str:
-    who = "Person" if a.get("label") == "person" else (a.get("label") or "Objekt")
-    what = POSTURE_DE.get(a.get("posture") or "", "")
+    who = mapped("common.labels", a.get("label"), a.get("label") or t("alerts.object"))
+    what = mapped("alerts.posture", a.get("posture"), "")
     head = f"{who} {what} " if what else f"{who}: "
-    text = (f"{head}seit {fmt_time(a.get('since'))} ({fmt_ago(a.get('since'))}) an Kamera {a.get('camera_name') or '?'}"
-            f" – Regel „{a.get('rule') or '?'}“")
+    text = head + t("alerts.sentence", time=fmt_time(a.get("since")), ago=fmt_ago(a.get("since")),
+                    camera=a.get("camera_name") or "?", rule=a.get("rule") or "?")
     if a.get("repeat"):
-        text += f", {n_de(a['repeat'], 'Wiederholung', 'Wiederholungen')}"
+        text += ", " + t("alerts.n_repeats", n=a["repeat"])
     if a.get("acknowledged_at"):
-        text += f", quittiert {fmt_time(a['acknowledged_at'])}"
+        text += ", " + t("alerts.acknowledged", time=fmt_time(a["acknowledged_at"]))
     elif not a.get("active"):
-        text += ", beendet (nicht quittiert)"
+        text += ", " + t("alerts.ended_unacknowledged")
     else:
-        text += ", NICHT quittiert"
+        text += ", " + t("alerts.not_acknowledged")
     text += f" [event_id {a.get('event_id')}]"
     if a.get("snapshot_url"):
-        text += f" Bild: {a['snapshot_url']}"
+        text += " " + t("common.image", url=a["snapshot_url"])
     return text
 
 
 def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def list_alerts(ctx: Context, active_only: bool = True, limit: int = 10) -> CallToolResult:
-        """Listet Notfälle von VisionGuard, z. B. „Person liegt am Boden“ (Sturzerkennung) oder Regeln mit
-        Wiederholung bis zur Quittierung. `active_only=True` (Standard): nur laufende, noch nicht quittierte;
-        `False`: auch beendete/quittierte, neueste zuerst. Quittieren mit `acknowledge_alert(event_id)`."""
+        """List VisionGuard alerts (emergencies), e.g. "person lying on the floor" (fall detection) or rules that
+        repeat until acknowledged. `active_only=True` (default): only ongoing, not yet acknowledged ones;
+        `False`: also ended/acknowledged ones, newest first. Acknowledge with `acknowledge_alert(event_id)`."""
         try:
             limit = max(1, min(int(limit), 50))
             params = {"alert": "true", "limit": limit, "signed": 1}
@@ -73,10 +71,10 @@ def register(mcp: MCPServer) -> None:
             items = [compact_alert(e) for e in data.get("items", [])]
             total = int(data.get("total", len(items)))
             if not items:
-                msg = "Keine offenen Notfälle." if active_only else "Keine Notfälle gespeichert."
+                msg = t("alerts.none_open") if active_only else t("alerts.none_stored")
                 return ok(msg, {"total": 0, "items": []})
-            head = n_de(total, "offener Notfall", "offene Notfälle") if active_only else n_de(total, "Notfall", "Notfälle")
-            lines = [head + (f", die neuesten {len(items)}:" if total > len(items) else ":")]
+            head = t("alerts.n_open", n=total) if active_only else t("alerts.n_alerts", n=total)
+            lines = [head + (t("common.newest", n=len(items)) if total > len(items) else ":")]
             lines += [f"- {alert_sentence(a)}" for a in items]
             return ok("\n".join(lines), {"total": total, "items": items})
         except BackendError as e:
@@ -84,16 +82,16 @@ def register(mcp: MCPServer) -> None:
 
     @mcp.tool(annotations=WRITE)
     async def acknowledge_alert(ctx: Context, event_id: str) -> CallToolResult:
-        """Quittiert einen Notfall (Event aus `list_alerts`): stoppt weitere Wiederholungen/Benachrichtigungen.
-        Braucht einen API-Key mit Schreibrecht. Mehrfaches Quittieren ist unschädlich."""
+        """Acknowledge an alert (event from `list_alerts`): stops further repetitions/notifications.
+        Requires an API key with write permission. Acknowledging more than once is harmless."""
         try:
             eid = (event_id or "").strip()
             if not _EVENT_ID.match(eid):
-                return fail("Ungültige event_id.")
+                return fail(t("alerts.bad_event_id"))
             await require_write(ctx)
-            ev = await api_send(ctx, "POST", f"/events/{eid}/ack", not_found=f"Ereignis {eid} ist unbekannt.")
+            ev = await api_send(ctx, "POST", f"/events/{eid}/ack", not_found=t("alerts.unknown_event", id=eid))
             a = compact_alert(ev or {})
-            return ok(f"Quittiert um {fmt_time(a.get('acknowledged_at'))}: {alert_sentence(a)}",
+            return ok(t("alerts.acknowledged_at", time=fmt_time(a.get("acknowledged_at")), text=alert_sentence(a)),
                       {"event_id": eid, "acknowledged_at": (ev or {}).get("acknowledged_at")})
         except BackendError as e:
             return fail(str(e))

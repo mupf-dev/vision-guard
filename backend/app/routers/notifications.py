@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import notifications, push, settings_store
+from .. import i18n, notifications, push, settings_store
 from ..auth import require_user
 from ..db import get_db
 from ..models import Notification
@@ -57,14 +57,14 @@ def list_notifications(
 def get_notification(notification_id: int, signed: bool = False, db: Session = Depends(get_db)):
     n = db.get(Notification, notification_id)
     if n is None:
-        raise HTTPException(404, "Hinweis nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.notification_not_found"))
     return notification_json(n)
 
 
 @router.delete("/notifications/{notification_id}", status_code=204)
 async def delete_notification(notification_id: int):
     if not await run_in_threadpool(notifications.delete, notification_id):
-        raise HTTPException(404, "Hinweis nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.notification_not_found"))
     return Response(status_code=204)
 
 
@@ -83,10 +83,11 @@ async def push_test(body: PushTestIn):
     elif body.target:
         target = next((t for t in stored if t.get("id") == body.target), None)
         if target is None:
-            raise HTTPException(404, f"Push-Ziel „{body.target}“ nicht gefunden")
+            raise HTTPException(404, i18n.t("errors.push_target_not_found", target=body.target))
         target = {**target, "enabled": True}
     else:
-        raise HTTPException(422, "target oder config angeben")
-    msg = push.PushMessage(title=body.title, message=body.message, tags=["white_check_mark"])
+        raise HTTPException(422, i18n.t("errors.push_test_target_or_config"))
+    msg = push.PushMessage(title=body.title or i18n.t("notify.test_title"),
+                           message=body.message or i18n.t("notify.test_message"), tags=["white_check_mark"])
     res = await run_in_threadpool(push.send, target, msg)
     return {"ok": bool(res.get("ok")), "error": res.get("error"), "target": target.get("id")}

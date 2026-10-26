@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from . import i18n
 from .config import DEFAULT_INVENTORY_VOCABULARY, DEFAULT_LABELS
 
 # ---------------------------------------------------------------- Auth
@@ -43,11 +44,11 @@ class Zone(BaseModel):
     def _poly(cls, v: list[list[float]]) -> list[list[float]]:
         for p in v:
             if len(p) != 2:
-                raise ValueError("Polygonpunkte müssen [x,y] sein")
+                raise ValueError(i18n.t("errors.polygon_points"))
             if not all(-0.001 <= c <= 1.001 for c in p):
-                raise ValueError("Koordinaten müssen normiert (0..1) sein")
+                raise ValueError(i18n.t("errors.coords_normalized"))
         if v and len(v) < 3:
-            raise ValueError("Polygon braucht mindestens 3 Punkte")
+            raise ValueError(i18n.t("errors.polygon_min_points"))
         return v
 
 
@@ -61,7 +62,7 @@ class InventorySuppress(BaseModel):
     @classmethod
     def _bbox(cls, v: list[float]) -> list[float]:
         if not all(-0.001 <= c <= 1.001 for c in v) or v[2] <= v[0] or v[3] <= v[1]:
-            raise ValueError("bbox muss normiert [x1,y1,x2,y2] sein")
+            raise ValueError(i18n.t("errors.bbox_normalized"))
         return [round(float(c), 4) for c in v]
 
 
@@ -109,9 +110,9 @@ class CameraIn(BaseModel):
     def _label_scores(cls, v: dict[str, float]) -> dict[str, float]:
         for k, x in v.items():
             if not re.match(r"^[a-z0-9_]{1,40}$", str(k)):
-                raise ValueError(f"Ungültiger Gegenstands-Schlüssel: {k}")
+                raise ValueError(i18n.t("errors.invalid_item_key", key=k))
             if not 0.05 <= float(x) <= 0.95:
-                raise ValueError("Schwelle je Gegenstand muss zwischen 0.05 und 0.95 liegen")
+                raise ValueError(i18n.t("errors.item_threshold_range"))
         return {str(k): round(float(x), 3) for k, x in v.items()}
 
     @field_validator("room")
@@ -129,7 +130,7 @@ class CameraIn(BaseModel):
     def _unique_zone_ids(cls, v: list[Zone]) -> list[Zone]:
         ids = [z.id for z in v]
         if len(ids) != len(set(ids)):
-            raise ValueError("Zonen-IDs müssen eindeutig sein")
+            raise ValueError(i18n.t("errors.zone_ids_unique"))
         return v
 
 
@@ -165,14 +166,14 @@ class Schedule(BaseModel):
     @classmethod
     def _days(cls, v: list[int]) -> list[int]:
         if any(d < 0 or d > 6 for d in v):
-            raise ValueError("Tage 0..6 (0=Mo)")
+            raise ValueError(i18n.t("errors.days_range"))
         return sorted(set(v))
 
     @field_validator("start", "end")
     @classmethod
     def _time(cls, v: str) -> str:
         if not _TIME_RE.match(v):
-            raise ValueError("Zeit im Format HH:MM")
+            raise ValueError(i18n.t("errors.time_format"))
         return v
 
 
@@ -318,7 +319,7 @@ class TimeTriggerOptions(BaseModel):
     @classmethod
     def _at(cls, v: str) -> str:
         if not _TIME_RE.match(v):
-            raise ValueError("Zeit im Format HH:MM")
+            raise ValueError(i18n.t("errors.time_format"))
         h, m = v.split(":")
         return f"{int(h):02d}:{m}"
 
@@ -380,7 +381,7 @@ class CondInventoryUntouched(BaseModel):
     @classmethod
     def _since(cls, v: str) -> str:
         if not _TIME_RE.match(v):
-            raise ValueError("Zeit im Format HH:MM")
+            raise ValueError(i18n.t("errors.time_format"))
         return v
 
 
@@ -422,7 +423,7 @@ class RuleIn(BaseModel):
     @classmethod
     def _repeat(cls, v: float) -> float:
         if 0 < v < 10:
-            raise ValueError("repeat_s muss 0 oder mindestens 10 s sein")
+            raise ValueError(i18n.t("errors.repeat_s_min"))
         return v
 
     @field_validator("actions", "conditions", mode="before")
@@ -471,9 +472,9 @@ class InventoryVocabEntry(BaseModel):
     def _prompts(cls, v: list[str]) -> list[str]:
         v = [p.strip() for p in v if p and p.strip()]
         if not v:
-            raise ValueError("Mindestens ein Prompt nötig")
+            raise ValueError(i18n.t("errors.prompt_required"))
         if any(len(p) > 60 for p in v):
-            raise ValueError("Prompt höchstens 60 Zeichen")
+            raise ValueError(i18n.t("errors.prompt_max_60"))
         return v
 
 
@@ -526,7 +527,7 @@ class PushTarget(BaseModel):
         if not v:
             return None
         if not re.match(r"^https?://[^\s/]+", v):
-            raise ValueError("Server muss mit http:// oder https:// beginnen")
+            raise ValueError(i18n.t("errors.server_url_scheme"))
         return v
 
     @field_validator("topic", "token", "user_key", "app_token")
@@ -538,9 +539,9 @@ class PushTarget(BaseModel):
     def _required(self) -> "PushTarget":
         if self.type == "ntfy":
             if not self.topic or not re.match(r"^[A-Za-z0-9_-]{1,64}$", self.topic):
-                raise ValueError("ntfy braucht ein Topic (Buchstaben, Ziffern, _ und -)")
+                raise ValueError(i18n.t("errors.ntfy_topic_required"))
         elif not (self.user_key and self.app_token):
-            raise ValueError("Pushover braucht User-Key und App-Token")
+            raise ValueError(i18n.t("errors.pushover_keys_required"))
         return self
 
 
@@ -574,7 +575,7 @@ class ReportChannels(BaseModel):
             return None
         v = v.strip()
         if not re.match(r"^https?://[^\s/]+", v):
-            raise ValueError("Webhook-URL muss mit http:// oder https:// beginnen")
+            raise ValueError(i18n.t("errors.webhook_url_scheme"))
         return v
 
     @field_validator("mail_to")
@@ -586,7 +587,7 @@ class ReportChannels(BaseModel):
             if not m:
                 continue
             if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", m):
-                raise ValueError(f"Ungültige Mail-Adresse: {m}")
+                raise ValueError(i18n.t("errors.invalid_email", address=m))
             out.append(m)
         return out
 
@@ -689,7 +690,7 @@ class SettingsModel(BaseModel):
     @classmethod
     def _nightly_time(cls, v: str) -> str:
         if not _TIME_RE.match(v or ""):
-            raise ValueError("nightly_time im Format HH:MM")
+            raise ValueError(i18n.t("errors.field_time_format", field="nightly_time"))
         h, m = v.split(":")
         return f"{int(h):02d}:{m}"
 
@@ -705,12 +706,12 @@ class SettingsModel(BaseModel):
             return {"food": 5, "water": 3, "litter": 10}
         unknown = [k for k in v if k not in PET_PURPOSES]
         if unknown:
-            raise ValueError(f"Unbekannter Zweck: {', '.join(map(str, unknown))} (erlaubt: food, water, litter)")
+            raise ValueError(i18n.t("errors.unknown_purpose", purposes=", ".join(map(str, unknown))))
         out = {"food": 5.0, "water": 3.0, "litter": 10.0}
         for k, x in v.items():
             x = float(x)
             if not 0 <= x <= 600:
-                raise ValueError("Mindestdauer je Zweck 0..600 s")
+                raise ValueError(i18n.t("errors.purpose_min_duration"))
             out[k] = x
         return out
 
@@ -718,7 +719,7 @@ class SettingsModel(BaseModel):
     @classmethod
     def _report_time(cls, v: str) -> str:
         if not _TIME_RE.match(v or ""):
-            raise ValueError("report_time im Format HH:MM")
+            raise ValueError(i18n.t("errors.field_time_format", field="report_time"))
         h, m = v.split(":")
         return f"{int(h):02d}:{m}"
 
@@ -726,7 +727,7 @@ class SettingsModel(BaseModel):
     @classmethod
     def _report_days(cls, v: list[int]) -> list[int]:
         if any(d < 0 or d > 6 for d in v):
-            raise ValueError("Tage 0..6 (0=Mo)")
+            raise ValueError(i18n.t("errors.days_range"))
         return sorted(set(v))
 
     @field_validator("llm_base_url")
@@ -738,7 +739,7 @@ class SettingsModel(BaseModel):
         if not v:
             return None
         if not re.match(r"^https?://[^\s/]+", v):
-            raise ValueError("llm_base_url muss mit http:// oder https:// beginnen")
+            raise ValueError(i18n.t("errors.field_url_scheme", field="llm_base_url"))
         return v
 
     @field_validator("llm_model")
@@ -751,7 +752,7 @@ class SettingsModel(BaseModel):
     def _targets_unique(cls, v: list[PushTarget]) -> list[PushTarget]:
         ids = [t.id for t in v]
         if len(ids) != len(set(ids)):
-            raise ValueError("Push-Ziel-IDs müssen eindeutig sein")
+            raise ValueError(i18n.t("errors.push_target_ids_unique"))
         return v
 
     @field_validator("notify_routes", mode="before")
@@ -761,7 +762,7 @@ class SettingsModel(BaseModel):
             return _default_routes()
         unknown = [k for k in v if k not in NOTIFY_ROUTE_SOURCES]
         if unknown:
-            raise ValueError(f"Unbekannte Quelle in notify_routes: {', '.join(map(str, unknown))}")
+            raise ValueError(i18n.t("errors.notify_routes_unknown", sources=", ".join(map(str, unknown))))
         return {k: [str(x) for x in (v.get(k) or [])] for k in NOTIFY_ROUTE_SOURCES}
 
     @field_validator("weather_location", mode="before")
@@ -774,7 +775,7 @@ class SettingsModel(BaseModel):
     def _vocab_unique(cls, v: list[InventoryVocabEntry]) -> list[InventoryVocabEntry]:
         labels = [e.label for e in v]
         if len(labels) != len(set(labels)):
-            raise ValueError("Vokabular-Schlüssel (label) müssen eindeutig sein")
+            raise ValueError(i18n.t("errors.vocab_labels_unique"))
         return v
 
     @field_validator("public_base_url", "tv_stream_base_url")
@@ -786,7 +787,7 @@ class SettingsModel(BaseModel):
         if not v:
             return None
         if not re.match(r"^https?://[^\s/]+", v):
-            raise ValueError(f"{info.field_name} muss mit http:// oder https:// beginnen")
+            raise ValueError(i18n.t("errors.field_url_scheme", field=info.field_name))
         return v
 
     @field_validator("language")
@@ -795,7 +796,7 @@ class SettingsModel(BaseModel):
         from . import i18n
         code = i18n.normalize(v)
         if code is None:
-            raise ValueError(f"Unbekannte Sprache: {v} (verfügbar: {', '.join(i18n.available())})")
+            raise ValueError(i18n.t("errors.unknown_language", lang=v, available=", ".join(i18n.available())))
         return code
 
     @field_validator("tv_targets")
@@ -803,7 +804,7 @@ class SettingsModel(BaseModel):
     def _tv_unique(cls, v: list[TvTarget]) -> list[TvTarget]:
         ids = [t.id for t in v]
         if len(ids) != len(set(ids)):
-            raise ValueError("Fernseher-IDs müssen eindeutig sein")
+            raise ValueError(i18n.t("errors.tv_ids_unique"))
         return v
 
     @field_validator("mqtt_prefix")
@@ -811,7 +812,7 @@ class SettingsModel(BaseModel):
     def _prefix(cls, v: str) -> str:
         v = v.strip().strip("/")
         if not v or "#" in v or "+" in v:
-            raise ValueError("Ungültiger MQTT-Präfix")
+            raise ValueError(i18n.t("errors.mqtt_prefix_invalid"))
         return v
 
 
@@ -908,8 +909,8 @@ class PushTestIn(BaseModel):
     "***" wird durch den gespeicherten Wert desselben Ziels ersetzt)."""
     target: Optional[str] = Field(None, max_length=40)
     config: Optional[dict[str, Any]] = None
-    title: str = Field("VisionGuard – Test", max_length=200)
-    message: str = Field("Test-Benachrichtigung: Push funktioniert.", max_length=1000)
+    title: Optional[str] = Field(None, max_length=200)      # None = Standardtext in der Sprache der Anfrage
+    message: Optional[str] = Field(None, max_length=1000)
 
 
 class HealthReferenceIn(BaseModel):

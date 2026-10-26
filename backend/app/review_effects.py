@@ -43,7 +43,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from . import inventory_names as names
-from . import review, settings_store
+from . import i18n, review, settings_store
 from .config import config
 from .db import SessionLocal
 from .models import KV, Camera, Event, Identity, InventoryExample, InventoryItem, ReviewRequest
@@ -167,11 +167,13 @@ def _on_created(r: dict[str, Any]) -> None:
     base = (st.get("public_base_url") or "").rstrip("/")
     actions = []
     if base:   # Antwort-Knöpfe nur mit erreichbarer Adresse
-        actions = [{"action": "http", "label": "Ja", "url": urls["yes"], "method": "POST", "clear": True},
-                   {"action": "http", "label": "Nein", "url": urls["no"], "method": "POST", "clear": True}]
+        actions = [{"action": "http", "label": i18n.t("notify.action_yes"), "url": urls["yes"], "method": "POST",
+                    "clear": True},
+                   {"action": "http", "label": i18n.t("notify.action_no"), "url": urls["no"], "method": "POST",
+                    "clear": True}]
     where = f" ({r['camera_name']})" if r.get("camera_name") else ""
     try:
-        notifications.create(source="review", level="info", title="Bitte bestätigen",
+        notifications.create(source="review", level="info", title=i18n.t("review.push_title"),
                              message=f"{r['question']}{where}", camera_id=r.get("camera_id"),
                              image_path=_rel(r.get("crop_url")), data={"review_id": r["id"], "kind": r["kind"]},
                              dedup_key=f"review:{r['id']}", dedup_s=60, actions=actions,
@@ -221,7 +223,7 @@ def ask_label(*, camera_id: int, label: str, score: float, threshold: float, bbo
         priority = max(0.0, 1.0 - abs(threshold - score) / max(band, 1e-3))
     return review.create(
         kind="inventory_label", dedup_key=f"lbl:{camera_id}:{label}:{cell_of(bbox)}",
-        question=f"Erkannt als „{name_de(label)}“ – stimmt das?", priority=priority, camera_id=camera_id,
+        question=i18n.t("review.q_label", name=names.vocab_name(label)), priority=priority, camera_id=camera_id,
         label=label, inventory_item_id=inventory_item_id, score=round(float(score), 4),
         threshold=round(float(threshold), 4), bbox=bbox, crop_path=crop_path, snapshot_path=snapshot_path,
         data={"reason": reason})
@@ -297,7 +299,7 @@ def forget_item(item_id: int) -> None:
 def ask_item_identity(row: InventoryItem, ident: Identity, score: float, thr: float, embedding: list[float],
                       crop_path: Optional[str], crop_px: Optional[int]) -> Optional[dict[str, Any]]:
     small = crop_px is not None and crop_px < int(settings_store.get().get("item_min_px", 90))
-    q = f"Ist das „{ident.display_name}“?"
+    q = i18n.t("review.q_instance", name=ident.display_name)
     return review.create(
         kind="inventory_identity", dedup_key=f"inst:{row.id}:{ident.id}", question=q,
         priority=max(0.0, 1.0 - (thr - score) / 0.15) if score < thr else 0.9,
@@ -335,10 +337,10 @@ def _match_job() -> int:
                 .where(IdentitySample.identity_id.in_([src.id, dst_id]), IdentitySample.image_path.is_not(None),
                        IdentitySample.negative.is_(False))
                 .group_by(IdentitySample.identity_id)).all())
-            what = "dieselbe Person" if src.kind == "face" else "dasselbe Tier"
             r = review.create(
                 kind="identity_match", dedup_key=f"idm:{src.id}:{dst_id}",
-                question=f"Ist „{src.display_name}“ {what} wie „{sg['display_name']}“?",
+                question=i18n.t("review.q_match.face" if src.kind == "face" else "review.q_match.pet",
+                                src=src.display_name, dst=sg["display_name"]),
                 priority=float(sg["score"]), identity_id=dst_id, source_identity_id=src.id,
                 score=float(sg["score"]), crop_path=covers.get(src.id), snapshot_path=covers.get(dst_id),
                 data={"identity_kind": src.kind, "target_name": sg["display_name"],
@@ -369,7 +371,7 @@ def tick() -> None:
 def _answer_label(s: Session, r: ReviewRequest, answer: str, correct_label: Optional[str]) -> None:
     vocab = _vocab()
     if correct_label and correct_label not in vocab:
-        raise review.ReviewError(422, f"Unbekannter Gegenstand: {correct_label}")
+        raise review.ReviewError(422, i18n.t("review.err_unknown_item", label=correct_label))
     if correct_label == r.label:
         correct_label = None
     yes = answer == "yes"
@@ -445,7 +447,7 @@ def _answer_identity(s: Session, r: ReviewRequest, answer: str, correct_label: O
     from . import item_identity
     ident = s.get(Identity, r.identity_id) if r.identity_id else None
     if ident is None:
-        raise review.ReviewError(409, "Das Exemplar existiert nicht mehr")
+        raise review.ReviewError(409, i18n.t("review.err_instance_gone"))
     yes = answer == "yes"
     emb = (r.data or {}).get("embedding")
     try:
@@ -476,9 +478,9 @@ def _answer_match(s: Session, r: ReviewRequest, answer: str, correct_label: Opti
     src = s.get(Identity, r.source_identity_id) if r.source_identity_id else None
     dst = s.get(Identity, r.identity_id) if r.identity_id else None
     if src is None or dst is None:
-        raise review.ReviewError(409, "Eine der Identitäten existiert nicht mehr")
+        raise review.ReviewError(409, i18n.t("review.err_identity_gone"))
     if src.kind != dst.kind:
-        raise review.ReviewError(422, "Nur Identitäten gleicher Art können zusammengeführt werden")
+        raise review.ReviewError(422, i18n.t("review.err_kind_mismatch"))
     src_id, kind = src.id, src.kind
     try:
         dst, _ = ident_svc.merge(s, src, dst, None, actor="review")   # committet selbst (inkl. Status der Rückfrage)
@@ -577,7 +579,8 @@ def thresholds(s: Session, camera_id: Optional[int] = None) -> list[dict[str, An
             cur = mins.get(lb)
             auto = cur is None or (lb in auto_vals and abs(float(auto_vals[lb]) - float(cur)) <= 1e-6)
             c = counts.get(lb, [0, 0])
-            out.append({"camera_id": cam.id, "label": lb, "name_de": name_de(lb), "base": round(base, 3),
+            out.append({"camera_id": cam.id, "label": lb, "name_de": name_de(lb), "name": names.vocab_name(lb),
+                        "base": round(base, 3),
                         "current": round(float(cur) if cur is not None else base, 3), "auto": auto,
                         "yes": c[0], "no": c[1]})
     return out

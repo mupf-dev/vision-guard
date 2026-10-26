@@ -26,7 +26,7 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import settings_store
+from . import i18n, settings_store
 from .models import Identity, IdentitySample, InventoryItem, utcnow
 from .util import media_path
 
@@ -74,16 +74,19 @@ def summaries() -> dict[int, dict[str, Any]]:
     """{identity_id: {id, kind:"item", display_name, name, item_label}} aller Exemplare (gecacht)."""
     global _summaries
     with _lock:
-        if _summaries is not None:
-            return _summaries
-    from .db import SessionLocal
-    with SessionLocal() as s:
-        rows = s.scalars(select(Identity).where(Identity.kind == "item")).all()
-        data = {i.id: {"id": i.id, "kind": "item", "display_name": i.display_name, "name": i.name,
-                       "item_label": i.item_label} for i in rows}
-    with _lock:
-        _summaries = data
-    return data
+        data = _summaries
+    if data is None:
+        from .db import SessionLocal
+        with SessionLocal() as s:
+            rows = s.scalars(select(Identity).where(Identity.kind == "item")).all()
+            data = {i.id: {"id": i.id, "kind": "item", "name": i.name, "auto_number": i.auto_number,
+                           "item_label": i.item_label} for i in rows}
+        with _lock:
+            _summaries = data
+    # display_name unbenannter Exemplare („Gegenstand #3“ / "Item #3") je Aufruf in der aktuellen Sprache
+    from . import i18n
+    return {iid: {**d, "display_name": d["name"] or i18n.t("identity.display.item", n=d["auto_number"])}
+            for iid, d in data.items()}
 
 
 def summary(identity_id: Optional[int]) -> Optional[dict[str, Any]]:
@@ -248,7 +251,7 @@ def _store_manual_sample(s: Session, ident: Identity, emb: list[float], image_pa
                          source: str, quality: float, negative: bool = False) -> IdentitySample:
     from .identity import MAX_SAMPLES, prune_samples
     if _manual_count(s, ident.id) >= MAX_SAMPLES:
-        raise SampleError(f"max. {MAX_SAMPLES} Samples – erst alte löschen")
+        raise SampleError(i18n.t("inventory.err_max_samples", n=MAX_SAMPLES))
     smp = IdentitySample(identity_id=ident.id, embedding=[float(x) for x in emb], image_path=image_path,
                          quality=float(quality), manual=True, negative=negative, source=source)
     s.add(smp)
@@ -264,17 +267,17 @@ def add_upload_sample(s: Session, ident: Identity, data: bytes, bbox: Optional[l
     binnen 15 s → `embed_client.EmbedUnavailable` (Router: 503), dann bleibt nichts zurück."""
     from . import embed_client
     if ident.kind != "item":
-        raise SampleError("Fotos können nur für eigene Gegenstände hochgeladen werden")
+        raise SampleError(i18n.t("inventory.err_upload_items_only"))
     if not data:
-        raise SampleError("Leere Datei")
+        raise SampleError(i18n.t("inventory.err_empty_file"))
     if len(data) > MAX_UPLOAD_BYTES:
-        raise SampleError("Datei zu groß (max. 10 MB)")
+        raise SampleError(i18n.t("inventory.err_file_too_large"))
     ext = sniff_image(data)
     if ext is None:
-        raise SampleError("Nur JPEG, PNG oder WebP")
+        raise SampleError(i18n.t("inventory.err_image_type"))
     from .identity import MAX_SAMPLES
     if _manual_count(s, ident.id) >= MAX_SAMPLES:
-        raise SampleError(f"max. {MAX_SAMPLES} Samples – erst alte löschen")
+        raise SampleError(i18n.t("inventory.err_max_samples", n=MAX_SAMPLES))
     rel = f"identities/{ident.id}/upload_{uuid.uuid4().hex[:12]}{ext}"
     full = media_path(rel)
     os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -323,11 +326,11 @@ def add_inventory_sample(s: Session, ident: Identity, item: InventoryItem) -> di
     from . import embed_client
     from .identity import _copy_crop
     if ident.kind != "item":
-        raise SampleError("Nur für eigene Gegenstände")
+        raise SampleError(i18n.t("inventory.err_items_only"))
     if ident.item_label and item.label != ident.item_label:
-        raise SampleError("Gegenstand hat ein anderes Label als das Exemplar")
+        raise SampleError(i18n.t("inventory.err_label_mismatch"))
     if not item.crop_path:
-        raise SampleError("Für diesen Gegenstand gibt es noch keinen Bildausschnitt")
+        raise SampleError(i18n.t("inventory.err_no_crop"))
     bbox = inner_bbox_of_crop(list(item.bbox or []))
     res = embed_client.request("item", path=item.crop_path, bbox=bbox, augment=False)
     img = _copy_crop(ident.id, item.crop_path)

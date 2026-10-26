@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import vlm
 from ..auth import _rate_check, require_read_limited, require_user
 from ..db import get_db
@@ -37,7 +38,7 @@ class AskIn(BaseModel):
     def _question(cls, v: str) -> str:
         v = v.strip()
         if not v:
-            raise ValueError("Frage darf nicht leer sein")
+            raise ValueError(i18n.t("errors.question_empty"))
         return v
 
     @field_validator("region")
@@ -46,7 +47,7 @@ class AskIn(BaseModel):
         if v is None:
             return None
         if not all(-0.001 <= c <= 1.001 for c in v) or v[2] <= v[0] or v[3] <= v[1]:
-            raise ValueError("region muss normiert [x1,y1,x2,y2] sein")
+            raise ValueError(i18n.t("errors.region_normalized"))
         return [round(min(1.0, max(0.0, float(c))), 4) for c in v]
 
 
@@ -57,9 +58,9 @@ async def ask_camera(cam_id: int, body: AskIn, request: Request,
     """Frage zum aktuellen Bild → AskResult. Scope `read` genügt; 10/min je Key. Fragen am besten englisch."""
     c = db.get(Camera, cam_id)
     if c is None:
-        raise HTTPException(404, "Kamera nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.camera_not_found"))
     if not c.enabled:
-        raise HTTPException(409, "Kamera ist deaktiviert")
+        raise HTTPException(409, i18n.t("errors.camera_disabled"))
     p = getattr(request.state, "principal", None)
     _rate_check("ask_global", "all", ASK_GLOBAL_PER_MIN)
     if p is not None and p.kind == "token":
@@ -93,7 +94,7 @@ def ask_log(camera_id: Optional[int] = None, limit: int = Query(20, ge=1, le=200
 def delete_ask(ask_id: int, db: Session = Depends(get_db)):
     a = db.get(AskLog, ask_id)
     if a is None:
-        raise HTTPException(404, "Frage nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.ask_not_found"))
     path = a.snapshot_path
     db.delete(a)
     db.commit()

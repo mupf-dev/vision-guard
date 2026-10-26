@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from .. import i18n
 from ..auth import generate_key, invalidate_token_cache, normalize_scopes, require_session
 from ..db import SessionLocal
 from ..models import ApiToken
@@ -24,7 +25,7 @@ class TokenIn(BaseModel):
     def _name(cls, v: str) -> str:
         v = v.strip()
         if not v:
-            raise ValueError("Name darf nicht leer sein")
+            raise ValueError(i18n.t("errors.name_empty"))
         return v
 
 
@@ -60,7 +61,7 @@ def create_token(body: TokenIn):
             if s.scalar(select(ApiToken.id).where(ApiToken.prefix == prefix)) is None:
                 break
         else:
-            raise HTTPException(500, "Konnte keinen eindeutigen Schlüssel erzeugen")
+            raise HTTPException(500, i18n.t("errors.token_generate_failed"))
         t = ApiToken(name=body.name, prefix=prefix, token_hash=digest, scopes=normalize_scopes(body.scopes),
                      created_at=now,
                      expires_at=(now + timedelta(days=body.expires_days)) if body.expires_days else None)
@@ -78,7 +79,7 @@ def revoke_token(token_id: int):
     with SessionLocal() as s:
         t = s.get(ApiToken, token_id)
         if t is None:
-            raise HTTPException(404, "API-Zugang nicht gefunden")
+            raise HTTPException(404, i18n.t("errors.token_not_found"))
         if t.revoked_at is None:
             t.revoked_at = datetime.now(timezone.utc)
             s.commit()

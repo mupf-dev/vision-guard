@@ -49,6 +49,11 @@ const common = {
     person: "Person", car: "Car", truck: "Truck", bicycle: "Bicycle", motorcycle: "Motorcycle", bus: "Bus",
     dog: "Dog", cat: "Cat", bird: "Bird", horse: "Horse", sheep: "Sheep", cow: "Cow",
   } as Record<string, string>,
+  /** Anzeige der Standard-Vokabulargruppen (gespeichert sind die deutschen Namen); eigene Gruppen bleiben, wie sie sind */
+  vocabGroups: {
+    "Persönliches": "Personal", "Elektronik": "Electronics", "Küche": "Kitchen",
+    "Möbel & Einrichtung": "Furniture & decor", "Sonstiges": "Other",
+  } as Record<string, string>,
   /** Identitätsarten */
   kind: { face: "Person", plate: "Licence plate", pet: "Animal", item: "Item" },
   kindPlural: { face: "People", plate: "Licence plates", pet: "Animals", item: "Items" },

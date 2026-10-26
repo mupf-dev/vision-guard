@@ -7,6 +7,7 @@ import { useSyncedFrame, useVideoMonitor } from "../lib/overlaySync";
 import { useLive } from "../lib/store";
 import { GESTURE_NAME, POSTURE_NAME, fmtDuration } from "../lib/pose";
 import type { GestureMsg, Posture } from "../lib/types";
+import { msgs, useMsgs } from "../i18n";
 
 const GESTURE_SHOW_MS = 4000;
 
@@ -30,13 +31,14 @@ export function DetectionOverlay({
   const f = useSyncedFrame(cameraId, compact ? 200 : 100);
   const g = useLive((s) => s.gestures[cameraId]);
   const gesture = g && Date.now() - g.at < GESTURE_SHOW_MS ? g : undefined;
+  const m = useMsgs().ui.overlay;
   return (
     <>
       <div ref={anchor} hidden />
       <OverlaySvg rect={rect} objects={f.objects} zones={zones} showZones={showZones} compact={compact} dim={f.stalled} gesture={gesture} />
       {f.stalled && (
-        <div className="overlay-stall" style={{ left: rect.x + rect.w / 2, top: rect.y + rect.h / 2 }} title="Das Videobild aktualisiert sich nicht – Boxen sind eingefroren">
-          <PauseCircle size={compact ? 13 : 15} />Video hängt
+        <div className="overlay-stall" style={{ left: rect.x + rect.w / 2, top: rect.y + rect.h / 2 }} title={m.stalledTitle}>
+          <PauseCircle size={compact ? 13 : 15} />{m.stalled}
         </div>
       )}
     </>
@@ -50,7 +52,7 @@ function postureText(o: DetObject): { text: string; alarm: boolean } | null {
   if (p !== "lying") return { text: POSTURE_NAME[p], alarm: false };
   const since = Number(o.attributes?.posture_since);
   const dur = Number.isFinite(since) && since > 0 ? Math.max(0, Date.now() / 1000 - since) : null;
-  return { text: dur != null ? `liegt ${fmtDuration(dur)}` : "liegt", alarm: true };
+  return { text: dur != null ? msgs().ui.overlay.lyingFor(POSTURE_NAME.lying, fmtDuration(dur)) : POSTURE_NAME.lying, alarm: true };
 }
 
 const OverlaySvg = memo(function OverlaySvg({
@@ -77,7 +79,7 @@ const OverlaySvg = memo(function OverlaySvg({
           const c = pt?.alarm ? "#ef4444" : labelColor(o.label);
           const name = o.identity?.display_name ?? (o.attributes?.plate_text ? String(o.attributes.plate_text) : null);
           const main = `${labelName(o.label)} ${Math.round(o.score * 100)}%${pt ? ` · ${pt.text}` : ""}`;
-          const gt = gesture && gesture.track_id === o.track_id ? `Geste: ${GESTURE_NAME[gesture.gesture] ?? gesture.gesture}` : null;
+          const gt = gesture && gesture.track_id === o.track_id ? msgs().ui.overlay.gesture(GESTURE_NAME[gesture.gesture] ?? gesture.gesture) : null;
           const gw = gt ? gt.length * fs * 0.58 + 12 : 0;
           const sub = compact ? null : `#${o.track_id}`;
           const text = name ? `${name} · ${main}` : main;

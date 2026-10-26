@@ -1,13 +1,16 @@
 import { AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
 import type { CameraHealthStatus, HealthProblemType } from "../lib/types";
+import { msgs, useMsgs } from "../i18n";
 
-export const HEALTH_LABEL: Record<HealthProblemType, string> = {
-  dark: "Zu dunkel", blur: "Unscharf", covered: "Verdeckt", frozen: "Eingefroren", moved: "Verschoben",
-};
+/** Namen der Bildprobleme (lokalisiert, Zugriff wie auf ein Objekt). */
+export const HEALTH_LABEL = new Proxy({} as Record<HealthProblemType, string>, {
+  get: (_t, k) => (typeof k === "string" ? msgs().ui.health.labels[k] : undefined),
+});
 
 /** Ampel der Kamera-Gesundheit (C5). `full` zeigt auch „OK“/„unbekannt“, sonst nur Warnungen. */
 export function HealthBadge({ health, full = false }: { health: CameraHealthStatus | null | undefined; full?: boolean }) {
-  if (!health) return full ? <span className="badge" title="Noch keine Bildprüfung"><HelpCircle size={11} />–</span> : null;
+  const m = useMsgs().ui.health;
+  if (!health) return full ? <span className="badge" title={m.noCheckYet}><HelpCircle size={11} />–</span> : null;
   if (health.state === "warn" && health.problems.length) {
     const first = health.problems[0];
     return (
@@ -17,8 +20,8 @@ export function HealthBadge({ health, full = false }: { health: CameraHealthStat
     );
   }
   if (!full) return null;
-  if (health.state === "unknown") return <span className="badge" title="Keine aktuelle Bildprüfung (Kamera offline?)"><HelpCircle size={11} />unbekannt</span>;
-  return <span className="badge ok" style={{ animation: "none" }} title="Bild in Ordnung"><CheckCircle2 size={11} />Bild OK</span>;
+  if (health.state === "unknown") return <span className="badge" title={m.noCurrentCheck}><HelpCircle size={11} />{m.unknown}</span>;
+  return <span className="badge ok" style={{ animation: "none" }} title={m.okTitle}><CheckCircle2 size={11} />{m.ok}</span>;
 }
 
 /** Gelbes Banner im Live-Bild („Verdeckt seit 14:02“). */

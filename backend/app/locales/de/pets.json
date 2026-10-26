@@ -1,1 +1,28 @@
-{}
+{
+  "purpose": {
+    "food": "Napf",
+    "water": "Wasser",
+    "litter": "Klo"
+  },
+  "at": {
+    "food": "am Napf",
+    "water": "am Wasser",
+    "litter": "auf dem Klo"
+  },
+  "unknown": "{label} (unbekannt)",
+  "when_today": "heute",
+  "when_yesterday": "gestern",
+  "when_day": "am {date}",
+  "date_short": "%d.%m.",
+  "dur_min": "{n} min",
+  "dur_h": "{n} h",
+  "many_title": "{name}: {when} {n}× {at}",
+  "many_msg": "{name} war {when} {n}× {at} (normal {normal}).",
+  "few_title": "{name}: {when} nur {n}× {at}",
+  "few_title_so_far": "{name}: {when} erst {n}× {at}",
+  "few_msg": "{name} war {when} nur {n}× {at} (normal {normal}).",
+  "few_msg_so_far": "{name} war heute bis {time} erst {n}× {at} (normal bis dahin {expected}, am ganzen Tag {normal}).",
+  "gap_title": "{name}: seit {dur} nicht {at}",
+  "gap_msg": "{name} war seit {dur} nicht mehr {at} (übliche längste Pause {usual}).",
+  "camera": "Kamera {id}"
+}

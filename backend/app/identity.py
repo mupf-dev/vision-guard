@@ -16,7 +16,7 @@ from rapidfuzz.distance import Levenshtein
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from . import settings_store
+from . import i18n, settings_store
 from .models import KV, Event, Identity, IdentitySample, utcnow
 from .schemas import media_url
 from .serializers import identity_json
@@ -517,7 +517,7 @@ def _ask_ambiguous(s: Session, a_id: Optional[int], b_id: Optional[int], score: 
         from . import review
         review.create(
             kind="identity_match", dedup_key=f"idm:{src.id}:{dst.id}",
-            question=f"Ist „{src.display_name}“ dieselbe Person wie „{dst.display_name}“?",
+            question=i18n.t("identity.review_same_person", src=src.display_name, dst=dst.display_name),
             priority=float(score), identity_id=dst.id, source_identity_id=src.id, score=round(float(score), 4),
             crop_path=covers.get(src.id), snapshot_path=covers.get(dst.id),
             data={"identity_kind": "face", "target_name": dst.display_name, "source_name": src.display_name,
@@ -688,10 +688,10 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
         else:
             wanted = set(sample_ids)
             if not wanted:
-                raise MergeError("Keine Bilder ausgewählt")
+                raise MergeError(i18n.t("errors.no_images_selected"))
             by_id = {smp.id: smp for smp in src_samples}
             if not wanted.issubset(by_id):
-                raise MergeError("Mindestens ein ausgewähltes Bild gehört nicht zur Quelle")
+                raise MergeError(i18n.t("errors.image_not_in_source"))
             moving = [by_id[sid] for sid in wanted]
             full = wanted == set(by_id)
             mark_manual = True
@@ -701,7 +701,7 @@ def merge(s: Session, src: Identity, dst: Identity, sample_ids: Optional[list[in
         new_manual = sum(1 for smp in moving if mark_manual or smp.manual)
         limit = sample_limit(dst, settings_store.get())
         if dst_manual + new_manual > limit:
-            raise MergeError(f"max. {limit} Samples – erst alte löschen")
+            raise MergeError(i18n.t("errors.max_samples", limit=limit))
 
         if full:   # Verlauf zum Zurücksetzen (vor dem Umhängen erfassen)
             from .identity_bulk import log_merge

@@ -48,6 +48,8 @@ from typing import Any, Optional
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from . import i18n
+
 log = logging.getLogger("vg.sensors")
 
 # Arten, die der Worker misst (CPU bzw. geteiltes DINOv2); inventory_count und vlm rechnet das Backend.
@@ -69,6 +71,28 @@ REF_STATES = {"reference": ("on", "off"), "fill": ("full", "half", "empty")}
 MAX_REFS_PER_STATE = 5
 
 STATE_DE = {"on": "an", "off": "aus", "ok": "ok", "low": "knapp", "out": "leer", "unknown": "unklar"}
+
+
+def state_name(state: Optional[str], lang: Optional[str] = None) -> str:
+    """Zustandsname in der Sprache der Anfrage bzw. Systemsprache: an/aus/ok/knapp/leer/unklar – on/off/ok/low/…"""
+    st = state or "unknown"
+    return i18n.t(f"sensors.state.{st}", lang) if st in STATE_DE else st
+
+
+def kind_name(kind: str, lang: Optional[str] = None) -> str:
+    return i18n.t(f"sensors.kind.{kind}", lang) if kind in KIND_DE else kind
+
+
+def _reason_text(r: Any) -> str:
+    """Gründe werden als Sprachschlüssel (`sensors.reason.*`, ggf. mit Parametern als Tupel) gemerkt und erst bei
+    der Ausgabe übersetzt; fremde Meldungen (z. B. vom Bildmodell) bleiben, wie sie sind."""
+    if not r:
+        return ""
+    if isinstance(r, tuple):
+        return i18n.t(r[0], **(r[1] if len(r) > 1 else {}))
+    if isinstance(r, str) and r.startswith("sensors."):
+        return i18n.t(r)
+    return str(r)
 KIND_DE = {"brightness": "Helligkeit", "blink": "Blinken", "reference": "Referenzbilder",
            "inventory_count": "Gegenstände zählen", "fill": "Füllstand", "vlm": "Bildmodell"}
 
@@ -213,26 +237,31 @@ def _since_text(ts: float) -> str:
     from .config import config
     dt = datetime.fromtimestamp(ts, timezone.utc).astimezone(config.tz)
     today = datetime.now(timezone.utc).astimezone(config.tz).date()
-    return f"seit {dt:%H:%M}" if dt.date() == today else f"seit {dt:%d.%m.} {dt:%H:%M}"
+    if dt.date() == today:
+        return i18n.t("sensors.since", time=f"{dt:%H:%M}")
+    return i18n.t("sensors.since_date", date=dt.strftime(i18n.t("sensors.day_month_format")), time=f"{dt:%H:%M}")
 
 
 def state_text(cfg: dict[str, Any], m: Optional[dict[str, Any]] = None) -> str:
-    """Deutscher Kurztext, z. B. „an seit 14:02“, „knapp seit 24.10. 08:15“, „unklar – Referenzen fehlen“."""
+    """Kurztext in der Sprache der Anfrage bzw. Systemsprache, z. B. „an seit 14:02“ / "on since 14:02",
+    „knapp seit 24.10. 08:15“, „unklar – Referenzbilder fehlen“."""
     m = m or {}
     st = cfg.get("state") or "unknown"
     if not cfg.get("enabled", True):
-        return "deaktiviert"
+        return i18n.t("sensors.disabled")
     if st == "unknown":
-        reason = m.get("reason") or ("noch keine Messung" if not m.get("last_rx") else "")
-        txt = "unklar" + (f" – {reason}" if reason else "")
+        reason = _reason_text(m.get("reason")) or (i18n.t("sensors.reason.no_measurement_yet")
+                                                    if not m.get("last_rx") else "")
+        txt = state_name("unknown") + (f" – {reason}" if reason else "")
     else:
-        txt = STATE_DE.get(st, st)
+        txt = state_name(st)
         if cfg.get("since"):
             txt += " " + _since_text(cfg["since"])
         if cfg.get("kind") == "vlm" and m.get("reason"):
-            txt += f" (letzte Prüfung: {m['reason']})"   # z. B. Antwort unklar, Bildmodell nicht verfügbar
+            # z. B. Antwort unklar, Bildmodell nicht verfügbar
+            txt += " " + i18n.t("sensors.last_check", reason=_reason_text(m["reason"]))
     if m.get("occluded") and _now() - float(m.get("occluded_ts") or 0) < max(30.0, 3 * float(cfg["interval_s"])):
-        txt += " (gerade verdeckt)"
+        txt += " " + i18n.t("sensors.occluded_now")
     return txt
 
 
@@ -324,7 +353,8 @@ def to_json(cfg: dict[str, Any], m: Optional[dict[str, Any]] = None) -> dict[str
     last_eval = m.get("last_eval") or cfg.get("last_eval")
     snap = cfg.get("snapshot_path")
     return {"id": cfg["id"], "name": cfg["name"], "camera_id": cfg["camera_id"],
-            "camera_name": cam.get("name") or f"Kamera {cfg['camera_id']}", "room": cam.get("room"),
+            "camera_name": cam.get("name") or i18n.t("sensors.camera_fallback", id=cfg["camera_id"]),
+            "room": cam.get("room"),
             "enabled": cfg["enabled"], "kind": cfg["kind"], "region": cfg["region"], "params": cfg["params"],
             "state_set": cfg["state_set"], "supply": cfg["supply"], "verify_vlm": cfg["verify_vlm"],
             "interval_s": cfg["interval_s"], "vlm_max_age_s": cfg["vlm_max_age_s"],
@@ -439,7 +469,7 @@ def handle_worker_values(camera_id: Optional[int], msg: dict[str, Any]) -> None:
             value = v.get("value")
             m["scores"] = v.get("scores")
             if value is None:
-                m["reason"] = "Referenzbilder fehlen" if c["kind"] in REF_STATES else "kein Messwert"
+                m["reason"] = "sensors.reason.no_references" if c["kind"] in REF_STATES else "sensors.reason.no_value"
                 m["last_eval"] = now
                 if c["state"] != "unknown" and c["kind"] in REF_STATES:
                     _schedule_commit(sid, "unknown", None, "cheap")
@@ -538,7 +568,7 @@ def _ask_vlm(c: dict[str, Any]) -> tuple[Optional[str], Optional[float], str, Op
         return None, None, "local", None, e.message
     except Exception as e:  # noqa: BLE001
         log.warning("Sensor %s: Bildmodell-Frage fehlgeschlagen: %s", c["id"], e)
-        return None, None, "local", None, "Bildmodell-Fehler"
+        return None, None, "local", None, "sensors.reason.vlm_error"
     res = res or {}
     eng = res.get("engine") if res.get("engine") in ("local", "cloud") else "local"
     snap = res.get("snapshot_url") or None
@@ -554,11 +584,13 @@ def _ask_vlm(c: dict[str, Any]) -> tuple[Optional[str], Optional[float], str, Op
     if measure == "yesno":
         state = {"yes": "on", "no": "off"}.get(res.get("yes_no"))
         if state is None:
-            return None, None, eng, snap, "Antwort unklar"
+            return None, None, eng, snap, "sensors.reason.answer_unclear"
         return state, 1.0 if state == "on" else 0.0, eng, snap, None
     value = parse(measure, answer)
     if value is None:
-        return None, None, eng, snap, "Antwort unklar" + (f" („{answer[:60]}“)" if answer else "")
+        if answer:
+            return None, None, eng, snap, ("sensors.reason.answer_unclear_quoted", {"answer": answer[:60]})
+        return None, None, eng, snap, "sensors.reason.answer_unclear"
     probe = c
     if c["kind"] == "inventory_count":          # gleiche Schwellen wie der Zählsensor
         probe = {**c, "kind": "vlm", "params": {**(c.get("params") or {}), "measure": "count"}}
@@ -625,7 +657,7 @@ def _run_vlm_sensor(sid: int, force: bool = False) -> None:
             m["last_rx"] = now
             m["last_eval"] = now
             if state is None:
-                m["reason"] = err or "Bildmodell ohne Aussage"
+                m["reason"] = err or "sensors.reason.vlm_no_answer"
                 m["dirty"] = True
         _effects.submit(_persist_vlm_ts, sid, now)
         if state is not None and value is not None:
@@ -657,14 +689,14 @@ def count_inventory(c: dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
     from .models import Camera, InventoryItem
     labels = [str(x) for x in (c["params"].get("labels") or [])]
     if not labels:
-        return None, "keine Gegenstände gewählt"
+        return None, "sensors.reason.no_labels"
     cam = registry.get(c["camera_id"])
     if cam is None or not cam.get("enabled", True):
-        return None, "Kamera deaktiviert"
+        return None, "sensors.reason.camera_disabled"
     with SessionLocal() as s:
         row = s.get(Camera, c["camera_id"])
         if row is None or not row.inventory_enabled:
-            return None, "Gegenstandserkennung der Kamera ist aus"
+            return None, "sensors.reason.inventory_off"
         items = s.execute(select(InventoryItem.bbox, InventoryItem.state).where(
             InventoryItem.camera_id == c["camera_id"], InventoryItem.label.in_(labels),
             InventoryItem.state.in_(("present", "stale")))).all()
@@ -676,7 +708,7 @@ def count_inventory(c: dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
         if not point_in_polygon(cx, cy, c["region"]):
             continue
         if st == "stale":
-            return None, "Gegenstandserkennung ruht (Stand unklar)"
+            return None, "sensors.reason.inventory_stale"
         n += 1
     return n, None
 
@@ -798,11 +830,14 @@ def _supply_effects(c: dict[str, Any], data: dict[str, Any], new: str, prev_know
     try:
         from . import notifications
         day = _local_day()
-        word = "knapp" if new == "low" else "leer"
+        lg = i18n.system_lang()          # Hinweise in der Systemsprache
+        word = state_name(new, lg)
+        message = i18n.t("sensors.supply_message", lg, name=c["name"], state=word, camera=data.get("camera_name"))
+        if _shopping_auto():
+            message += " " + i18n.t("sensors.supply_on_list", lg)
         notifications.create(
-            source="sensor", level="info", title=f"Vorrat {c['name']}: {word}",
-            message=(f"{c['name']} ist {word} ({data.get('camera_name')}). "
-                     + ("Steht auf der Einkaufsliste." if _shopping_auto() else "")).strip(),
+            source="sensor", level="info", title=i18n.t("sensors.supply_title", lg, name=c["name"], state=word),
+            message=message.strip(),
             camera_id=c["camera_id"], image_path=c.get("snapshot_path"),
             data={"sensor_id": c["id"], "state": new, "kind": c["kind"], "value": data.get("value")},
             dedup_key=f"sensor:{c['id']}:{new}:{day}", dedup_s=86400, click_path="/vorraete")
@@ -958,8 +993,9 @@ def _refresh_worker() -> None:
         pass
 
 
-def set_state_unknown(sensor_id: int, reason: str) -> None:
-    """Zustand ohne Hysterese auf unknown (z. B. deaktiviert, Art geändert)."""
+def set_state_unknown(sensor_id: int, reason: Any) -> None:
+    """Zustand ohne Hysterese auf unknown (z. B. deaktiviert, Art geändert). `reason`: Sprachschlüssel
+    `sensors.reason.*` (wird erst bei der Ausgabe übersetzt) oder fertiger Text."""
     _schedule_commit(sensor_id, "unknown", None, "cheap", reason=reason)
 
 
@@ -1150,14 +1186,14 @@ def _check_stale(now: float) -> None:
             cam = registry.get(c["camera_id"])
             if cam is not None and not cam.get("enabled", True):
                 if c["state"] != "unknown":
-                    todo.append((sid, "Kamera deaktiviert"))
+                    todo.append((sid, "sensors.reason.camera_disabled"))
                 continue
             if c["kind"] == "vlm":
                 continue                    # vlm hat eigene Taktung; Fehler stehen in reason
             limit = max(STALE_MIN_S, 5 * c["interval_s"])
             last = max(float(m["last_rx"] or 0), float(m["created"] or 0))
             if c["state"] != "unknown" and now - last > limit:
-                todo.append((sid, m.get("reason") or "keine Messwerte (Kamera offline oder Analyse ruht)"))
+                todo.append((sid, m.get("reason") or "sensors.reason.no_values"))
     for sid, reason in todo:
         set_state_unknown(sid, reason)
 

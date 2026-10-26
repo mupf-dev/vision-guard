@@ -18,6 +18,7 @@ import jwt
 from fastapi import HTTPException, Request, WebSocket, status
 from sqlalchemy import select, update
 
+from . import i18n
 from .config import config
 
 ALGO = "HS256"
@@ -265,7 +266,7 @@ def current_principal(request: Request) -> Optional[Principal]:
 
 
 def _unauthorized() -> HTTPException:
-    return HTTPException(status.HTTP_401_UNAUTHORIZED, "Nicht angemeldet",
+    return HTTPException(status.HTTP_401_UNAUTHORIZED, i18n.t("errors.not_logged_in"),
                          headers={"WWW-Authenticate": "Bearer"})
 
 
@@ -274,7 +275,7 @@ def _authorize(request: Request, scope: str) -> Principal:
     if p is None:
         raise _unauthorized()
     if not p.has(scope):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Keine Berechtigung (Scope {scope} erforderlich)")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, i18n.t("errors.scope_required", scope=scope))
     return p
 
 
@@ -308,7 +309,7 @@ def _rate_check(bucket: str, who: str, per_min: int, window_s: float = 60.0) -> 
             retry = max(1, int(window_s - (now - hits[0])) + 1)
             _rate_hits[(bucket, who)] = hits
             unit = "min" if window_s <= 60.0 else f"{int(window_s // 60)} min"
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Zu viele Anfragen (max. {per_min}/{unit})",
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, i18n.t("errors.too_many_requests", per_min=per_min, unit=unit),
                                 headers={"Retry-After": str(retry)})
         hits.append(now)
         _rate_hits[(bucket, who)] = hits
@@ -338,7 +339,7 @@ def require_session(request: Request) -> str:
         request.state.principal = Principal(kind="session", username=user)
         return user
     if bearer_key(request.headers):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Nur mit Anmeldung im Browser")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, i18n.t("errors.browser_login_only"))
     raise _unauthorized()
 
 

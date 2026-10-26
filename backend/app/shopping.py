@@ -135,13 +135,14 @@ def remove(item_id: int) -> bool:
 
 def on_supply_state(sensor: dict[str, Any], state: str) -> None:
     """Vorrats-Sensor hat einen bestätigten Zustand (ok|low|out)."""
-    from . import settings_store
+    from . import i18n, settings_store
     if not settings_store.get().get("shopping_list_auto", True):
         return
+    lg = i18n.system_lang()         # Einträge werden gespeichert: Systemsprache
     sid = int(sensor.get("id") or 0)
-    name = str(sensor.get("name") or f"Sensor {sid}")
+    name = str(sensor.get("name") or i18n.t("sensors.sensor_fallback", lg, id=sid))
     if state in ("low", "out"):
-        note = "knapp" if state == "low" else "leer"
+        note = i18n.t(f"sensors.state.{state}", lg)
         with SessionLocal() as s:
             r = s.scalars(select(ShoppingItem).where(ShoppingItem.sensor_id == sid,
                                                      ShoppingItem.done_at.is_(None))).first()

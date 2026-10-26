@@ -39,7 +39,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import face_match, settings_store
+from . import face_match, i18n, settings_store
 from . import identity as ident_svc
 from .config import config
 from .db import SessionLocal
@@ -136,7 +136,7 @@ def _recover_stale() -> None:
         rows = s.scalars(select(NightlyReport).where(NightlyReport.status == "running")).all()
         for r in rows:
             if r.id != _running_id:
-                r.status, r.error, r.finished_at = "error", "Abgebrochen (Neustart des Backends)", utcnow()
+                r.status, r.error, r.finished_at = "error", i18n.t("nightly.aborted_restart"), utcnow()
         if rows:
             s.commit()
 
@@ -246,18 +246,18 @@ def start(mode: str, trigger: str, apply_from: Optional[int] = None, idx: Option
     if mode not in ("preview", "apply"):
         raise ValueError(f"unbekannter Modus: {mode}")
     if not _run_lock.acquire(blocking=False):
-        raise RunningError("Es läuft bereits ein Nachtlauf")
+        raise RunningError(i18n.t("nightly.err.running"))
     try:
         with SessionLocal() as s:
             src: Optional[NightlyReport] = None
             if apply_from is not None:
                 src = s.get(NightlyReport, apply_from)
                 if src is None:
-                    raise ApplyError(404, "Bericht nicht gefunden")
+                    raise ApplyError(404, i18n.t("nightly.err.report_not_found"))
                 if src.mode != "preview" or src.status != "done":
-                    raise ApplyError(409, "Nur ein fertiger Probelauf kann angewandt werden")
+                    raise ApplyError(409, i18n.t("nightly.err.only_done_preview"))
                 if src.applied_at is not None:
-                    raise ApplyError(409, "Dieser Probelauf wurde bereits angewandt")
+                    raise ApplyError(409, i18n.t("nightly.err.already_applied"))
                 src.applied_at = utcnow()   # sofort sperren: kein zweites Anwenden derselben Vorschau
             r = NightlyReport(period_key=period, mode=mode, trigger=trigger, status="running", started_at=utcnow(),
                               summary={}, actions=[], text="", applied_report_id=apply_from)
@@ -306,7 +306,7 @@ def _run(rid: int, mode: str, trigger: str, apply_from: Optional[int], idx: Opti
                 if r.actions:   # Zwischenstand (_checkpoint): zeigen, was bis zum Abbruch angewandt wurde
                     try:
                         r.summary = _summary(r.actions)
-                        r.text = _text(mode, r.summary, r.actions) + " (abgebrochen)"
+                        r.text = _text(mode, r.summary, r.actions) + i18n.t("nightly.text.aborted_suffix")
                     except Exception:  # noqa: BLE001
                         log.exception("Nachtlauf %s: Zusammenfassung des Zwischenstands fehlgeschlagen", rid)
                 s.commit()
@@ -320,7 +320,7 @@ def _run(rid: int, mode: str, trigger: str, apply_from: Optional[int], idx: Opti
 def _notify(rid: int, text: str) -> None:
     try:
         from . import notifications
-        notifications.create(source="report", title="Nachtlauf (Gesichter)", message=text, level="info",
+        notifications.create(source="report", title=i18n.t("nightly.notify_title"), message=text, level="info",
                              data={"nightly_report_id": rid}, targets=[], push_enabled=False,
                              click_path="/einstellungen#s-nachtlauf")
     except Exception:  # noqa: BLE001
@@ -726,19 +726,19 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any], save
             sid = int(a["src_id"])
             sf = faces.get(sid)
             if dst is None:
-                a["skipped_reason"] = "Ziel existiert nicht mehr"
+                a["skipped_reason"] = i18n.t("nightly.skip.target_gone")
             elif dst.ident.learning_locked:
-                a["skipped_reason"] = "Ziel hat Lernsperre (nur per Rückfrage)"
+                a["skipped_reason"] = i18n.t("nightly.skip.target_locked")
             elif sf is None:
-                a["skipped_reason"] = "Quelle existiert nicht mehr"
+                a["skipped_reason"] = i18n.t("nightly.skip.source_gone")
             elif sf.ident.name:
-                a["skipped_reason"] = "Quelle inzwischen benannt"
+                a["skipped_reason"] = i18n.t("nightly.skip.source_named")
             elif sf.ident.learning_locked:
-                a["skipped_reason"] = "Quelle inzwischen gesperrt"
+                a["skipped_reason"] = i18n.t("nightly.skip.source_locked")
             elif (sid, into_id) in blocked:
-                a["skipped_reason"] = "Paar wurde mit „Nein“ beantwortet"
+                a["skipped_reason"] = i18n.t("nightly.skip.pair_rejected")
             elif sf.vecs is None:
-                a["skipped_reason"] = "Quelle ohne Gesichtsmerkmale"
+                a["skipped_reason"] = i18n.t("nightly.skip.source_no_features")
             else:
                 ok.append(a)
         # Score neu: gegen Ziel + übrige Quellen des Bündels (die mit ihm zusammengeführt werden) …
@@ -749,8 +749,9 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any], save
             union = _score_vs(faces, faces[sid], [m for m in members if m != sid])
             direct = _score_vs(faces, faces[sid], [into_id])
             if union < auto_min or direct < review_min:   # … und direkt zum Ziel nicht zu weit weg (wie geplant)
-                a["skipped_reason"] = f"Ähnlichkeit jetzt {union:.2f} (unter {auto_min:.2f})" if union < auto_min \
-                    else f"Ähnlichkeit zum Ziel jetzt {direct:.2f}"
+                a["skipped_reason"] = (i18n.t("nightly.skip.score_now", score=i18n.fmt_num(union, 2), min=i18n.fmt_num(auto_min, 2))
+                                     if union < auto_min
+                                     else i18n.t("nightly.skip.direct_now", score=i18n.fmt_num(direct, 2)))
                 continue
             a["score"] = round(union, 4)
             passing.append(a)
@@ -768,7 +769,7 @@ def _apply_merges(rid: int, acts: list[dict[str, Any]], st: dict[str, Any], save
             except Exception as e:  # noqa: BLE001 – ein Bündel darf die übrigen nicht verhindern
                 log.exception("Nachtlauf: Zusammenführen in %s fehlgeschlagen", into_id)
                 for a in passing:
-                    a["skipped_reason"] = f"Fehler: {e}"[:200]
+                    a["skipped_reason"] = i18n.t("nightly.skip.error", error=e)[:200]
                 continue
         mids = dict(zip(srcs, merge_ids))
         for a in passing:
@@ -782,15 +783,15 @@ def _merge_guard(into_id: int):
 
     def guard(s: Session, found: dict[int, Identity]) -> None:
         if found[into_id].learning_locked:
-            raise BulkError(409, "Ziel inzwischen gesperrt")
+            raise BulkError(409, i18n.t("nightly.skip.target_locked_now"))
         blocked = _blocked(s)
         for sid, ident in found.items():
             if sid == into_id:
                 continue
             if ident.name or ident.learning_locked:
-                raise BulkError(409, f"Quelle {sid} inzwischen benannt oder gesperrt")
+                raise BulkError(409, i18n.t("nightly.skip.source_named_or_locked", id=sid))
             if (sid, into_id) in blocked:
-                raise BulkError(409, f"Paar {sid}/{into_id} wurde mit „Nein“ beantwortet")
+                raise BulkError(409, i18n.t("nightly.skip.pair_rejected_ids", src=sid, dst=into_id))
     return guard
 
 
@@ -802,15 +803,15 @@ def _apply_reviews(acts: list[dict[str, Any]], save) -> None:
             src, dst = s.get(Identity, int(a["src_id"])), s.get(Identity, int(a["into_id"]))
             covers = ident_svc._covers(s, [int(a["src_id"]), int(a["into_id"])])
         if src is None or dst is None:
-            a["skipped_reason"] = "Identität existiert nicht mehr"
+            a["skipped_reason"] = i18n.t("nightly.skip.identity_gone")
             continue
         if src.name and dst.name:
-            a["skipped_reason"] = "Beide inzwischen benannt"
+            a["skipped_reason"] = i18n.t("nightly.skip.both_named")
             continue
         try:
             r = review.create(
                 kind="identity_match", dedup_key=f"idm:{src.id}:{dst.id}",
-                question=f"Ist „{src.display_name}“ dieselbe Person wie „{dst.display_name}“?",
+                question=i18n.t("identity.review_same_person", src=src.display_name, dst=dst.display_name),
                 priority=float(a.get("score") or 0), identity_id=dst.id, source_identity_id=src.id,
                 score=round(float(a.get("score") or 0), 4), crop_path=covers.get(src.id),
                 snapshot_path=covers.get(dst.id),
@@ -818,10 +819,10 @@ def _apply_reviews(acts: list[dict[str, Any]], save) -> None:
                       "reason": "nightly"})
         except Exception as e:  # noqa: BLE001
             log.exception("Nachtlauf: Rückfrage fehlgeschlagen")
-            a["skipped_reason"] = f"Fehler: {e}"[:200]
+            a["skipped_reason"] = i18n.t("nightly.skip.error", error=e)[:200]
             continue
         if r is None:
-            a["skipped_reason"] = "Rückfragen aus, Limit erreicht oder Paar schon gefragt"
+            a["skipped_reason"] = i18n.t("nightly.skip.review_not_created")
         else:
             a["applied"], a["review_id"] = True, r["id"]
 
@@ -836,10 +837,10 @@ def _apply_curate(acts: list[dict[str, Any]], st: dict[str, Any], save) -> None:
             try:
                 ident = s.scalars(select(Identity).where(Identity.id == iid).with_for_update()).first()
                 if ident is None:
-                    a["skipped_reason"] = "Identität existiert nicht mehr"
+                    a["skipped_reason"] = i18n.t("nightly.skip.identity_gone")
                     continue
                 if ident.learning_locked:
-                    a["skipped_reason"] = "Lernsperre aktiv"
+                    a["skipped_reason"] = i18n.t("nightly.skip.locked")
                     continue
                 own = {x.id: x for x in s.scalars(select(IdentitySample).where(
                     IdentitySample.identity_id == iid)).all()}
@@ -848,7 +849,7 @@ def _apply_curate(acts: list[dict[str, Any]], st: dict[str, Any], save) -> None:
                 rem = [own[i] for i in a.get("removed_sample_ids") or []
                        if i in own and not own[i].manual and not own[i].negative]
                 if not neg and not rem:
-                    a["skipped_reason"] = "Bilder inzwischen geändert"
+                    a["skipped_reason"] = i18n.t("nightly.skip.samples_changed")
                     continue
                 for x in neg:
                     x.negative, x.source = True, "nightly"
@@ -864,7 +865,7 @@ def _apply_curate(acts: list[dict[str, Any]], st: dict[str, Any], save) -> None:
             except Exception as e:  # noqa: BLE001 – eine Identität darf die übrigen nicht verhindern
                 s.rollback()
                 log.exception("Nachtlauf: Kuratieren von %s fehlgeschlagen", iid)
-                a["applied"], a["skipped_reason"] = False, f"Fehler: {e}"[:200]
+                a["applied"], a["skipped_reason"] = False, i18n.t("nightly.skip.error", error=e)[:200]
                 continue
         for p in to_remove:
             ident_svc._remove_media(p)
@@ -879,13 +880,13 @@ def _apply_thresholds(acts: list[dict[str, Any]], save) -> None:
         with ident_svc._lock, SessionLocal() as s:
             ident = s.get(Identity, int(a["identity_id"]))
             if ident is None or ident.kind != "face":
-                a["skipped_reason"] = "Identität existiert nicht mehr"
+                a["skipped_reason"] = i18n.t("nightly.skip.identity_gone")
                 continue
             if not ident.name:
-                a["skipped_reason"] = "Nicht mehr benannt"
+                a["skipped_reason"] = i18n.t("nightly.skip.no_longer_named")
                 continue
             if ident.learning_locked:
-                a["skipped_reason"] = "Lernsperre aktiv"
+                a["skipped_reason"] = i18n.t("nightly.skip.locked")
                 continue
             new = min(max(float(a["new"]), THRESHOLD_RANGE[0]), THRESHOLD_RANGE[1])
             a["old"] = ident.match_threshold
@@ -911,13 +912,13 @@ def _apply_cleanup(acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
         for iid, a in by_id.items():
             ident = found.get(iid)
             if ident is None or ident.kind != "face":
-                a["skipped_reason"] = "Identität existiert nicht mehr"
+                a["skipped_reason"] = i18n.t("nightly.skip.identity_gone")
                 continue
             n = s.scalar(select(func.count()).select_from(IdentitySample).where(
                 IdentitySample.identity_id == iid)) or 0
             ev = s.scalar(select(func.count()).select_from(Event).where(Event.identity_id == iid)) or 0
             if not _cleanable(ident, int(n), int(ev), cutoff):
-                a["skipped_reason"] = "Inzwischen benannt, gesperrt, gesehen oder mit Ereignissen"
+                a["skipped_reason"] = i18n.t("nightly.skip.cleanup_changed")
                 continue
             ok.append(iid)
         return ok
@@ -932,7 +933,7 @@ def _apply_cleanup(acts: list[dict[str, Any]], st: dict[str, Any]) -> None:
         except Exception as e:  # noqa: BLE001 – wie bei den Merges: Lauf läuft weiter, Aktionen als übersprungen
             log.exception("Nachtlauf: Aufräumen fehlgeschlagen")
             for a in acts:
-                a["skipped_reason"] = a.get("skipped_reason") or f"Fehler: {e}"[:200]
+                a["skipped_reason"] = a.get("skipped_reason") or i18n.t("nightly.skip.error", error=e)[:200]
             return
     for iid in gone:
         by_id[iid]["applied"] = True
@@ -960,35 +961,28 @@ def _summary(actions: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _text(mode: str, sm: dict[str, Any], actions: list[dict[str, Any]]) -> str:
-    preview = mode == "preview"
+    """Kurztext des Berichts (gespeichert) – Systemsprache, da der Lauf im Hintergrund läuft."""
+    k = "preview" if mode == "preview" else "done"
     parts: list[str] = []
     if sm["merges"]:
         targets = {a["into_display_name"] for a in actions
                    if a["type"] == "merge" and not a.get("skipped_reason") and a.get("into_named")}
-        n = sm["merges"]
-        t = f"{n} Fragment{'e' if n != 1 else ''} " + \
-            (("würden" if n != 1 else "würde") + " zusammengeführt" if preview else "zusammengeführt")
+        t = i18n.t(f"nightly.text.{k}.merges", n=sm["merges"])
         if targets:
-            t += f" (u. a. zu {', '.join(sorted(targets)[:3])})"
+            t += i18n.t("nightly.text.merge_targets", names=", ".join(sorted(targets)[:3]))
         parts.append(t)
     if sm["reviews"]:
-        n = sm["reviews"]
-        parts.append(f"{n} Rückfrage{'n' if n != 1 else ''}"
-                     + ((" würden" if n != 1 else " würde") + " gestellt" if preview else ""))
+        parts.append(i18n.t(f"nightly.text.{k}.reviews", n=sm["reviews"]))
     if sm["curated"]:
         names = sorted({a["display_name"] for a in actions if a["type"] == "curate" and not a.get("skipped_reason")})
-        parts.append(f"Galerie von {', '.join(names[:3])}{' …' if len(names) > 3 else ''} "
-                     + ("würde aktualisiert" if preview else "aktualisiert"))
+        parts.append(i18n.t(f"nightly.text.{k}.curated",
+                            names=", ".join(names[:3]) + (" …" if len(names) > 3 else "")))
     if sm["thresholds"]:
-        n = sm["thresholds"]
-        parts.append(f"{n} Schwelle{'n' if n != 1 else ''} je Person "
-                     + (("würden" if n != 1 else "würde") + " angepasst" if preview else "angepasst"))
+        parts.append(i18n.t(f"nightly.text.{k}.thresholds", n=sm["thresholds"]))
     if sm["cleanup"]:
-        n = sm["cleanup"]
-        parts.append(f"{n} alte{'s' if n == 1 else ''} Einzelbild-Fragment{'e' if n != 1 else ''} "
-                     + (("würden" if n != 1 else "würde") + " gelöscht" if preview else "gelöscht"))
+        parts.append(i18n.t(f"nightly.text.{k}.cleanup", n=sm["cleanup"]))
     if not parts:
-        parts.append("nichts zu tun")
+        parts.append(i18n.t("nightly.text.nothing"))
     if sm.get("skipped"):
-        parts.append(f"{sm['skipped']} übersprungen")
-    return ("Probelauf: " if preview else "Nachtlauf: ") + ", ".join(parts) + "."
+        parts.append(i18n.t("nightly.text.skipped", n=sm["skipped"]))
+    return i18n.t(f"nightly.text.{k}.prefix", parts=", ".join(parts))

@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 import httpx
 
+from . import i18n
 from .util import media_path
 
 log = logging.getLogger("vg.push")
@@ -157,7 +158,7 @@ def _pushover(client: httpx.Client, target: dict[str, Any], msg: PushMessage) ->
             "priority": str(PUSHOVER_PRIORITY.get(msg.priority, 0))}
     if msg.click_url:
         data["url"] = msg.click_url
-        data["url_title"] = "In VisionGuard öffnen"
+        data["url_title"] = i18n.t("notify.open_in")
     img = _read_image(msg.image_path)
     if img:
         name, raw = img
@@ -172,10 +173,10 @@ def send(target: dict[str, Any], msg: PushMessage) -> dict[str, Any]:
     """Sendet an ein Ziel aus `push_targets`. Ergebnis `{target, ok, status, error, ts}` (wirft nie)."""
     sender = SENDERS.get(str(target.get("type")))
     if sender is None:
-        return _result(target, False, f"Unbekannter Push-Typ: {target.get('type')}")
+        return _result(target, False, i18n.t("notify.push_unknown_type", type=target.get("type")))
     if target.get("enabled") is False:
-        return {**_result(target, False, "Ziel deaktiviert"), "status": "skipped"}
-    err = "unbekannter Fehler"
+        return {**_result(target, False, i18n.t("notify.push_disabled")), "status": "skipped"}
+    err = i18n.t("notify.push_unknown_error")
     for attempt in range(RETRIES + 1):
         try:
             with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False) as client:
@@ -187,9 +188,9 @@ def send(target: dict[str, Any], msg: PushMessage) -> dict[str, Any]:
             if resp.status_code < 500 and resp.status_code != 429:
                 break   # Konfigurationsfehler: Wiederholen hilft nicht
         except httpx.HTTPError as e:
-            err = f"Verbindung fehlgeschlagen ({type(e).__name__})"
+            err = i18n.t("notify.push_connection_failed", error=type(e).__name__)
         except Exception as e:  # noqa: BLE001
-            err = f"Fehler ({type(e).__name__})"
+            err = i18n.t("notify.push_error", error=type(e).__name__)
         if attempt < RETRIES:
             time.sleep(1.0)
     log.warning("Push an Ziel '%s' (%s) fehlgeschlagen: %s", target.get("id"), target.get("type"), err)

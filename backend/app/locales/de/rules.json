@@ -1,1 +1,81 @@
-{}
+{
+  "camera": "Kamera",
+  "camera_n": "Kamera {id}",
+  "sensor_n": "Sensor {id}",
+  "join_and": "{first} und {last}",
+  "posture": {
+    "lying": "liegt",
+    "sitting": "sitzt",
+    "standing": "steht",
+    "unknown": "unbekannt"
+  },
+  "gesture": {
+    "arms_up": "beide Arme hoch",
+    "arm_left": "linker Arm seitlich",
+    "arm_right": "rechter Arm seitlich",
+    "arms_cross": "Arme über dem Kopf gekreuzt"
+  },
+  "sensor_state": {
+    "on": "an",
+    "off": "aus",
+    "ok": "ok",
+    "low": "knapp",
+    "out": "leer",
+    "unknown": "unklar"
+  },
+  "cond": {
+    "unavailable": "{type}: nicht verfügbar",
+    "failed": "{type}: Fehler bei der Auswertung",
+    "not_visible": "{items}: nicht sichtbar",
+    "visible": "{items}: sichtbar ({place}, Score {score})",
+    "still_visible": "{items}: noch sichtbar ({place})",
+    "not_visible_last": "{items}: nicht sichtbar (zuletzt {place})",
+    "never_seen": "{items}: nie gesehen",
+    "appeared_after": "{items}: erst nach {since} aufgetaucht",
+    "touched_since": "{items}: seit {since} berührt ({why})",
+    "person_in_zone": "{items}: Person um {time} in der Zone",
+    "untouched_since": "{items}: seit {since} unberührt ({place})",
+    "weather_no_location": "Wetter: kein Standort eingestellt",
+    "weather_unknown": "Wetter unbekannt",
+    "weather_unknown_err": "Wetter unbekannt ({error})",
+    "weather": "Wetter: {text} (Schwelle {min} % in {hours} h)",
+    "came_from_no_track": "kam aus Zone: kein Track",
+    "came_from": "kam aus {zones}",
+    "not_came_from": "kam nicht aus {zones}",
+    "sensor_unknown": "Sensor {id} unbekannt",
+    "sensor": "Sensor {name}: {state}",
+    "sensor_wanted": "Sensor {name}: {state} (verlangt {wanted})"
+  },
+  "untouched": {
+    "not_visible": "nicht sichtbar",
+    "appeared_later": "erst nach dem Stichzeitpunkt aufgetaucht",
+    "elsewhere_after_gap": "nach einer Lücke an anderer Stelle",
+    "gone_for": "zwischendurch {n} min weg",
+    "moved": "verschoben",
+    "untouched": "unberührt"
+  },
+  "weather": {
+    "no_rain": "kein Regen erwartet",
+    "at_most": "höchstens {p} % Regen",
+    "next_hours": "{p} % Regen in den nächsten {hours} h",
+    "now": "{p} % Regen, schon jetzt",
+    "from_today": "{p} % Regen ab {hour} Uhr",
+    "from_tomorrow": "{p} % Regen ab morgen {hour} Uhr",
+    "from_date": "{p} % Regen ab {date} {hour} Uhr",
+    "date_fmt": "%d.%m."
+  },
+  "check": {
+    "track_only": "wird erst beim Auslösen geprüft (Weg des Tracks)"
+  },
+  "notify": {
+    "check_lost_title": "Regel „{rule}“: Prüfung entfallen",
+    "check_lost_message": "Die verzögerte Bedingungsprüfung fiel in einen Neustart des Systems und wurde nicht ausgeführt.",
+    "label_at_camera": "{label} an {camera}"
+  },
+  "demo": {
+    "camera_entrance": "Demo Eingang",
+    "camera_street": "Demo Straße",
+    "rule_person": "Person erkannt → Snapshot + MQTT",
+    "rule_vehicle": "Fahrzeug → Clip"
+  }
+}

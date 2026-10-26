@@ -1,1 +1,28 @@
-{}
+{
+  "purpose": {
+    "food": "food bowl",
+    "water": "water bowl",
+    "litter": "litter box"
+  },
+  "at": {
+    "food": "at the food bowl",
+    "water": "at the water bowl",
+    "litter": "in the litter box"
+  },
+  "unknown": "{label} (unknown)",
+  "when_today": "today",
+  "when_yesterday": "yesterday",
+  "when_day": "on {date}",
+  "date_short": "%d/%m",
+  "dur_min": "{n} min",
+  "dur_h": "{n} h",
+  "many_title": "{name}: {n}× {at} {when}",
+  "many_msg": "{name} was {at} {n}× {when} (normal {normal}).",
+  "few_title": "{name}: only {n}× {at} {when}",
+  "few_title_so_far": "{name}: only {n}× {at} {when} so far",
+  "few_msg": "{name} was {at} only {n}× {when} (normal {normal}).",
+  "few_msg_so_far": "{name} has only been {at} {n}× today up to {time} (normal by then {expected}, whole day {normal}).",
+  "gap_title": "{name}: not {at} for {dur}",
+  "gap_msg": "{name} has not been {at} for {dur} (usual longest break {usual}).",
+  "camera": "Camera {id}"
+}

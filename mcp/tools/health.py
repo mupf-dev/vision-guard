@@ -14,10 +14,7 @@ from typing import Optional
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
-from .common import READ_ONLY, BackendError, cameras, fail, find_camera, n_de, ok
-
-STATE_DE = {"ok": "in Ordnung", "warn": "Problem", "unknown": "Zustand unbekannt (kein aktuelles Prüfbild)",
-            "off": "Prüfung abgeschaltet", "disabled": "Kamera deaktiviert"}
+from .common import READ_ONLY, BackendError, cameras, fail, find_camera, mapped, ok, t
 
 
 def _entry(c: dict) -> dict:
@@ -42,25 +39,25 @@ def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def get_camera_health(ctx: Context, camera_id: Optional[int] = None,
                                 camera_name: Optional[str] = None) -> CallToolResult:
-        """Zustand der Kamerabilder: verdeckt, unscharf, zu dunkel, eingefroren oder verschoben.
-        Ohne Parameter alle Kameras; sonst eine Kamera per camera_id oder camera_name (auch Raumname)."""
+        """Health of the camera images: covered, blurry, too dark, frozen or moved.
+        Without parameters all cameras; otherwise one camera by camera_id or camera_name (room name works too)."""
         try:
             cams = await cameras(ctx)
             if camera_id is not None or camera_name:
                 cams = [find_camera(cams, camera_id, camera_name)]
             items = [_entry(c) for c in cams]
             if not items:
-                return ok("Keine Kameras eingerichtet.", {"cameras": []})
+                return ok(t("cameras.none"), {"cameras": []})
             lines = []
             for it in items:
-                head = f"- {it['name']} (id {it['id']}{', Raum ' + it['room'] if it.get('room') else ''}): "
+                head = f"- {it['name']} (id {it['id']}{', ' + t('common.room', name=it['room']) if it.get('room') else ''}): "
                 if it["problems"]:
                     lines.append(head + "; ".join(p["text"] or p["type"] for p in it["problems"]))
                 else:
-                    lines.append(head + STATE_DE.get(it["state"], it["state"]))
+                    lines.append(head + mapped("health.state", it["state"]))
             bad = sum(1 for it in items if it["state"] == "warn")
-            intro = (f"{n_de(bad, 'Kamera hat', 'Kameras haben')} ein Problem." if bad
-                     else "Alle geprüften Kamerabilder sind in Ordnung." if len(items) > 1 else "Kamerazustand:")
+            intro = (t("health.n_problems", n=bad) if bad
+                     else t("health.all_ok") if len(items) > 1 else t("health.single_head"))
             return ok(intro + "\n" + "\n".join(lines), {"cameras": items})
         except BackendError as e:
             return fail(str(e))

@@ -1,1 +1,44 @@
-{}
+{
+  "state": {
+    "on": "on",
+    "off": "off",
+    "ok": "ok",
+    "low": "low",
+    "out": "empty",
+    "unknown": "unclear"
+  },
+  "kind": {
+    "brightness": "Brightness",
+    "blink": "Blinking",
+    "reference": "Reference images",
+    "inventory_count": "Count items",
+    "fill": "Fill level",
+    "vlm": "Image model"
+  },
+  "since": "since {time}",
+  "since_date": "since {date} {time}",
+  "day_month_format": "%d/%m",
+  "disabled": "disabled",
+  "last_check": "(last check: {reason})",
+  "occluded_now": "(currently occluded)",
+  "camera_fallback": "Camera {id}",
+  "sensor_fallback": "Sensor {id}",
+  "supply_title": "Supply {name}: {state}",
+  "supply_message": "{name} is {state} ({camera}).",
+  "supply_on_list": "It is on the shopping list.",
+  "reason": {
+    "no_measurement_yet": "no measurement yet",
+    "no_references": "reference images missing",
+    "no_value": "no measured value",
+    "vlm_error": "image model error",
+    "vlm_no_answer": "image model gave no answer",
+    "answer_unclear": "answer unclear",
+    "answer_unclear_quoted": "answer unclear (“{answer}”)",
+    "no_labels": "no items selected",
+    "camera_disabled": "camera disabled",
+    "inventory_off": "item detection of the camera is off",
+    "inventory_stale": "item detection is idle (status unclear)",
+    "no_values": "no measured values (camera offline or analysis idle)",
+    "config_changed": "type or camera changed"
+  }
+}

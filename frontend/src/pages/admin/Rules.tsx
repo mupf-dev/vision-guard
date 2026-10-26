@@ -6,10 +6,12 @@ import type { Camera, GestureName, Identity, Posture, Rule, RuleAction, RuleInpu
 import { ALL_LABELS, DAYS, KIND_NAME, labelColor, labelName } from "../../lib/labels";
 import { ChipSelect, ConfirmDialog, Dialog, Empty, LabelIcon, Loading, Range, SearchSelect, Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
-import { ConditionsBlock, RULE_TEMPLATES, SENSOR_STATE_NAME, SensorStatePicker, useConditionSummary, useSensors } from "../../components/RuleConditions";
+import { pct } from "../../lib/format";
+import { ConditionsBlock, ruleTemplates, SENSOR_STATE_NAME, SensorStatePicker, useConditionSummary, useSensors } from "../../components/RuleConditions";
 import { ALL_GESTURES, GESTURE_HINT, GESTURE_NAME, POSTURE_TRIGGER_NAME, fmtDuration } from "../../lib/pose";
 import { GestureIcon } from "../../components/GestureIcon";
 import { Move, Tv } from "lucide-react";
+import { fmtNum, msgs, useMsgs } from "../../i18n";
 
 const PLACEHOLDERS = ["{camera}", "{camera_id}", "{label}", "{score}", "{identity}", "{zone}", "{event_id}", "{rule}", "{time}", "{thumb_url}", "{snapshot_url}", "{clip_url}", "{items}", "{item_place}", "{weather}", "{posture}", "{gesture}", "{repeat}", "{sensor}", "{sensor_state}"];
 
@@ -21,20 +23,27 @@ const EMPTY: RuleInput = {
   repeat_s: 0, repeat_max: 0,
 };
 
-const TRIGGER_NAME: Record<RuleInput["trigger"], string> = {
-  enter: "Betreten", leave: "Verlassen", dwell: "Verweilen", posture: "Haltung", gesture: "Geste", time: "Uhrzeit",
-  sensor: "Sensor",   // W3 (A3): virtueller Sensor wechselt (Regel ohne Ereignis)
+// Namen der Auslöser/Aktionen in der aktuellen Sprache (i18n `rules.trigger` / `rules.action`);
+// sensor = W3 (A3): virtueller Sensor wechselt (Regel ohne Ereignis)
+const TRIGGER_NAME = new Proxy({} as Record<RuleInput["trigger"], string>, {
+  get: (_t, k) => msgs().rules.trigger[k as RuleInput["trigger"]],
+});
+
+const ACTION_ICON: Record<RuleAction["type"], React.ReactNode> = {
+  snapshot: <ImageIcon size={15} />,
+  clip: <Clapperboard size={15} />,
+  mqtt: <Radio size={15} />,
+  webhook: <Globe size={15} />,
+  push: <BellRing size={15} />,
+  ptz: <Move size={15} />,
+  tv: <Tv size={15} />,
 };
 
-const ACTION_META: Record<RuleAction["type"], { name: string; icon: React.ReactNode }> = {
-  snapshot: { name: "Snapshot", icon: <ImageIcon size={15} /> },
-  clip: { name: "Clip", icon: <Clapperboard size={15} /> },
-  mqtt: { name: "MQTT", icon: <Radio size={15} /> },
-  webhook: { name: "Webhook", icon: <Globe size={15} /> },
-  push: { name: "Push", icon: <BellRing size={15} /> },
-  ptz: { name: "Kamera schwenken", icon: <Move size={15} /> },
-  tv: { name: "Auf Fernseher zeigen", icon: <Tv size={15} /> },
-};
+const ACTION_META = new Proxy({} as Record<RuleAction["type"], { name: string; icon: React.ReactNode }>, {
+  get: (_t, k) => ({ name: msgs().rules.action[k as RuleAction["type"]], icon: ACTION_ICON[k as RuleAction["type"]] }),
+  ownKeys: () => Reflect.ownKeys(ACTION_ICON),
+  getOwnPropertyDescriptor: (_t, k) => (k in ACTION_ICON ? { enumerable: true, configurable: true } : undefined),
+});
 
 function newAction(t: RuleAction["type"]): RuleAction {
   switch (t) {
@@ -42,7 +51,7 @@ function newAction(t: RuleAction["type"]): RuleAction {
     case "clip": return { type: "clip", pre_s: 5, post_s: 10 };
     case "mqtt": return { type: "mqtt", topic: "visionguard/alarm/{camera}", payload: null, retain: false };
     case "webhook": return { type: "webhook", url: "", method: "POST", headers: {}, body: null };
-    case "push": return { type: "push", target: null, title: "{rule}", message: "{label} an {camera} ({zone})", priority: "default", image: "snapshot" };
+    case "push": return { type: "push", target: null, title: "{rule}", message: msgs().rules.defaultPushMessage, priority: "default", image: "snapshot" };
     case "ptz": return { type: "ptz", camera_id: null, preset: null, hold_s: 30 };
     case "tv": return { type: "tv", target: null, camera_id: null, duration_s: 60 };
   }
@@ -50,51 +59,52 @@ function newAction(t: RuleAction["type"]): RuleAction {
 
 function joinOr(items: string[]) {
   if (items.length <= 1) return items.join("");
-  return `${items.slice(0, -1).join(", ")} oder ${items[items.length - 1]}`;
+  return `${items.slice(0, -1).join(", ")} ${msgs().rules.or} ${items[items.length - 1]}`;
 }
 
 export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], condText = "", sensors: VirtualSensor[] = []): React.ReactNode {
-  const who = r.labels.length ? joinOr(r.labels.map(labelName)) : "ein Objekt";
-  const idTxt = r.identity.mode === "known" ? " (bekannt)" : r.identity.mode === "unknown" ? " (unbekannt)"
+  const m = msgs().rules;
+  const who = r.labels.length ? joinOr(r.labels.map(labelName)) : m.anObject;
+  const idTxt = r.identity.mode === "known" ? m.idKnown : r.identity.mode === "unknown" ? m.idUnknown
     : r.identity.mode === "specific" ? ` (${joinOr(r.identity.identity_ids.map((id) => idents.find((i) => i.id === id)?.display_name ?? `#${id}`)) || "?"})` : "";
   const zones = cams.flatMap((c) => c.zones).filter((z) => r.zone_ids.includes(z.id)).map((z) => z.name);
   const camNames = r.camera_ids.map((id) => cams.find((c) => c.id === id)?.name ?? `#${id}`);
-  const where = zones.length ? <>in Zone <b>{joinOr(zones)}</b></> : camNames.length ? <>an <b>{joinOr(camNames)}</b></> : <>an <b>allen Kameras</b></>;
+  const where = zones.length ? <>{m.inZone} <b>{joinOr(zones)}</b></> : camNames.length ? <>{m.onCam} <b>{joinOr(camNames)}</b></> : <>{m.onCam} <b>{m.allCameras}</b></>;
   const gs = (r.trigger_options?.gestures ?? []) as GestureName[];
-  const verb = r.trigger === "enter" ? "erscheint" : r.trigger === "leave" ? "verschwindet"
-    : r.trigger === "time" ? `– täglich um ${r.trigger_options?.at ?? "?"}`
-    : r.trigger === "posture" ? `${POSTURE_TRIGGER_NAME[(r.trigger_options?.posture ?? "lying") as Exclude<Posture, "unknown">]} (≥ ${fmtDuration(r.min_dwell_s)}${r.trigger_options?.max_motion != null ? ", regungslos" : ""})`
-    : r.trigger === "gesture" ? `die Geste ${joinOr(gs.map((g) => `„${GESTURE_NAME[g]}“`)) || "?"} zeigt`
-    : `länger als ${r.min_dwell_s} s verweilt`;
-  const rep = r.repeat_s ? <span className="muted"> · wiederholt alle {fmtDuration(r.repeat_s)}{r.repeat_max ? ` (max. ${r.repeat_max}×)` : ""} bis quittiert</span> : null;
-  const sched = r.schedule ? ` · ${r.schedule.days.length === 7 ? "täglich" : r.schedule.days.map((d) => DAYS[d]).join(", ")} ${r.schedule.start}–${r.schedule.end}` : "";
+  const verb = r.trigger === "enter" ? m.verbEnter : r.trigger === "leave" ? m.verbLeave
+    : r.trigger === "time" ? m.verbTime(String(r.trigger_options?.at ?? "?"))
+    : r.trigger === "posture" ? m.verbPosture(POSTURE_TRIGGER_NAME[(r.trigger_options?.posture ?? "lying") as Exclude<Posture, "unknown">], fmtDuration(r.min_dwell_s), r.trigger_options?.max_motion != null)
+    : r.trigger === "gesture" ? m.verbGesture(joinOr(gs.map((g) => m.quote(GESTURE_NAME[g]))) || "?")
+    : m.verbDwell(r.min_dwell_s);
+  const rep = r.repeat_s ? <span className="muted">{m.repeats(fmtDuration(r.repeat_s), r.repeat_max ?? 0)}</span> : null;
+  const sched = r.schedule ? ` · ${r.schedule.days.length === 7 ? m.daily : r.schedule.days.map((d) => DAYS[d]).join(", ")} ${r.schedule.start}–${r.schedule.end}` : "";
   const acts = r.actions.map((a) => ACTION_META[a.type].name);
-  const cond = condText ? <> und <b>{condText}</b>{r.condition_delay_s ? <span className="muted"> (geprüft nach {r.condition_delay_s} s)</span> : null}</> : null;
+  const cond = condText ? <> {m.and} <b>{condText}</b>{r.condition_delay_s ? <span className="muted">{m.checkedAfter(r.condition_delay_s)}</span> : null}</> : null;
   if (r.trigger === "sensor") {
     const sid = Number(r.trigger_options?.sensor_id ?? 0);
     const st = String(r.trigger_options?.state ?? "on");
     const sname = sensors.find((x) => x.id === sid)?.name ?? (sid ? `#${sid}` : "?");
     return (
       <span className="rule-summary">
-        Wenn Sensor <b>{sname}</b> {st === "any" ? "den Zustand wechselt" : <>auf <b>{SENSOR_STATE_NAME[st as SensorState] ?? st}</b> wechselt</>}
-        {condText ? <>, und <b>{condText}</b></> : null}
-        <span className="arrow">→</span>{acts.length ? acts.join(", ") : "Hinweis"}
+        {m.sensorWhen} <b>{sname}</b> {st === "any" ? m.sensorChanges : <>{m.sensorToPre} <b>{SENSOR_STATE_NAME[st as SensorState] ?? st}</b>{m.sensorToPost ? ` ${m.sensorToPost}` : ""}</>}
+        {condText ? <>{m.commaAnd} <b>{condText}</b></> : null}
+        <span className="arrow">→</span>{acts.length ? acts.join(", ") : m.notification}
       </span>
     );
   }
   if (r.trigger === "time") {
-    const days = r.schedule && r.schedule.days.length < 7 ? r.schedule.days.map((d) => DAYS[d]).join(", ") : "Täglich";
+    const days = r.schedule && r.schedule.days.length < 7 ? r.schedule.days.map((d) => DAYS[d]).join(", ") : m.dailyCap;
     return (
       <span className="rule-summary">
-        {days} um <b>{r.trigger_options?.at ?? "?"}</b>{condText ? <>, wenn <b>{condText}</b></> : null}
-        <span className="arrow">→</span>{acts.length ? acts.join(", ") : "Hinweis"}
+        {days} {m.at} <b>{r.trigger_options?.at ?? "?"}</b>{condText ? <>{m.commaIf} <b>{condText}</b></> : null}
+        <span className="arrow">→</span>{acts.length ? acts.join(", ") : m.notification}
       </span>
     );
   }
   return (
     <span className="rule-summary">
-      Wenn <b>{who}{idTxt}</b> {where} {verb}{cond}
-      <span className="arrow">→</span>{acts.length ? acts.join(", ") : <span className="muted">keine Aktion</span>}
+      {m.when} <b>{who}{idTxt}</b> {m.verbBeforeWhere ? <>{verb} {where}</> : <>{where} {verb}</>}{cond}
+      <span className="arrow">→</span>{acts.length ? acts.join(", ") : <span className="muted">{m.noAction}</span>}
       {sched && <span className="muted">{sched}</span>}
       {rep}
     </span>
@@ -103,6 +113,7 @@ export function ruleSummary(r: RuleInput, cams: Camera[], idents: Identity[], co
 
 function TemplateInput({ value, onChange, placeholder, multiline }: { value: string; onChange: (v: string) => void; placeholder?: string; multiline?: boolean }) {
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+  const m = useMsgs().rules;
   const insert = (p: string) => {
     const el = ref.current;
     const s = el?.selectionStart ?? value.length, e = el?.selectionEnd ?? value.length;
@@ -113,7 +124,7 @@ function TemplateInput({ value, onChange, placeholder, multiline }: { value: str
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {multiline ? <textarea ref={ref} className="textarea" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
         : <input ref={ref} className="input mono" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />}
-      <div className="placeholders">{PLACEHOLDERS.map((p) => <code key={p} title="Einfügen" onClick={() => insert(p)}>{p}</code>)}</div>
+      <div className="placeholders">{PLACEHOLDERS.map((p) => <code key={p} title={m.insert} onClick={() => insert(p)}>{p}</code>)}</div>
     </div>
   );
 }
@@ -121,19 +132,20 @@ function TemplateInput({ value, onChange, placeholder, multiline }: { value: str
 function HeadersInput({ value, onChange }: { value: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
   const [text, setText] = useState(Object.keys(value).length ? JSON.stringify(value, null, 2) : "");
   const [err, setErr] = useState<string | null>(null);
+  const m = useMsgs().rules;
   return (
-    <div className="field"><label>Header (JSON)</label>
+    <div className="field"><label>{m.headersJson}</label>
       <textarea className="textarea" style={{ minHeight: 64 }} value={text} placeholder={'{"Authorization": "Bearer …"}'}
         onChange={(e) => {
           setText(e.target.value);
           if (!e.target.value.trim()) { setErr(null); onChange({}); return; }
           try {
             const j = JSON.parse(e.target.value);
-            if (typeof j !== "object" || Array.isArray(j) || j === null) throw new Error("Objekt erwartet");
+            if (typeof j !== "object" || Array.isArray(j) || j === null) throw new Error(m.objectExpected);
             setErr(null); onChange(Object.fromEntries(Object.entries(j).map(([k, v]) => [k, String(v)])));
           } catch (x) { setErr((x as Error).message); }
         }} />
-      {err && <span className="hint" style={{ color: "var(--bad)" }}>Ungültiges JSON: {err}</span>}
+      {err && <span className="hint" style={{ color: "var(--bad)" }}>{m.invalidJson(err)}</span>}
     </div>
   );
 }
@@ -142,27 +154,28 @@ function HeadersInput({ value, onChange }: { value: Record<string, string>; onCh
 function PushActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "push" }>; onChange: (a: RuleAction) => void }) {
   const st = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const targets = st.data?.push_targets ?? [];
+  const m = useMsgs().rules;
   return (
     <div className="form-grid">
-      <div className="field"><label>Ziel</label>
+      <div className="field"><label>{m.target}</label>
         <select className="select" value={a.target ?? ""} onChange={(e) => onChange({ ...a, target: e.target.value || null })}>
-          <option value="">Alle aktiven Ziele</option>
-          {targets.map((t) => <option key={t.id} value={t.id}>{t.name}{t.enabled ? "" : " (deaktiviert)"}</option>)}
+          <option value="">{m.allActiveTargets}</option>
+          {targets.map((t) => <option key={t.id} value={t.id}>{t.name}{t.enabled ? "" : m.disabledSuffix}</option>)}
         </select>
-        {!targets.length && <span className="hint">Noch keine Push-Ziele – unter Einstellungen → Benachrichtigungen anlegen.</span>}
+        {!targets.length && <span className="hint">{m.noPushTargets}</span>}
       </div>
-      <div className="field"><label>Priorität / Bild</label>
+      <div className="field"><label>{m.priorityImage}</label>
         <div className="row">
           <select className="select" value={a.priority} onChange={(e) => onChange({ ...a, priority: e.target.value as typeof a.priority })}>
-            <option value="low">niedrig</option><option value="default">normal</option><option value="high">hoch</option>
+            <option value="low">{m.prioLow}</option><option value="default">{m.prioDefault}</option><option value="high">{m.prioHigh}</option>
           </select>
           <select className="select" value={a.image} onChange={(e) => onChange({ ...a, image: e.target.value as typeof a.image })}>
-            <option value="snapshot">Snapshot</option><option value="crop">Ausschnitt</option><option value="none">kein Bild</option>
+            <option value="snapshot">{m.imgSnapshot}</option><option value="crop">{m.imgCrop}</option><option value="none">{m.imgNone}</option>
           </select>
         </div>
       </div>
-      <div className="field span-2"><label>Titel</label><TemplateInput value={a.title} onChange={(v) => onChange({ ...a, title: v })} /></div>
-      <div className="field span-2"><label>Text</label><TemplateInput multiline value={a.message} onChange={(v) => onChange({ ...a, message: v })} /></div>
+      <div className="field span-2"><label>{m.pushTitle}</label><TemplateInput value={a.title} onChange={(v) => onChange({ ...a, title: v })} /></div>
+      <div className="field span-2"><label>{m.pushText}</label><TemplateInput multiline value={a.message} onChange={(v) => onChange({ ...a, message: v })} /></div>
     </div>
   );
 }
@@ -174,30 +187,30 @@ function PtzActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "ptz"
   const camId = a.camera_id ?? (ptzCams.length === 1 ? ptzCams[0].id : null);
   const info = useQuery({ queryKey: ["ptz", camId], queryFn: () => api.ptz(camId!), enabled: camId !== null, staleTime: 30_000 });
   const presets = info.data?.presets ?? [];
+  const m = useMsgs().rules;
   if (cams.data && !ptzCams.length) {
-    return <div className="hint" style={{ fontSize: 13, color: "var(--warn)" }}>Keine Kamera mit Schwenk-Steuerung – unter Kameras → „Schwenken“ einrichten.</div>;
+    return <div className="hint" style={{ fontSize: 13, color: "var(--warn)" }}>{m.noPtzCams}</div>;
   }
   return (
     <div className="form-grid">
-      <div className="field"><label>Kamera</label>
+      <div className="field"><label>{m.camera}</label>
         <select className="select" value={a.camera_id ?? ""} onChange={(e) => onChange({ ...a, camera_id: e.target.value ? Number(e.target.value) : null })}>
-          <option value="">Kamera des Ereignisses</option>
+          <option value="">{m.eventCamera}</option>
           {ptzCams.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </div>
-      <div className="field"><label>Position</label>
+      <div className="field"><label>{m.position}</label>
         <select className="select" value={a.preset ?? ""} onChange={(e) => onChange({ ...a, preset: e.target.value || null })}>
-          <option value="">Grundposition</option>
+          <option value="">{m.homePosition}</option>
           {a.preset && !presets.some((p) => p.token === a.preset) && <option value={a.preset}>#{a.preset}</option>}
           {presets.map((p) => <option key={p.token} value={p.token}>{p.name}</option>)}
         </select>
       </div>
-      <div className="field span-2"><label>Dort halten</label>
+      <div className="field span-2"><label>{m.holdThere}</label>
         <Range value={a.hold_s} min={5} max={600} step={5} format={(v) => (v < 120 ? `${v} s` : `${Math.round(v / 60)} min`)} onChange={(v) => onChange({ ...a, hold_s: v })} />
       </div>
       <div className="hint muted span-2" style={{ fontSize: 12 }}>
-        Danach fährt die Kamera zurück zur Grundposition. Wird ignoriert, solange jemand die Kamera von Hand steuert.
-        Andere Kamera wählen, um z. B. bei einer Türklingel-Erkennung eine Schwenk-Kamera auf die Tür zu richten.
+        {m.ptzHint}
       </div>
     </div>
   );
@@ -207,30 +220,30 @@ function PtzActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "ptz"
 function TvActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "tv" }>; onChange: (a: RuleAction) => void }) {
   const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
   const tvs = useQuery({ queryKey: ["tvs"], queryFn: api.tvs, staleTime: 30_000 });
+  const m = useMsgs().rules;
   if (tvs.data && !tvs.data.length) {
-    return <div className="hint" style={{ fontSize: 13, color: "var(--warn)" }}>Noch kein Fernseher eingerichtet – unter Einstellungen → „Fernseher“ anlegen.</div>;
+    return <div className="hint" style={{ fontSize: 13, color: "var(--warn)" }}>{m.noTv}</div>;
   }
   return (
     <div className="form-grid">
-      <div className="field"><label>Fernseher</label>
+      <div className="field"><label>{m.tv}</label>
         <select className="select" value={a.target ?? ""} onChange={(e) => onChange({ ...a, target: e.target.value || null })}>
-          <option value="">Alle aktiven</option>
-          {a.target && !(tvs.data ?? []).some((t) => t.id === a.target) && <option value={a.target}>{a.target} (unbekannt)</option>}
-          {(tvs.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}{t.enabled ? "" : " (aus)"}</option>)}
+          <option value="">{m.allActive}</option>
+          {a.target && !(tvs.data ?? []).some((t) => t.id === a.target) && <option value={a.target}>{a.target}{m.unknownSuffix}</option>}
+          {(tvs.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}{t.enabled ? "" : m.offSuffix}</option>)}
         </select>
       </div>
-      <div className="field"><label>Kamera</label>
+      <div className="field"><label>{m.camera}</label>
         <select className="select" value={a.camera_id ?? ""} onChange={(e) => onChange({ ...a, camera_id: e.target.value ? Number(e.target.value) : null })}>
-          <option value="">Kamera des Ereignisses</option>
+          <option value="">{m.eventCamera}</option>
           {(cams.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </div>
-      <div className="field span-2"><label>Anzeigen für</label>
+      <div className="field span-2"><label>{m.showFor}</label>
         <Range value={a.duration_s} min={10} max={600} step={10} format={(v) => (v < 120 ? `${v} s` : `${Math.round(v / 60)} min`)} onChange={(v) => onChange({ ...a, duration_s: v })} />
       </div>
       <div className="hint muted span-2" style={{ fontSize: 12 }}>
-        Unterbricht das laufende Programm im Vollbild und kehrt danach zurück. Gegen nächtliches Einschalten: Zeitplan
-        und Sperrzeit der Regel nutzen.
+        {m.tvHint}
       </div>
     </div>
   );
@@ -238,39 +251,40 @@ function TvActionFields({ a, onChange }: { a: Extract<RuleAction, { type: "tv" }
 
 function ActionEditor({ a, onChange, onRemove }: { a: RuleAction; onChange: (a: RuleAction) => void; onRemove: () => void }) {
   const meta = ACTION_META[a.type];
+  const m = useMsgs().rules;
   return (
     <div className="action-card">
       <div className="ah"><span className="ico">{meta.icon}</span>{meta.name}<span className="spacer" />
-        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onRemove} title="Aktion entfernen"><X size={15} /></button>
+        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onRemove} title={m.removeAction}><X size={15} /></button>
       </div>
-      {a.type === "snapshot" && <div className="muted" style={{ fontSize: 13 }}>Speichert ein Vollbild zum Ereignis.</div>}
+      {a.type === "snapshot" && <div className="muted" style={{ fontSize: 13 }}>{m.snapshotDesc}</div>}
       {a.type === "push" && <PushActionFields a={a} onChange={onChange} />}
       {a.type === "ptz" && <PtzActionFields a={a} onChange={onChange} />}
       {a.type === "tv" && <TvActionFields a={a} onChange={onChange} />}
       {a.type === "clip" && (
         <div className="form-grid">
-          <div className="field"><label>Vorlauf</label><Range value={a.pre_s} min={0} max={30} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, pre_s: v })} /></div>
-          <div className="field"><label>Nachlauf</label><Range value={a.post_s} min={1} max={60} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, post_s: v })} /></div>
+          <div className="field"><label>{m.preRoll}</label><Range value={a.pre_s} min={0} max={30} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, pre_s: v })} /></div>
+          <div className="field"><label>{m.postRoll}</label><Range value={a.post_s} min={1} max={60} step={1} format={(v) => `${v} s`} onChange={(v) => onChange({ ...a, post_s: v })} /></div>
         </div>
       )}
       {a.type === "mqtt" && (
         <div className="form-grid">
-          <div className="field span-2"><label>Topic</label><TemplateInput value={a.topic} onChange={(v) => onChange({ ...a, topic: v })} /></div>
-          <div className="field span-2"><label>Payload (leer = Event-JSON)</label><TemplateInput multiline value={a.payload ?? ""} placeholder="leer = vollständiges Event als JSON" onChange={(v) => onChange({ ...a, payload: v || null })} /></div>
-          <Switch checked={a.retain} onChange={(v) => onChange({ ...a, retain: v })} label="Retain" />
+          <div className="field span-2"><label>{m.topic}</label><TemplateInput value={a.topic} onChange={(v) => onChange({ ...a, topic: v })} /></div>
+          <div className="field span-2"><label>{m.payloadLabel}</label><TemplateInput multiline value={a.payload ?? ""} placeholder={m.emptyFullEvent} onChange={(v) => onChange({ ...a, payload: v || null })} /></div>
+          <Switch checked={a.retain} onChange={(v) => onChange({ ...a, retain: v })} label={m.retain} />
         </div>
       )}
       {a.type === "webhook" && (
         <div className="form-grid">
-          <div className="field span-2"><label>URL</label><TemplateInput value={a.url} placeholder="https://example.org/hook?cam={camera}" onChange={(v) => onChange({ ...a, url: v })} /></div>
-          <div className="field"><label>Methode</label>
+          <div className="field span-2"><label>{m.url}</label><TemplateInput value={a.url} placeholder="https://example.org/hook?cam={camera}" onChange={(v) => onChange({ ...a, url: v })} /></div>
+          <div className="field"><label>{m.method}</label>
             <select className="select" value={a.method} onChange={(e) => onChange({ ...a, method: e.target.value })}>
-              {["POST", "PUT", "PATCH", "GET"].map((m) => <option key={m}>{m}</option>)}
+              {["POST", "PUT", "PATCH", "GET"].map((x) => <option key={x}>{x}</option>)}
             </select>
           </div>
           <div />
           <div className="span-2"><HeadersInput value={a.headers} onChange={(h) => onChange({ ...a, headers: h })} /></div>
-          <div className="field span-2"><label>Body (leer = Event-JSON)</label><TemplateInput multiline value={a.body ?? ""} placeholder="leer = vollständiges Event als JSON" onChange={(v) => onChange({ ...a, body: v || null })} /></div>
+          <div className="field span-2"><label>{m.bodyLabel}</label><TemplateInput multiline value={a.body ?? ""} placeholder={m.emptyFullEvent} onChange={(v) => onChange({ ...a, body: v || null })} /></div>
         </div>
       )}
     </div>
@@ -283,17 +297,17 @@ function PoseTriggerFields({ f, setF, zones, poseCams }: {
   zones: { id: string; name: string; color: string; cam: string }[]; poseCams: number;
 }) {
   const o = f.trigger_options ?? {};
+  const m = useMsgs().rules;
   const setO = (p: Partial<typeof o>) => setF((x) => ({ ...x, trigger_options: { ...x.trigger_options, ...p } }));
   const camHint = !poseCams && (
     <div className="hint" style={{ fontSize: 12, color: "var(--warn)" }}>
-      Auf keiner {f.camera_ids.length ? "gewählten " : ""}Kamera ist {f.trigger === "gesture" ? "„Gesten“" : "„Haltung/Sturz“"} eingeschaltet
-      (Administration → Kameras → Personenanalyse).
+      {m.noPoseCam(f.camera_ids.length > 0, f.trigger === "gesture")}
     </div>
   );
   if (f.trigger === "gesture") {
     const gs = (o.gestures ?? []) as GestureName[];
     return (
-      <div className="field"><label>Gesten (mindestens eine) *</label>
+      <div className="field"><label>{m.gesturesLabel}</label>
         <div className="gesture-pick">
           {ALL_GESTURES.map((g) => {
             const on = gs.includes(g);
@@ -305,7 +319,7 @@ function PoseTriggerFields({ f, setF, zones, poseCams }: {
             );
           })}
         </div>
-        <span className="hint muted" style={{ fontSize: 12 }}>Die Geste muss so lange gehalten werden wie unter Einstellungen → Haltung &amp; Gesten eingestellt (Standard 1 s). Danach 5 s Pause je Person.</span>
+        <span className="hint muted" style={{ fontSize: 12 }}>{m.gestureHoldHint}</span>
         {camHint}
       </div>
     );
@@ -314,24 +328,24 @@ function PoseTriggerFields({ f, setF, zones, poseCams }: {
   return (
     <>
       <div className="form-grid">
-        <div className="field"><label>Haltung</label>
+        <div className="field"><label>{m.posture}</label>
           <div className="seg">
             {(["lying", "sitting", "standing"] as const).map((p) => (
               <button type="button" key={p} className={(o.posture ?? "lying") === p ? "on" : ""} onClick={() => setO({ posture: p })}>{POSTURE_TRIGGER_NAME[p]}</button>
             ))}
           </div>
         </div>
-        <div className="field"><label>Nur wenn regungslos</label>
-          <Switch checked={o.max_motion != null} onChange={(v) => setO({ max_motion: v ? 0.05 : null })} label={o.max_motion != null ? "kaum Bewegung" : "egal"} />
-          {o.max_motion != null && <Range value={Number(o.max_motion)} min={0.01} max={0.3} step={0.01} format={(v) => `Bewegung ≤ ${v.toFixed(2)}`} onChange={(v) => setO({ max_motion: v })} />}
+        <div className="field"><label>{m.onlyIfStill}</label>
+          <Switch checked={o.max_motion != null} onChange={(v) => setO({ max_motion: v ? 0.05 : null })} label={o.max_motion != null ? m.littleMotion : m.any} />
+          {o.max_motion != null && <Range value={Number(o.max_motion)} min={0.01} max={0.3} step={0.01} format={(v) => m.motionLe(fmtNum(v, 2))} onChange={(v) => setO({ max_motion: v })} />}
         </div>
       </div>
-      <div className="field"><label>Nicht auslösen in (z. B. Sofa, Bett, Yogamatte)</label>
+      <div className="field"><label>{m.excludeZones}</label>
         {zones.length ? (
           <ChipSelect options={zones.map((z) => z.id)} value={excl} onChange={(v) => setO({ exclude_zone_ids: v })}
             color={(id) => zones.find((z) => z.id === id)?.color}
             render={(id) => { const z = zones.find((x) => x.id === id)!; return <>{z.name} <span className="muted">· {z.cam}</span></>; }} />
-        ) : <span className="muted" style={{ fontSize: 13 }}>Keine Zonen – unter Kameras → Zonen z. B. „Sofa“ anlegen und hier ausschließen.</span>}
+        ) : <span className="muted" style={{ fontSize: 13 }}>{m.noZonesExclude}</span>}
       </div>
       {camHint}
     </>
@@ -340,6 +354,8 @@ function PoseTriggerFields({ f, setF, zones, poseCams }: {
 
 function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: Camera[]; idents: Identity[]; onClose: () => void }) {
   const qc = useQueryClient();
+  const msg = useMsgs();
+  const m = msg.rules;
   const [f, setF] = useState<RuleInput>(() => {
     if (!rule) return EMPTY;
     const { id: _id, ...rest } = rule;
@@ -362,8 +378,8 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
         trigger_options: opts, repeat_s: isTrack ? f.repeat_s ?? 0 : 0, repeat_max: isTrack ? f.repeat_max ?? 0 : 0 };
       return rule ? api.updateRule(rule.id, body) : api.createRule(body);
     },
-    onSuccess: () => { toast.success("Regel gespeichert", f.name); qc.invalidateQueries({ queryKey: ["rules"] }); onClose(); },
-    onError: (e: Error) => toast.error("Speichern fehlgeschlagen", e.message),
+    onSuccess: () => { toast.success(m.toastSaved, f.name); qc.invalidateQueries({ queryKey: ["rules"] }); onClose(); },
+    onError: (e: Error) => toast.error(m.toastSaveFailed, e.message),
   });
   const isTime = f.trigger === "time" || f.trigger === "sensor";   // ohne Track/Ereignis
   const isSensor = f.trigger === "sensor";
@@ -394,21 +410,21 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
   }));
 
   return (
-    <Dialog size="lg" onClose={onClose} icon={<Workflow size={18} />} title={rule ? "Regel bearbeiten" : "Neue Regel"} footer={<>
+    <Dialog size="lg" onClose={onClose} icon={<Workflow size={18} />} title={rule ? m.editRule : m.newRule} footer={<>
       <div className="spacer" style={{ fontSize: 13 }}>{ruleSummary(f, cams, idents, condText, sensors)}</div>
-      <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-      <button className="btn btn-primary" disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending && <span className="spinner" />}Speichern</button>
+      <button className="btn btn-ghost" onClick={onClose}>{msg.common.cancel}</button>
+      <button className="btn btn-primary" disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending && <span className="spinner" />}{msg.common.save}</button>
     </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <div className="form-grid">
-          <div className="field"><label>Name *</label><input className="input" autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="z. B. Person an Einfahrt nachts" /></div>
-          <div className="field"><label>Status</label><div style={{ height: 38, display: "flex", alignItems: "center" }}><Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? "aktiv" : "inaktiv"} /></div></div>
+          <div className="field"><label>{m.nameLabel}</label><input className="input" autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} placeholder={m.namePlaceholder} /></div>
+          <div className="field"><label>{m.status}</label><div style={{ height: 38, display: "flex", alignItems: "center" }}><Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label={f.enabled ? msg.common.active : msg.common.inactive} /></div></div>
         </div>
 
         {!rule && (
           <div className="row-wrap" style={{ gap: 8, alignItems: "center" }}>
-            <span className="muted row" style={{ gap: 6, fontSize: 13 }}><Wand2 size={14} />Vorlage:</span>
-            {RULE_TEMPLATES.map((t) => (
+            <span className="muted row" style={{ gap: 6, fontSize: 13 }}><Wand2 size={14} />{m.template}</span>
+            {ruleTemplates().map((t) => (
               <button type="button" key={t.id} className="btn btn-sm" title={t.text} onClick={() => setF((p) => t.build(p))}>{t.name}</button>
             ))}
           </div>
@@ -416,60 +432,57 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
 
         {isSensor ? (
           <div className="muted" style={{ fontSize: 13 }}>
-            Sensor-Regeln laufen, wenn ein virtueller Sensor (Administration → Sensoren) seinen Zustand bestätigt wechselt –
-            ohne Kamera-Ereignis. Ergebnis ist ein Eintrag unter „Hinweise“; „Snapshot“ hängt das Standbild vom Wechsel an.
-            Wechsel nach oder aus „unklar“ (z. B. Kamera offline) lösen nicht aus.
+            {m.sensorRulesInfo}
           </div>
         ) : isTime ? (
           <div className="muted" style={{ fontSize: 13 }}>
-            Zeit-Regeln laufen ohne Kamera-Ereignis: Kameras, Objekte und Identität spielen keine Rolle. Ergebnis ist ein Eintrag unter
-            „Hinweise“ (und ein Push, wenn die Aktion „Push“ gewählt ist).
+            {m.timeRulesInfo}
           </div>
         ) : <>
-        <fieldset className="fieldset"><legend>Wo</legend>
-          <div className="field"><label>Kameras (leer = alle)</label>
+        <fieldset className="fieldset"><legend>{m.legendWhere}</legend>
+          <div className="field"><label>{m.camerasEmptyAll}</label>
             <ChipSelect options={cams.map((c) => c.id)} value={f.camera_ids} onChange={(v) => set("camera_ids", v)}
               render={(id) => <span className="row" style={{ gap: 6 }}><CamIcon size={13} />{cams.find((c) => c.id === id)?.name}</span>} />
           </div>
-          <div className="field"><label>Zonen (leer = ganzes Bild)</label>
+          <div className="field"><label>{m.zonesEmptyAll}</label>
             {availZones.length ? (
               <ChipSelect options={availZones.map((z) => z.id)} value={f.zone_ids} onChange={(v) => set("zone_ids", v)}
                 color={(id) => availZones.find((z) => z.id === id)?.color}
                 render={(id) => { const z = availZones.find((x) => x.id === id)!; return <>{z.name} <span className="muted">· {z.cam}</span></>; }} />
-            ) : <span className="muted" style={{ fontSize: 13 }}>Für die gewählten Kameras sind keine Zonen definiert.</span>}
+            ) : <span className="muted" style={{ fontSize: 13 }}>{m.noZonesForCams}</span>}
           </div>
         </fieldset>
 
-        <fieldset className="fieldset"><legend>Was</legend>
-          <div className="field"><label>Objekte (leer = alle)</label>
+        <fieldset className="fieldset"><legend>{m.legendWhat}</legend>
+          <div className="field"><label>{m.objectsEmptyAll}</label>
             <ChipSelect options={[...ALL_LABELS]} value={f.labels} onChange={(v) => set("labels", v)} color={labelColor}
               render={(l) => <span className="row" style={{ gap: 6 }}><LabelIcon label={l} />{labelName(l)}</span>} />
           </div>
           <div className="form-grid">
-            <div className="field"><label>Mindest-Konfidenz</label><Range value={f.min_score} min={0.1} max={0.99} step={0.01} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => set("min_score", v)} /></div>
-            <div className="field"><label>Identität</label>
+            <div className="field"><label>{m.minConfidence}</label><Range value={f.min_score} min={0.1} max={0.99} step={0.01} format={pct} onChange={(v) => set("min_score", v)} /></div>
+            <div className="field"><label>{m.identity}</label>
               <div className="seg">
-                {(["any", "known", "unknown", "specific"] as const).map((m) => (
-                  <button type="button" key={m} className={f.identity.mode === m ? "on" : ""} onClick={() => set("identity", { ...f.identity, mode: m })}>
-                    {{ any: "Egal", known: "Bekannt", unknown: "Unbekannt", specific: "Bestimmte" }[m]}
+                {(["any", "known", "unknown", "specific"] as const).map((md) => (
+                  <button type="button" key={md} className={f.identity.mode === md ? "on" : ""} onClick={() => set("identity", { ...f.identity, mode: md })}>
+                    {m.idMode[md]}
                   </button>
                 ))}
               </div>
             </div>
           </div>
           {f.identity.mode === "specific" && (
-            <div className="field"><label>Identitäten *</label>
+            <div className="field"><label>{m.identities}</label>
               <SearchSelect multi inline value={f.identity.identity_ids} onChange={(v) => set("identity", { ...f.identity, identity_ids: v })}
-                options={idents.map((i) => ({ value: i.id, label: i.display_name, image: i.cover_url, sub: KIND_NAME[i.kind] }))} placeholder="Identität suchen …" />
+                options={idents.map((i) => ({ value: i.id, label: i.display_name, image: i.cover_url, sub: KIND_NAME[i.kind] }))} placeholder={m.searchIdentity} />
             </div>
           )}
-          {(f.identity.mode === "known" || f.identity.mode === "unknown") && <div className="hint muted" style={{ fontSize: 12 }}>„Bekannt“ = Identität mit vergebenem Namen.</div>}
+          {(f.identity.mode === "known" || f.identity.mode === "unknown") && <div className="hint muted" style={{ fontSize: 12 }}>{m.knownHint}</div>}
         </fieldset>
         </>}
 
-        <fieldset className="fieldset"><legend>Wann</legend>
+        <fieldset className="fieldset"><legend>{m.legendWhen}</legend>
           <div className="form-grid">
-            <div className="field span-2"><label>Auslöser</label>
+            <div className="field span-2"><label>{m.triggerLabel}</label>
               <div className="seg">
                 {(["enter", "leave", "dwell", "posture", "gesture", "time", "sensor"] as const).map((t) => (
                   <button type="button" key={t} className={f.trigger === t ? "on" : ""} onClick={() => setTrigger(t)}>
@@ -479,41 +492,41 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
               </div>
             </div>
             {f.trigger === "dwell" ? (
-              <div className="field"><label>Mindest-Verweildauer</label><Range value={f.min_dwell_s} min={1} max={600} step={1} format={(v) => `${v} s`} onChange={(v) => set("min_dwell_s", v)} /></div>
+              <div className="field"><label>{m.minDwell}</label><Range value={f.min_dwell_s} min={1} max={600} step={1} format={(v) => `${v} s`} onChange={(v) => set("min_dwell_s", v)} /></div>
             ) : f.trigger === "posture" ? (
-              <div className="field"><label>Haltung besteht mindestens</label><Range value={f.min_dwell_s} min={5} max={900} step={5} format={fmtDuration} onChange={(v) => set("min_dwell_s", v)} /></div>
+              <div className="field"><label>{m.postureMin}</label><Range value={f.min_dwell_s} min={5} max={900} step={5} format={fmtDuration} onChange={(v) => set("min_dwell_s", v)} /></div>
             ) : f.trigger === "time" ? (
-              <div className="field"><label><Clock size={13} style={{ verticalAlign: -2 }} /> Uhrzeit *</label>
+              <div className="field"><label><Clock size={13} style={{ verticalAlign: -2 }} /> {m.timeLabel}</label>
                 <input type="time" className="input" style={{ width: 130 }} value={String(f.trigger_options?.at ?? "")}
                   onChange={(e) => set("trigger_options", { at: e.target.value })} />
               </div>
             ) : <div />}
-            <div className="field"><label>Cooldown ({isTime ? "pro Regel" : "pro Kamera"})</label><Range value={f.cooldown_s} min={0} max={3600} step={5} format={(v) => (v >= 60 ? `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}` : `${v} s`)} onChange={(v) => set("cooldown_s", v)} /></div>
+            <div className="field"><label>{m.cooldown(isTime)}</label><Range value={f.cooldown_s} min={0} max={3600} step={5} format={(v) => (v >= 60 ? `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}` : `${v} s`)} onChange={(v) => set("cooldown_s", v)} /></div>
           </div>
           {(f.trigger === "posture" || f.trigger === "gesture") && (
             <PoseTriggerFields f={f} setF={setF} zones={availZones} poseCams={poseCams.length} />
           )}
           {isSensor && (
-            <div className="field"><label>Sensor und neuer Zustand *</label>
+            <div className="field"><label>{m.sensorAndState}</label>
               <SensorStatePicker allowAny sensorId={Number(f.trigger_options?.sensor_id ?? 0)} state={String(f.trigger_options?.state ?? "on")}
                 onChange={(id, st) => set("trigger_options", { sensor_id: id, state: st })} />
             </div>
           )}
           {isSensor ? null : f.trigger === "time" ? (
-            <div className="field"><label>An diesen Tagen</label>
+            <div className="field"><label>{m.onDays}</label>
               <ChipSelect options={[0, 1, 2, 3, 4, 5, 6]} value={f.schedule?.days ?? [0, 1, 2, 3, 4, 5, 6]}
                 onChange={(d) => set("schedule", d.length === 7 ? null : { days: [...d].sort(), start: "00:00", end: "23:59" })} render={(d) => DAYS[d]} />
             </div>
-          ) : <Switch checked={!!f.schedule} onChange={(v) => set("schedule", v ? { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" } : null)} label="Nur zu bestimmten Zeiten" />}
+          ) : <Switch checked={!!f.schedule} onChange={(v) => set("schedule", v ? { days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "06:00" } : null)} label={m.onlyAtTimes} />}
           {f.schedule && !isTime && (
             <div className="row-wrap" style={{ gap: 16 }}>
               <ChipSelect options={[0, 1, 2, 3, 4, 5, 6]} value={f.schedule.days} onChange={(d) => set("schedule", { ...f.schedule!, days: [...d].sort() })} render={(d) => DAYS[d]} />
               <div className="row">
                 <input type="time" className="input input-sm" style={{ width: 110 }} value={f.schedule.start} onChange={(e) => set("schedule", { ...f.schedule!, start: e.target.value })} />
-                <span className="muted">bis</span>
+                <span className="muted">{m.until}</span>
                 <input type="time" className="input input-sm" style={{ width: 110 }} value={f.schedule.end} onChange={(e) => set("schedule", { ...f.schedule!, end: e.target.value })} />
               </div>
-              {f.schedule.start > f.schedule.end && <span className="muted" style={{ fontSize: 12 }}>über Mitternacht</span>}
+              {f.schedule.start > f.schedule.end && <span className="muted" style={{ fontSize: 12 }}>{m.overMidnight}</span>}
             </div>
           )}
         </fieldset>
@@ -521,25 +534,24 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
         <ConditionsBlock f={f} cams={cams} onChange={(p) => setF((x) => ({ ...x, ...p }))} />
 
         {isTrack && (
-          <fieldset className="fieldset"><legend>Wiederholen bis quittiert</legend>
+          <fieldset className="fieldset"><legend>{m.repeatLegend}</legend>
             <Switch checked={!!f.repeat_s} onChange={(v) => setF((p) => ({ ...p, repeat_s: v ? 120 : 0, repeat_max: v ? 3 : 0 }))}
-              label="Aktionen wiederholen, solange das Ereignis läuft und nicht quittiert ist" />
+              label={m.repeatSwitch} />
             {!!f.repeat_s && (
               <div className="form-grid">
-                <div className="field"><label><Repeat size={13} style={{ verticalAlign: -2 }} /> Wiederholen alle</label>
+                <div className="field"><label><Repeat size={13} style={{ verticalAlign: -2 }} /> {m.repeatEvery}</label>
                   <Range value={f.repeat_s} min={10} max={1800} step={10} format={fmtDuration} onChange={(v) => set("repeat_s", v)} /></div>
-                <div className="field"><label>Höchstens</label>
-                  <Range value={f.repeat_max ?? 0} min={0} max={20} step={1} format={(v) => (v ? `${v}×` : "unbegrenzt")} onChange={(v) => set("repeat_max", v)} /></div>
+                <div className="field"><label>{m.atMost}</label>
+                  <Range value={f.repeat_max ?? 0} min={0} max={20} step={1} format={(v) => (v ? `${v}×` : m.unlimited)} onChange={(v) => set("repeat_max", v)} /></div>
               </div>
             )}
             {!!f.repeat_s && <div className="hint muted" style={{ fontSize: 12 }}>
-              Stoppt, sobald das Ereignis quittiert wird (Ereignisse → „Quittieren“, MCP <code>acknowledge_alert</code>), endet
-              {f.trigger === "posture" ? " oder die Person die Haltung verlässt" : ""}. Platzhalter <code>{"{repeat}"}</code> = Nummer der Wiederholung.
+              {m.repeatHint1}<code>acknowledge_alert</code>{m.repeatHint2(f.trigger === "posture")}<code>{"{repeat}"}</code>{m.repeatHint3}
             </div>}
           </fieldset>
         )}
 
-        <fieldset className="fieldset"><legend>Aktionen</legend>
+        <fieldset className="fieldset"><legend>{m.legendActions}</legend>
           {f.actions.map((a, i) => (
             <ActionEditor key={i} a={a} onChange={(n) => set("actions", f.actions.map((x, k) => (k === i ? n : x)))} onRemove={() => set("actions", f.actions.filter((_, k) => k !== i))} />
           ))}
@@ -557,11 +569,14 @@ function RuleDialog({ rule, cams, idents, onClose }: { rule: Rule | null; cams: 
 function RuleSummaryRow({ r, cams, idents }: { r: Rule; cams: Camera[]; idents: Identity[] }) {
   const condText = useConditionSummary(r.conditions ?? [], cams);
   const sensors = useSensors();
-  return <>{ruleSummary(r, cams, idents, condText, sensors)}{r.conditions?.length ? <span className="badge outline" style={{ marginLeft: 6 }} title="Regel mit Bedingungen"><ListChecks size={12} /></span> : null}</>;
+  const m = useMsgs().rules;
+  return <>{ruleSummary(r, cams, idents, condText, sensors)}{r.conditions?.length ? <span className="badge outline" style={{ marginLeft: 6 }} title={m.withConditions}><ListChecks size={12} /></span> : null}</>;
 }
 
 export function RulesPage() {
   const qc = useQueryClient();
+  const msg = useMsgs();
+  const m = msg.rules;
   const rules = useQuery({ queryKey: ["rules"], queryFn: api.rules });
   const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
   const idents = useQuery({ queryKey: ["identities", "all"], queryFn: () => api.identities({}) });
@@ -570,45 +585,45 @@ export function RulesPage() {
   const toggle = useMutation({
     mutationFn: (r: Rule) => { const { id, ...rest } = r; return api.updateRule(id, { ...rest, enabled: !r.enabled }); },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["rules"] }),
-    onError: (e: Error) => toast.error("Fehler", e.message),
+    onError: (e: Error) => toast.error(msg.common.error, e.message),
   });
   const dup = useMutation({
-    mutationFn: (r: Rule) => { const { id: _id, ...rest } = r; void _id; return api.createRule({ ...rest, name: `${r.name} (Kopie)`, enabled: false }); },
-    onSuccess: () => { toast.success("Regel dupliziert"); qc.invalidateQueries({ queryKey: ["rules"] }); },
+    mutationFn: (r: Rule) => { const { id: _id, ...rest } = r; void _id; return api.createRule({ ...rest, name: m.copyName(r.name), enabled: false }); },
+    onSuccess: () => { toast.success(m.toastDuplicated); qc.invalidateQueries({ queryKey: ["rules"] }); },
   });
   const delM = useMutation({
     mutationFn: (id: number) => api.deleteRule(id),
-    onSuccess: () => { toast.success("Regel gelöscht"); qc.invalidateQueries({ queryKey: ["rules"] }); setDel(null); },
-    onError: (e: Error) => toast.error("Löschen fehlgeschlagen", e.message),
+    onSuccess: () => { toast.success(m.toastDeleted); qc.invalidateQueries({ queryKey: ["rules"] }); setDel(null); },
+    onError: (e: Error) => toast.error(m.toastDeleteFailed, e.message),
   });
 
   return (
     <>
       <div className="page-header">
-        <div><h1>Regeln</h1><div className="sub">Automatische Aktionen bei bestimmten Erkennungen</div></div>
-        <button className="btn btn-primary" onClick={() => setEdit("new")}><Plus size={16} />Neue Regel</button>
+        <div><h1>{m.title}</h1><div className="sub">{m.sub}</div></div>
+        <button className="btn btn-primary" onClick={() => setEdit("new")}><Plus size={16} />{m.newRule}</button>
       </div>
       {rules.isLoading ? <Loading /> : !rules.data?.length ? (
-        <div className="card"><Empty icon={<Workflow size={44} />} title="Keine Regeln" text="Regeln lösen Snapshots, Clips, MQTT-Nachrichten, Webhooks oder Push-Hinweise aus – bei Erkennungen oder zu einer Uhrzeit." /></div>
+        <div className="card"><Empty icon={<Workflow size={44} />} title={m.emptyTitle} text={m.emptyText} /></div>
       ) : (
         <div className="list">
           {rules.data.map((r, i) => (
             <div key={r.id} className={`list-item ${r.enabled ? "" : "disabled"}`} style={{ animationDelay: `${i * 30}ms` }}>
               <Switch checked={r.enabled} onChange={() => toggle.mutate(r)} />
               <div className="grow">
-                <div className="title">{r.name}{!r.enabled && <span className="badge">inaktiv</span>}</div>
+                <div className="title">{r.name}{!r.enabled && <span className="badge">{msg.common.inactive}</span>}</div>
                 <div style={{ marginTop: 4 }}><RuleSummaryRow r={r} cams={cams.data ?? []} idents={idents.data ?? []} /></div>
               </div>
               <div className="row" style={{ gap: 4 }}>{r.actions.map((a, k) => <span key={k} className="badge accent" title={ACTION_META[a.type].name}>{ACTION_META[a.type].icon}</span>)}</div>
-              <button className="btn btn-sm" onClick={() => setEdit(r)}><Pencil size={14} />Bearbeiten</button>
-              <button className="btn btn-sm btn-ghost btn-icon" title="Duplizieren" onClick={() => dup.mutate(r)}><Copy size={15} /></button>
-              <button className="btn btn-sm btn-ghost btn-icon" title="Löschen" onClick={() => setDel(r)}><Trash2 size={15} /></button>
+              <button className="btn btn-sm" onClick={() => setEdit(r)}><Pencil size={14} />{msg.common.edit}</button>
+              <button className="btn btn-sm btn-ghost btn-icon" title={m.duplicate} onClick={() => dup.mutate(r)}><Copy size={15} /></button>
+              <button className="btn btn-sm btn-ghost btn-icon" title={msg.common.delete} onClick={() => setDel(r)}><Trash2 size={15} /></button>
             </div>
           ))}
         </div>
       )}
       {edit && <RuleDialog rule={edit === "new" ? null : edit} cams={cams.data ?? []} idents={idents.data ?? []} onClose={() => setEdit(null)} />}
-      {del && <ConfirmDialog title="Regel löschen?" busy={delM.isPending} text={<>Regel „{del.name}“ wird dauerhaft gelöscht.</>} onConfirm={() => delM.mutate(del.id)} onClose={() => setDel(null)} />}
+      {del && <ConfirmDialog title={m.deleteTitle} busy={delM.isPending} text={m.deleteText(del.name)} onConfirm={() => delM.mutate(del.id)} onClose={() => setDel(null)} />}
     </>
   );
 }

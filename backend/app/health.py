@@ -28,7 +28,7 @@ from typing import Any, Optional
 
 from sqlalchemy import select
 
-from . import registry, settings_store, state
+from . import i18n, registry, settings_store, state
 from .config import config
 from .db import SessionLocal
 from .models import CameraHealthLog
@@ -42,15 +42,13 @@ TICK_S = 5.0
 NOTIFY_DEDUP_S = 3600   # je Kamera und Problemart höchstens eine Warnung pro Stunde (flatternde Befunde)
 TYPES = ("dark", "blur", "covered", "frozen", "moved")
 
-LABEL_DE = {"dark": "zu dunkel", "blur": "unscharf", "covered": "verdeckt", "frozen": "Bild eingefroren",
-            "moved": "verschoben"}
-_TEXT_DE = {"dark": "Zu dunkel", "blur": "Unscharf", "covered": "Verdeckt", "frozen": "Bild eingefroren",
-            "moved": "Verschoben"}
-_HINT_DE = {"dark": "Licht aus oder Linse abgedeckt?",
-            "blur": "Linse verschmutzt, beschlagen oder Fokus verstellt?",
-            "covered": "Linse abgedeckt oder Kamera zugestellt?",
-            "frozen": "Die Kamera liefert seit einiger Zeit dasselbe Bild – ggf. neu starten.",
-            "moved": "Kamera bewegt oder verdreht? Falls gewollt: Referenz neu setzen."}
+
+
+def _tr(group: str, ptype: str) -> str:
+    """Text je Problemart (`health.label|text|hint.<type>`), unbekannte Art → die Art selbst."""
+    if ptype not in TYPES:
+        return "" if group == "hint" else ptype
+    return i18n.t(f"health.{group}.{ptype}")
 
 _lock = threading.RLock()
 _cams: dict[int, dict[str, Any]] = {}       # camera_id -> {msg, rx, problems:{type: {...}}, health}
@@ -73,7 +71,9 @@ def _iso(ts: Optional[float]) -> Optional[str]:
 def _since_text(ts: float, now: Optional[float] = None) -> str:
     dt = datetime.fromtimestamp(ts, timezone.utc).astimezone(config.tz)
     today = datetime.fromtimestamp(now or _now(), timezone.utc).astimezone(config.tz).date()
-    return f"seit {dt:%H:%M}" if dt.date() == today else f"seit {dt:%d.%m.} {dt:%H:%M}"
+    if dt.date() == today:
+        return i18n.t("health.since_today", time=f"{dt:%H:%M}")
+    return i18n.t("health.since_other", date=dt.strftime(i18n.t("health.date_short")), time=f"{dt:%H:%M}")
 
 
 def _direction(sx: Optional[float], sy: Optional[float]) -> str:
@@ -86,18 +86,18 @@ def _direction(sx: Optional[float], sy: Optional[float]) -> str:
         return ""
     parts = []
     if abs(sx) >= 0.4 * amount:
-        parts.append("rechts" if sx > 0 else "links")
+        parts.append(i18n.t("health.dir.right" if sx > 0 else "health.dir.left"))
     if abs(sy) >= 0.4 * amount:
-        parts.append("unten" if sy > 0 else "oben")
-    return f"Bild ca. {round(amount * 100)} % nach {'/'.join(parts)}"
+        parts.append(i18n.t("health.dir.down" if sy > 0 else "health.dir.up"))
+    return i18n.t("health.shift", pct=round(amount * 100), dir="/".join(parts))
 
 
 def problem_text(ptype: str, since: float, extra: Optional[dict[str, Any]] = None, now: Optional[float] = None) -> str:
-    """Deutscher Kurztext, z. B. „Verdeckt seit 14:02“ oder „Verschoben (Bild ca. 8 % nach links) seit 14:02“."""
-    base = _TEXT_DE.get(ptype, ptype)
+    """Kurztext in der aktuellen Sprache, z. B. "Covered since 14:02" / „Verdeckt seit 14:02“."""
+    base = _tr("text", ptype)
     if ptype == "moved" and extra:
         d = _direction(extra.get("shift_x"), extra.get("shift_y"))
-        base = f"Verschoben ({d})" if d else "Verschoben oder verdreht"
+        base = i18n.t("health.moved_dir", dir=d) if d else i18n.t("health.moved_unknown")
     return f"{base} {_since_text(since, now)}"
 
 
@@ -185,9 +185,10 @@ def _evaluate(camera_id: int, now: Optional[float] = None) -> None:
                         c["problems"].pop(t)
                         ended.append((t, e))
             active = sorted(((t, e) for t, e in c["problems"].items() if e["active"]), key=lambda x: x[1]["since"])
-            health = {"state": "unknown" if stale else ("warn" if active else "ok"),
-                      "problems": [{"type": t, "since": _iso(e["since"]),
-                                    "text": problem_text(t, e["since"], e.get("extra"), now)} for t, e in active]}
+            with i18n.use_lang(i18n.system_lang()):   # Status-Cache/WS/MQTT immer in der Systemsprache
+                health = {"state": "unknown" if stale else ("warn" if active else "ok"),
+                          "problems": [{"type": t, "since": _iso(e["since"]),
+                                        "text": problem_text(t, e["since"], e.get("extra"), now)} for t, e in active]}
         changed = health != c.get("health")
         c["health"] = health
     for t, e in started:
@@ -215,15 +216,15 @@ def _start_episode(camera_id: int, cam: Optional[dict[str, Any]], t: str, e: dic
             e["log_id"] = row.id
     except Exception:  # noqa: BLE001
         log.exception("Gesundheits-Log Kamera %s nicht gespeichert", camera_id)
-    name = (cam or {}).get("name") or f"Kamera {camera_id}"
+    name = (cam or {}).get("name") or i18n.t("health.camera", id=camera_id)
     text = problem_text(t, e["since"], e.get("extra"))
     log.warning("Kamera %s (%s): %s", camera_id, name, text)
     try:
         from . import notifications
         image = _grab_frame(camera_id)
         n = notifications.create(
-            source="health", level="warning", title=f"Kamera {name}: {LABEL_DE.get(t, t)}",
-            message=f"{text}. {_HINT_DE.get(t, '')}".strip(), camera_id=camera_id, image_path=image,
+            source="health", level="warning", title=i18n.t("health.title_warn", name=name, label=_tr("label", t)),
+            message=f"{text}. {_tr('hint', t)}".strip(), camera_id=camera_id, image_path=image,
             data={"type": t, "value": e.get("value"), "since": _iso(e["since"]), "state": "warn"},
             dedup_key=f"health:{camera_id}:{t}", dedup_s=NOTIFY_DEDUP_S)
         e["notified"] = n is not None
@@ -248,16 +249,16 @@ def _end_episode(camera_id: int, cam: Optional[dict[str, Any]], t: str, e: dict[
             s.commit()
     except Exception:  # noqa: BLE001
         log.exception("Gesundheits-Log Kamera %s nicht abgeschlossen", camera_id)
-    name = (cam or {}).get("name") or f"Kamera {camera_id}"
-    log.info("Kamera %s (%s): %s behoben", camera_id, name, LABEL_DE.get(t, t))
+    name = (cam or {}).get("name") or i18n.t("health.camera", id=camera_id)
+    log.info("Kamera %s (%s): %s behoben", camera_id, name, t)
     if not e.get("notified") or cam is None:
         return
     try:
         from . import notifications
         mins = max(1, round((now - e["since"]) / 60))
         notifications.create(
-            source="health", level="info", title=f"Kamera {name}: wieder in Ordnung",
-            message=f"{_TEXT_DE.get(t, t)} – behoben nach ca. {mins} min.", camera_id=camera_id,
+            source="health", level="info", title=i18n.t("health.title_ok", name=name),
+            message=i18n.t("health.msg_ok", text=_tr("text", t), mins=mins), camera_id=camera_id,
             data={"type": t, "state": "ok", "since": _iso(e["since"]), "end": _iso(now)}, priority="low",
             dedup_key=f"health:{camera_id}:{t}:ok", dedup_s=NOTIFY_DEDUP_S)
     except Exception:  # noqa: BLE001
@@ -415,7 +416,11 @@ def current(camera_id: int) -> Optional[dict[str, Any]]:
         pending = sorted(({"type": t, "since": _iso(e["since"]),
                            "text": problem_text(t, e["since"], e.get("extra"))}
                           for t, e in c["problems"].items() if not e["active"]), key=lambda p: p["since"] or "")
-        return {"state": h["state"], "problems": list(h["problems"]), "pending": pending,
+        # Texte in der Sprache der Anfrage neu berechnen (der Status-Cache steht in der Systemsprache)
+        problems = [{**p, "text": problem_text(p["type"], c["problems"][p["type"]]["since"],
+                                               c["problems"][p["type"]].get("extra"))}
+                    if p.get("type") in c["problems"] else dict(p) for p in h["problems"]]
+        return {"state": h["state"], "problems": problems, "pending": pending,
                 "metrics": dict(msg.get("metrics") or {}), "ts": _iso(msg.get("ts"))}
 
 

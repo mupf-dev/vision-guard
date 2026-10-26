@@ -56,20 +56,23 @@ class RainOutlook:
 
     def text(self, threshold: float) -> str:
         """„70 % Regen ab 15 Uhr“ / „70 % Regen ab morgen 6 Uhr“ / „höchstens 10 % Regen“ / „kein Regen erwartet“."""
+        from . import i18n   # Platzhalter {weather}: Sprache der Anfrage bzw. Systemsprache
         p = int(round(self.max_probability))
         if p <= 0:
-            return "kein Regen erwartet"
+            return i18n.t("rules.weather.no_rain")
         if threshold > 0 and self.max_probability < threshold:
-            return f"höchstens {p} % Regen"
+            return i18n.t("rules.weather.at_most", p=p)
         if self.start_ts is None:
-            return f"{p} % Regen in den nächsten {self.hours} h"
+            return i18n.t("rules.weather.next_hours", p=p, hours=self.hours)
         now = datetime.now(timezone.utc).astimezone(config.tz)
         start = datetime.fromtimestamp(self.start_ts, timezone.utc).astimezone(config.tz)
         if start <= now:
-            return f"{p} % Regen, schon jetzt"
-        day = "" if start.date() == now.date() else ("morgen " if start.date() == (now + timedelta(days=1)).date()
-                                                     else start.strftime("%d.%m. "))
-        return f"{p} % Regen ab {day}{start.hour} Uhr"
+            return i18n.t("rules.weather.now", p=p)
+        if start.date() == now.date():
+            return i18n.t("rules.weather.from_today", p=p, hour=start.hour)
+        if start.date() == (now + timedelta(days=1)).date():
+            return i18n.t("rules.weather.from_tomorrow", p=p, hour=start.hour)
+        return i18n.t("rules.weather.from_date", p=p, hour=start.hour, date=start.strftime(i18n.t("rules.weather.date_fmt")))
 
 
 def location() -> Optional[tuple[float, float]]:

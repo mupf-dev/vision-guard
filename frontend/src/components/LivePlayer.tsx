@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { VideoOff, Loader2 } from "lucide-react";
 import { isMock, mockSnapshot } from "../lib/mock";
+import { useMsgs } from "../i18n";
 
 /** Bereich innerhalb des Containers, in dem das Videobild tatsächlich liegt (object-fit: contain). */
 export interface ContentRect { x: number; y: number; w: number; h: number; cw: number; ch: number }
@@ -30,6 +31,7 @@ export function containRect(cw: number, ch: number, vw: number, vh: number): Con
 export function LivePlayer({
   cameraId, aspect, offline, children,
 }: { cameraId: number; aspect?: number | null; offline?: boolean; children?: (r: ContentRect) => ReactNode }) {
+  const m = useMsgs();
   const wrapRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -123,13 +125,13 @@ export function LivePlayer({
       )}
       {offline ? (
         <div className="player-state offline">
-          <div className="inner"><VideoOff size={32} /><span>Kamera deaktiviert</span></div>
+          <div className="inner"><VideoOff size={32} /><span>{m.ui.player.disabled}</span></div>
         </div>
       ) : state !== "playing" && (
         <div className="player-state">
           <div className="inner">
-            {state === "loading" ? <><Loader2 size={26} style={{ animation: "spin 1s linear infinite" }} /><span>Verbinde Stream …</span></>
-              : <><VideoOff size={28} /><span>Stream nicht verfügbar</span></>}
+            {state === "loading" ? <><Loader2 size={26} style={{ animation: "spin 1s linear infinite" }} /><span>{m.ui.player.connecting}</span></>
+              : <><VideoOff size={28} /><span>{m.ui.player.unavailable}</span></>}
           </div>
         </div>
       )}

@@ -3,6 +3,8 @@
 Konvention (CONTRACT.md „Nachträge: Welle 1“, MCP): Datei `tools/<thema>.py`, Helfer aus `tools/common.py`,
 Rückgabe `ok(text, structured)` bzw. `fail(meldung)`, Medien-URLs signiert (`signed=1`). Bis W2 nur lesende Tools
 (`annotations=READ_ONLY`); ab W2 auch Tools mit Wirkung (`annotations=WRITE`, zuerst `await require_write(ctx)`).
+Sprachen (I18N.D): Tool-Beschreibungen englisch; Antworttexte nur über `t("<bereich>.<schlüssel>")` bzw.
+`mapped(...)` aus `common` – Texte in `locales/en.json` (Quelle) und `locales/de.json`.
 """
 
 from __future__ import annotations

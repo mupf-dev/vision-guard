@@ -18,6 +18,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from . import i18n
 
 log = logging.getLogger("vg.embed")
 
@@ -81,11 +82,11 @@ def request(kind: str, *, path: Optional[str] = None, image_bytes: Optional[byte
     if kind != "text" and not path and not image_bytes:
         raise ValueError("path oder image_bytes nötig")
     if image_bytes is not None and len(image_bytes) > MAX_IMAGE_BYTES:
-        raise EmbedError("Bild zu groß (max. 4 MB)")
+        raise EmbedError(i18n.t("errors.image_too_large_4mb"))
     from .mqtt_bus import bus   # spät importieren (Zyklus mqtt_bus → events → …)
 
     if bus.client is None or not bus.client.is_connected():
-        raise EmbedUnavailable("Analyse-Dienst nicht erreichbar")
+        raise EmbedUnavailable(i18n.t("errors.analysis_unreachable"))
     rid = uuid.uuid4().hex
     body: dict[str, Any] = {"request_id": rid, "kind": kind, "path": path, "bbox": bbox, "augment": bool(augment),
                             "text": text, "model": model or ("siglip2" if kind == "text" else "dinov2"),
@@ -97,7 +98,7 @@ def request(kind: str, *, path: Optional[str] = None, image_bytes: Optional[byte
         bus.publish(TOPIC, body, qos=1)
         if not p.event.wait(timeout):
             log.warning("Embedding %s: keine Antwort des Workers binnen %.0f s", kind, timeout)
-            raise EmbedUnavailable("Analyse-Dienst nicht erreichbar")
+            raise EmbedUnavailable(i18n.t("errors.analysis_unreachable"))
     finally:
         with _lock:
             _pending.pop(rid, None)
@@ -105,7 +106,7 @@ def request(kind: str, *, path: Optional[str] = None, image_bytes: Optional[byte
     if not msg.get("ok") or not msg.get("embedding"):
         err = str(msg.get("error") or "unbekannter Fehler")
         if err == "busy":
-            raise EmbedUnavailable("Analyse-Dienst ausgelastet – bitte gleich noch einmal versuchen")
+            raise EmbedUnavailable(i18n.t("errors.analysis_busy"))
         raise EmbedError(err)
     emb = [float(x) for x in msg["embedding"]]
     return EmbedResult(embedding=emb, dim=len(emb), model=str(msg.get("model") or ""),

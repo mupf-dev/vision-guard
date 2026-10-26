@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from ..auth import require_user
 from ..db import SessionLocal, get_db
 from ..inventory_diff import WhenError, parse_when
@@ -35,9 +36,9 @@ def _period(since: Optional[str], until: Optional[str]) -> tuple[datetime, datet
         raise HTTPException(422, str(e)) from None
     t1 = min(t1, now)
     if t0 >= t1:
-        raise HTTPException(422, "„since“ muss vor „until“ bzw. vor jetzt liegen")
+        raise HTTPException(422, i18n.t("errors.since_before_until"))
     if t1 - t0 > MAX_SPAN:
-        raise HTTPException(422, "Zeitraum höchstens 31 Tage")
+        raise HTTPException(422, i18n.t("errors.period_max_31_days"))
     return t0, t1
 
 
@@ -71,7 +72,7 @@ async def generate(body: ReportGenerateIn):
     t0, t1 = _period(body.since, body.until)
     out = await asyncio.to_thread(service.generate, t0, t1, kind="manual", deliver=body.deliver)
     if out is None:   # nur bei period_key möglich – hier nie
-        raise HTTPException(409, "Bericht existiert bereits")
+        raise HTTPException(409, i18n.t("errors.report_exists"))
     return out
 
 
@@ -80,7 +81,7 @@ def get_report(report_id: int, db: Session = Depends(get_db),
                signed: Optional[int] = Query(None, description="1 = Bild-URLs in den Fakten signieren")):
     r = db.get(Report, report_id)
     if r is None:
-        raise HTTPException(404, "Bericht nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.report_not_found"))
     return service.report_json(r, full=True)
 
 
@@ -88,6 +89,6 @@ def get_report(report_id: int, db: Session = Depends(get_db),
 def delete_report(report_id: int, db: Session = Depends(get_db)):
     r = db.get(Report, report_id)
     if r is None:
-        raise HTTPException(404, "Bericht nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.report_not_found"))
     db.delete(r)
     db.commit()

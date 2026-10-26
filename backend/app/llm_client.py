@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 import httpx
 
+from . import i18n
 from . import settings_store
 from .config import config
 
@@ -71,7 +72,7 @@ def _status_error(provider: str, resp: httpx.Response) -> LLMError:
     except Exception:  # noqa: BLE001
         pass
     if resp.status_code in (401, 403):
-        return LLMError(f"{provider}: Zugriff verweigert (HTTP {resp.status_code}) – Schlüssel prüfen")
+        return LLMError(i18n.t("errors.llm_access_denied", provider=provider, status=resp.status_code))
     return LLMError(f"{provider}: HTTP {resp.status_code}{(' – ' + detail) if detail else ''}")
 
 
@@ -118,15 +119,15 @@ def complete(messages: list[dict[str, Any]], *, system: Optional[str] = None, ma
     if images:
         messages = _with_images(provider, messages, images)
     if provider == "none":
-        raise LLMError("Kein Sprachmodell eingerichtet (Einstellungen → KI-Sprachmodell)")
+        raise LLMError(i18n.t("errors.llm_not_configured"))
     if not model:
-        raise LLMError("Kein Modell eingetragen (Einstellungen → KI-Sprachmodell)")
+        raise LLMError(i18n.t("errors.llm_no_model"))
     to = float(timeout or c["timeout"])
     t0 = time.perf_counter()
     try:
         if provider == "openai_compat":
             if not c["base_url"]:
-                raise LLMError("Keine Basis-URL eingetragen (Einstellungen → KI-Sprachmodell)")
+                raise LLMError(i18n.t("errors.llm_no_base_url"))
             msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
             headers = {"Content-Type": "application/json"}
             if config.llm_api_key:
@@ -143,7 +144,7 @@ def complete(messages: list[dict[str, Any]], *, system: Optional[str] = None, ma
             used_model = str(data.get("model") or model)
         elif provider == "anthropic":
             if not config.anthropic_api_key:
-                raise LLMError("VG_ANTHROPIC_API_KEY ist nicht gesetzt")
+                raise LLMError(i18n.t("errors.llm_anthropic_key_missing"))
             body: dict[str, Any] = {"model": model, "max_tokens": int(max_tokens), "temperature": float(temperature),
                                     "messages": list(messages)}
             if system:
@@ -158,17 +159,17 @@ def complete(messages: list[dict[str, Any]], *, system: Optional[str] = None, ma
             usage = data.get("usage") or {}
             used_model = str(data.get("model") or model)
         else:
-            raise LLMError(f"Unbekannter Anbieter: {provider}")
+            raise LLMError(i18n.t("errors.llm_unknown_provider", provider=provider))
     except LLMError:
         raise
     except httpx.TimeoutException:
-        raise LLMError(f"{provider}: keine Antwort binnen {to:.0f} s") from None
+        raise LLMError(i18n.t("errors.llm_timeout", provider=provider, seconds=f"{to:.0f}")) from None
     except httpx.HTTPError as e:
-        raise LLMError(f"{provider}: nicht erreichbar ({type(e).__name__})") from None
+        raise LLMError(i18n.t("errors.llm_unreachable", provider=provider, error=type(e).__name__)) from None
     except ValueError:
-        raise LLMError(f"{provider}: ungültige Antwort (kein JSON)") from None
+        raise LLMError(i18n.t("errors.llm_invalid_response", provider=provider)) from None
     ms = (time.perf_counter() - t0) * 1000
     if not text:
-        raise LLMError(f"{provider}: leere Antwort")
+        raise LLMError(i18n.t("errors.llm_empty_response", provider=provider))
     log.info("LLM %s/%s: %d Zeichen in %.0f ms", provider, used_model, len(text), ms)
     return LLMResult(text=text, model=used_model, provider=provider, ms=round(ms, 1), usage=dict(usage))

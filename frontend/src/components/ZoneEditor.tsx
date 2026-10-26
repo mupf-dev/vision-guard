@@ -4,9 +4,13 @@ import type { Zone, ZonePurpose } from "../lib/types";
 import { randomId } from "../lib/format";
 import { api } from "../lib/api";
 import { isMock, mockSnapshot } from "../lib/mock";
+import { msgs, useMsgs } from "../i18n";
 
 /** W2 (C3): Zweck einer Zone fürs Haustier-Tagebuch. */
-export const ZONE_PURPOSE_NAME: Record<ZonePurpose, string> = { food: "Napf", water: "Wasser", litter: "Katzenklo" };
+export const ZONE_PURPOSE_NAME = new Proxy({} as Record<ZonePurpose, string>, {
+  get: (_t, k) => (typeof k === "string" ? msgs().ui.zone.purpose[k] : undefined),
+});
+const ZONE_PURPOSES: ZonePurpose[] = ["food", "water", "litter"];
 
 const COLORS = ["#ff9800", "#22c55e", "#3b9cff", "#e879f9", "#ef4444", "#facc15", "#2dd4bf"];
 
@@ -17,6 +21,8 @@ const COLORS = ["#ff9800", "#22c55e", "#3b9cff", "#e879f9", "#ef4444", "#facc15"
  */
 export function ZoneEditor({ cameraId, zones, onChange }: { cameraId: number | null; zones: Zone[]; onChange: (z: Zone[]) => void }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const mm = useMsgs();
+  const m = mm.ui.zone;
   const [sel, setSel] = useState<string | null>(zones[0]?.id ?? null);
   const [draft, setDraft] = useState<[number, number][] | null>(null);
   const [hover, setHover] = useState<[number, number] | null>(null);
@@ -48,7 +54,7 @@ export function ZoneEditor({ cameraId, zones, onChange }: { cameraId: number | n
   const finishDraft = () => {
     if (!draft || draft.length < 3) return;
     const id = randomId("z");
-    const z: Zone = { id, name: `Zone ${zones.length + 1}`, color: COLORS[zones.length % COLORS.length], polygon: draft.map(round) };
+    const z: Zone = { id, name: m.defaultName(zones.length + 1), color: COLORS[zones.length % COLORS.length], polygon: draft.map(round) };
     onChange([...zones, z]);
     setSel(id);
     setDraft(null);
@@ -103,10 +109,10 @@ export function ZoneEditor({ cameraId, zones, onChange }: { cameraId: number | n
     <div className="zone-editor">
       <div>
         <div className="ze-stage">
-          {imgSrc && !imgErr ? <img src={imgSrc} alt="Kamerabild" draggable={false} style={imgLoading ? { aspectRatio: "16/9" } : undefined}
+          {imgSrc && !imgErr ? <img src={imgSrc} alt={m.cameraImage} draggable={false} style={imgLoading ? { aspectRatio: "16/9" } : undefined}
             onLoad={() => setImgLoading(false)} onError={() => { setImgErr(true); setImgLoading(false); }} />
             : <div style={{ aspectRatio: "16/9", display: "grid", placeItems: "center", color: "var(--text-3)", background: "repeating-linear-gradient(45deg,#070a0f 0 12px,#0a0e15 12px 24px)" }}>
-              {cameraId === null ? "Standbild nach dem ersten Speichern verfügbar" : "Kein Standbild verfügbar"}</div>}
+              {cameraId === null ? m.afterFirstSave : m.noImage}</div>}
           <svg ref={svgRef} className={draft ? "drawing" : ""} onClick={onStageClick}
             onDoubleClick={(e) => { if (draft) { e.preventDefault(); finishDraft(); } }}
             onMouseMove={(e) => draft && setHover(pt(e))} onMouseLeave={() => setHover(null)}>
@@ -139,40 +145,39 @@ export function ZoneEditor({ cameraId, zones, onChange }: { cameraId: number | n
               </g>
             )}
           </svg>
-          {imgLoading && imgSrc && !imgErr && <div className="player-state"><div className="inner"><span className="spinner" />Lade Standbild …</div></div>}
+          {imgLoading && imgSrc && !imgErr && <div className="player-state"><div className="inner"><span className="spinner" />{m.loadingImage}</div></div>}
           <div className="ze-hint">
-            {draft ? `Punkte setzen (${draft.length}) · Klick auf ersten Punkt / Doppelklick / Enter = fertig · Backspace = zurück · Esc = abbrechen`
-              : "Punkte ziehen · Doppelklick auf Kante = Punkt einfügen · Rechtsklick = Punkt entfernen"}
+            {draft ? m.hintDraw(draft.length) : m.hintEdit}
           </div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="row">
           {draft ? <>
-            <button type="button" className="btn btn-primary btn-sm" disabled={draft.length < 3} onClick={finishDraft}><Check size={14} />Fertig</button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={draft.length < 3} onClick={finishDraft}><Check size={14} />{m.done}</button>
             <button type="button" className="btn btn-sm" onClick={() => setDraft((d) => d?.slice(0, -1) ?? null)}><Undo2 size={14} /></button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDraft(null)}>Abbrechen</button>
-          </> : <button type="button" className="btn btn-sm btn-primary" onClick={() => { setDraft([]); setSel(null); }}><Plus size={14} />Neue Zone zeichnen</button>}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDraft(null)}>{mm.common.cancel}</button>
+          </> : <button type="button" className="btn btn-sm btn-primary" onClick={() => { setDraft([]); setSel(null); }}><Plus size={14} />{m.newZone}</button>}
           <span className="spacer" />
-          {cameraId !== null && <button type="button" className="btn btn-ghost btn-icon btn-sm" title="Standbild neu laden" onClick={() => { setImgErr(false); setImgLoading(true); setBust(Date.now()); }}><RefreshCw size={14} /></button>}
+          {cameraId !== null && <button type="button" className="btn btn-ghost btn-icon btn-sm" title={m.reloadImage} onClick={() => { setImgErr(false); setImgLoading(true); setBust(Date.now()); }}><RefreshCw size={14} /></button>}
         </div>
-        {zones.length === 0 && !draft && <div className="muted" style={{ fontSize: 13 }}>Keine Zonen. Ohne Zonen gilt das ganze Bild.</div>}
+        {zones.length === 0 && !draft && <div className="muted" style={{ fontSize: 13 }}>{m.empty}</div>}
         {zones.map((z) => (
           <div key={z.id} className={`zone-row ${z.id === sel ? "sel" : ""}`} onClick={() => setSel(z.id)}>
             <input type="color" value={z.color} onChange={(e) => update(z.id, { color: e.target.value })} onClick={(e) => e.stopPropagation()} />
             <input className="input input-sm" value={z.name} onChange={(e) => update(z.id, { name: e.target.value })} />
             <select className="select input-sm" style={{ width: 112, flex: "none" }} value={z.purpose ?? ""}
-              title="Zweck fürs Haustier-Tagebuch: Besuche von Tieren in dieser Zone werden gezählt"
+              title={m.purposeTitle}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => update(z.id, { purpose: (e.target.value || null) as ZonePurpose | null })}>
-              <option value="">kein Zweck</option>
-              {(Object.keys(ZONE_PURPOSE_NAME) as ZonePurpose[]).map((k) => <option key={k} value={k}>{ZONE_PURPOSE_NAME[k]}</option>)}
+              <option value="">{m.noPurpose}</option>
+              {ZONE_PURPOSES.map((k) => <option key={k} value={k}>{ZONE_PURPOSE_NAME[k]}</option>)}
             </select>
-            <button type="button" className="btn btn-ghost btn-icon btn-sm" title="Zone löschen" onClick={(e) => { e.stopPropagation(); onChange(zones.filter((x) => x.id !== z.id)); if (sel === z.id) setSel(null); }}><Trash2 size={14} /></button>
+            <button type="button" className="btn btn-ghost btn-icon btn-sm" title={m.deleteZone} onClick={(e) => { e.stopPropagation(); onChange(zones.filter((x) => x.id !== z.id)); if (sel === z.id) setSel(null); }}><Trash2 size={14} /></button>
           </div>
         ))}
-        {selected && !draft && <div className="muted" style={{ fontSize: 12 }}><MousePointer2 size={12} style={{ verticalAlign: -2 }} /> {selected.polygon.length} Punkte · ID <code>{selected.id}</code></div>}
-        {draft && <div className="muted" style={{ fontSize: 12 }}><PenLine size={12} style={{ verticalAlign: -2 }} /> Zeichenmodus aktiv</div>}
+        {selected && !draft && <div className="muted" style={{ fontSize: 12 }}><MousePointer2 size={12} style={{ verticalAlign: -2 }} /> {m.points(selected.polygon.length)} · ID <code>{selected.id}</code></div>}
+        {draft && <div className="muted" style={{ fontSize: 12 }}><PenLine size={12} style={{ verticalAlign: -2 }} /> {m.drawing}</div>}
       </div>
     </div>
   );

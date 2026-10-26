@@ -120,7 +120,7 @@ def parse_accept_language(header: Optional[str]) -> Optional[str]:
     return None
 
 
-def t(key: str, lang: Optional[str] = None, **params: Any) -> str:
+def t(key: str, lang: Optional[str] = None, /, **params: Any) -> str:
     """Text zu `key` in `lang` (Standard: `current()`), Rückfall Englisch, dann der Schlüssel selbst."""
     lg = normalize(lang) or current()
     val = _lookup(lg, key)

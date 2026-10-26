@@ -8,9 +8,11 @@ arbeiten. Projektüberblick: [README.md](README.md). Verbindliche Schnittstellen
 1. **CONTRACT.md ist die Quelle der Wahrheit** für REST, WebSocket, MQTT-Topics, Datenmodelle, Medienpfade und
    Stream-Namen. Wer eine Schnittstelle ändert, passt zuerst CONTRACT.md an und dann **alle** betroffenen Dienste
    (Backend, Worker, Frontend inkl. `src/lib/types.ts`, `src/lib/api.ts` und Mock `src/lib/mock.ts`).
-2. **Sprache:** Oberfläche, Fehlermeldungen an Nutzer und interne Dokumentation (AGENTS.md, CONTRACT.md, `docs/plan/`)
-   auf **Deutsch**. Öffentliche Doku – alle `README.md` und die GitHub-Seite (Zweig `gh-pages`) – auf **Englisch**.
-   Code-Bezeichner Englisch, Kommentare dürfen Deutsch sein (wie im bestehenden Code).
+2. **Sprache:** Oberfläche und Nutzertexte sind **mehrsprachig** (Englisch Standard/Rückfall, Deutsch vollständig):
+   jeder sichtbare Text läuft über das Sprachmodul (Frontend `useMsgs()`/`msgs()`, Backend `i18n.t()`, MCP
+   `mcp/i18n.py`) und steht in **beiden** Sprachdateien (siehe „Sprachen“ unten, CONTRACT I18N). Interne
+   Dokumentation (AGENTS.md, CONTRACT.md, `docs/plan/`) auf **Deutsch**; öffentliche Doku – alle `README.md` und die
+   GitHub-Seite (Zweig `gh-pages`) – auf **Englisch**. Code-Bezeichner Englisch, Kommentare dürfen Deutsch sein.
 3. **Koordinaten** sind überall normiert (0..1, x rechts, y unten). Zeit: ISO-8601 UTC in REST, Unix-Sekunden in MQTT.
 4. **Keine Daueraufzeichnung.** Video landet nur auf der Platte, wenn eine Regel einen Clip auslöst
    (RAM-Ringpuffer im Worker, tmpfs `/buffer`).
@@ -54,6 +56,27 @@ In einer WSL-Sandbox ohne systemd muss der Docker-Daemon ggf. manuell gestartet 
 
 Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: Stack hochfahren, Ereignisse unter
 `/api/events` bzw. in der Oberfläche kontrollieren, bei UI-Änderungen Screenshot ansehen.
+
+## Sprachen (i18n)
+
+| Teil | Texte | Zugriff |
+|---|---|---|
+| Frontend | `frontend/src/i18n/locales/<code>/<namensbereich>.ts`, Liste `locales/index.ts` | `const m = useMsgs(); m.events.title`, Funktionen für Parameter; außerhalb von Komponenten `msgs()`; Datum/Zahl über `lib/format.ts` bzw. `intlLocale()` |
+| Backend | `backend/app/locales/<code>/<namensbereich>.json` | `i18n.t("ns.key", **params)`, Mehrzahl `{"one","other"}` mit `n`; `i18n.label()`, `fmt_time/fmt_ago/fmt_num` |
+| MCP | `mcp/locales/<code>.json` | `mcp/i18n.py` |
+
+- Sprache im Frontend je Browser (Globus in der Kopfzeile, `localStorage["vg.lang"]`); jede API-Anfrage schickt
+  `Accept-Language`. Backend: Anfragesprache, sonst Systemsprache (Setting `language`, Einstellungen → Sprache) für
+  Hinweise/Push, Bericht, MQTT, WebSocket-Texte und MCP.
+- **Neue Sprache hinzufügen:** `frontend/src/i18n/locales/en` nach `locales/<code>` kopieren, übersetzen, Index-Datei
+  anpassen und in `locales/index.ts` (`LOCALES`) eintragen; `backend/app/locales/en` nach `locales/<code>` kopieren
+  und übersetzen (wird automatisch erkannt, Name aus `common.json` → `language_name`); `mcp/locales/en.json` →
+  `<code>.json`. Fehlende Schlüssel fallen auf Englisch zurück. Für eine vollständige Prüfung wie bei `de` die neue
+  Index-Datei mit `satisfies typeof en` schreiben.
+- **Neue Texte:** nie fest im Code; Englisch als Quelle in `en`, Deutsch in `de` ergänzen (der Typecheck verlangt im
+  Frontend beide). Gespeicherte Texte (Hinweise, Berichte, Rückfragen) entstehen in der Systemsprache und werden nicht
+  nachträglich übersetzt. Logs bleiben deutsch.
+- Pfade der Oberfläche (`/ereignisse` …), API-Felder (`name_de`) und MQTT-Topics bleiben unverändert.
 
 ## Angepasste Fremdbibliotheken
 
@@ -101,6 +124,7 @@ Es gibt noch keine automatisierten Testsuiten. Änderungen end-to-end prüfen: S
 | Embedding-Dienst (geteiltes DINOv2, W2) | Worker `worker/vg_worker/embed.py`, Backend `backend/app/embed_client.py` |
 | Rückfragen „Bitte bestätigen“ (W2) | `backend/app/review.py`, `backend/app/routers/review.py`, `frontend/src/pages/Review.tsx` |
 | LLM-Client (optional, Standard aus) | `backend/app/llm_client.py`, Test-Server ohne Kosten `scripts/llm_mock.py` |
+| Sprachen (i18n) | `frontend/src/i18n/`, `backend/app/i18n.py` + `locales/`, `mcp/i18n.py` + `mcp/locales/`, Einstellungskarte `pages/admin/LanguageSettings.tsx` |
 | Fernseher (DLNA): Livebild per Regel, signierter Strom (ffmpeg) | `backend/app/tv.py`, `backend/app/routers/tv.py`, `frontend/src/pages/admin/TvSettings.tsx`, `mcp/tools/tv.py`, nginx `location /api/tv/` |
 | Track-Trigger mit Evaluator (posture/gesture) | `backend/app/rules.py` (`register_trigger(..., evaluate=…)`), `backend/app/events.py` |
 

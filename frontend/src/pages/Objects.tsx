@@ -11,25 +11,22 @@ import { ConfirmDialog, Dialog, Empty, Img, Loading } from "../components/ui";
 import { toast, useLive } from "../lib/store";
 import { ObjectChanges } from "./ObjectChanges";
 import { MyItems } from "./MyItems";
-import { ItemTeachDialog } from "../components/ItemTeachDialog";
+import { ItemTeachDialog, itemName } from "../components/ItemTeachDialog";
+import { fmtNum, intlLocale, msgs, useMsgs } from "../i18n";
 
-const STATE_NAME: Record<InventoryState, string> = { present: "sichtbar", missing: "nicht mehr gesehen", stale: "Stand unklar" };
-const STATE_HINT: Record<InventoryState, string> = {
-  present: "Gegenstand ist im aktuellen Kamerabild erkannt",
-  missing: "Gegenstand wurde zuletzt mehrfach nicht mehr gefunden",
-  stale: "Kamera liefert gerade keine Gegenstandserkennung – Stand unbekannt",
-};
 const FLASH_MS = 6000;
 
 export function StateBadge({ state }: { state: InventoryState }) {
+  const m = useMsgs().items;
   const cls = state === "present" ? "ok" : state === "missing" ? "warn" : "outline";
-  return <span className={`badge ${cls}`} title={STATE_HINT[state]}>{state === "present" && <span className="dot" />}{STATE_NAME[state]}</span>;
+  return <span className={`badge ${cls}`} title={m.stateHint[state]}>{state === "present" && <span className="dot" />}{m.stateName[state]}</span>;
 }
 
 /** Zeile „aktuell sichtbar …“ bzw. „zuletzt gesehen vor …“ */
 function seenText(it: InventoryItem): string {
-  if (it.visible) return `aktuell sichtbar · seit ${fmtTime(it.first_seen)}`;
-  return `zuletzt gesehen ${fmtAgo(it.last_seen)}`;
+  const m = msgs().items;
+  if (it.visible) return m.visibleSince(fmtTime(it.first_seen));
+  return m.lastSeen(fmtAgo(it.last_seen));
 }
 
 /** Nach Minuten neu rendern, damit „vor … min“ aktuell bleibt. */
@@ -57,6 +54,8 @@ function useLiveOverlay<T extends InventoryItem>(items: T[]): T[] {
 }
 
 function ItemCard({ it, index, onPick }: { it: InventoryItem; index: number; onPick: (it: InventoryItem) => void }) {
+  const m = useMsgs().items;
+  const name = itemName(it);
   const flashTs = useLive((s) => s.inventoryFlash[it.id]);
   const flash = flashTs !== undefined && Date.now() - flashTs < FLASH_MS;
   const lc = it.visible ? "var(--accent)" : "var(--line-2)";
@@ -70,17 +69,17 @@ function ItemCard({ it, index, onPick }: { it: InventoryItem; index: number; onP
       }}
       onClick={() => onPick(it)} onKeyDown={(k) => k.key === "Enter" && onPick(it)}>
       <div className="media" style={{ aspectRatio: "4 / 3" }}>
-        <Img src={it.crop_url} alt={it.name_de}
+        <Img src={it.crop_url} alt={name}
           fallback={<div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--text-3)" }}><Package size={40} /></div>} />
         <div className="corner">
           <StateBadge state={it.state} />
           <span className="spacer" />
-          <span className="badge" title="Konfidenz">{Math.round(it.score * 100)} %</span>
+          <span className="badge" title={m.confidence}>{Math.round(it.score * 100)} %</span>
         </div>
       </div>
       <div className="body">
-        <div className="who"><Package size={15} color={it.visible ? "var(--accent)" : "var(--text-3)"} />{it.identity?.display_name ?? it.name_de}
-          {it.identity && <span className="badge outline" title={`eigener Gegenstand (${it.name_de})`} style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}><BadgeCheck size={11} />{it.name_de}</span>}
+        <div className="who"><Package size={15} color={it.visible ? "var(--accent)" : "var(--text-3)"} />{it.identity?.display_name ?? name}
+          {it.identity && <span className="badge outline" title={m.ownItemOf(name)} style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}><BadgeCheck size={11} />{name}</span>}
         </div>
         <div className="meta">
           <span className="row" style={{ gap: 4, minWidth: 0 }}><CamIcon />{it.camera_name}</span>
@@ -99,11 +98,12 @@ function ItemGrid({ items, onPick }: { items: InventoryItem[]; onPick: (it: Inve
 
 /** Übersichtsbild mit markierter Box des Gegenstands */
 function SnapshotWithBox({ it }: { it: InventoryItem }) {
+  const m = useMsgs().items;
   const [x1, y1, x2, y2] = it.bbox;
   if (!it.snapshot_url) return null;
   return (
     <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", background: "var(--bg-4)", lineHeight: 0 }}>
-      <img src={it.snapshot_url} alt="Übersichtsbild" style={{ display: "block", width: "100%", height: "auto" }} />
+      <img src={it.snapshot_url} alt={m.overviewImage} style={{ display: "block", width: "100%", height: "auto" }} />
       <div style={{
         position: "absolute", left: `${x1 * 100}%`, top: `${y1 * 100}%`, width: `${(x2 - x1) * 100}%`, height: `${(y2 - y1) * 100}%`,
         border: "2px solid var(--accent)", borderRadius: 4, boxShadow: "0 0 0 9999px rgba(0,0,0,.35)",
@@ -113,6 +113,8 @@ function SnapshotWithBox({ it }: { it: InventoryItem }) {
 }
 
 function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => void }) {
+  const m = useMsgs().items;
+  const c = useMsgs().common;
   const qc = useQueryClient();
   const nav = useNavigate();
   const [confirm, setConfirm] = useState(false);
@@ -123,46 +125,46 @@ function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => voi
   const del = useMutation({
     mutationFn: () => api.deleteInventoryItem(item.id),
     onSuccess: () => {
-      toast.success("Gegenstand entfernt", item.name_de);
+      toast.success(m.removed, itemName(item));
       useLive.getState().applyInventory({ type: "inventory", camera_id: item.camera_id, action: "delete", items: [item] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
       onClose();
     },
-    onError: (e: Error) => toast.error("Entfernen fehlgeschlagen", e.message),
+    onError: (e: Error) => toast.error(m.removeFailed, e.message),
   });
   if (!it) return null;
   return (
-    <Dialog size="lg" onClose={onClose} icon={<Package size={18} />} title={it.identity?.display_name ?? it.name_de} footer={<>
-      <button className="btn btn-ghost" onClick={() => setConfirm(true)}><Trash2 size={15} />Fehlerkennung entfernen</button>
+    <Dialog size="lg" onClose={onClose} icon={<Package size={18} />} title={it.identity?.display_name ?? itemName(it)} footer={<>
+      <button className="btn btn-ghost" onClick={() => setConfirm(true)}><Trash2 size={15} />{m.removeFalse}</button>
       <span className="spacer" />
-      {!it.identity && it.crop_url && <button className="btn" onClick={() => setTeach(true)}><BadgeCheck size={15} />Als eigenen Gegenstand merken</button>}
-      <button className="btn" onClick={() => nav(`/live/${it.camera_id}`)}><MonitorPlay size={15} />Live ansehen</button>
-      <button className="btn btn-primary" onClick={onClose}>Schließen</button>
+      {!it.identity && it.crop_url && <button className="btn" onClick={() => setTeach(true)}><BadgeCheck size={15} />{m.rememberOwn}</button>}
+      <button className="btn" onClick={() => nav(`/live/${it.camera_id}`)}><MonitorPlay size={15} />{m.watchLive}</button>
+      <button className="btn btn-primary" onClick={onClose}>{c.close}</button>
     </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, alignItems: "start" }}>
           {it.snapshot_url ? <SnapshotWithBox it={it} />
             : <Img src={it.crop_url} className="avatar lg" fallback={<div className="avatar lg" style={{ display: "grid", placeItems: "center" }}><Package size={40} /></div>} />}
           <dl className="kv">
-            {it.snapshot_url && it.crop_url && <><dt>Ausschnitt</dt><dd><Img src={it.crop_url} className="avatar" /></dd></>}
-            {it.identity && <><dt>Exemplar</dt><dd>{it.identity.display_name}{it.identity_score != null && <span className="muted"> · Ähnlichkeit {Math.round(it.identity_score * 100)} %</span>}</dd></>}
-            <dt>Status</dt><dd><StateBadge state={it.state} /> <span className="dim" style={{ marginLeft: 6 }}>{seenText(it)}</span></dd>
-            <dt>Kamera</dt><dd>{it.camera_name}</dd>
-            <dt>Raum</dt><dd>{it.room ?? <span className="muted">–</span>}</dd>
-            {it.zone_names.length > 0 && <><dt>Zonen</dt><dd>{it.zone_names.join(", ")}</dd></>}
-            <dt>Lage</dt><dd>{it.relation?.text ?? <span className="muted">keine Angabe</span>}</dd>
-            <dt>Konfidenz</dt><dd>{Math.round(it.score * 100)} %</dd>
-            <dt>Erstmals</dt><dd>{fmtDateTime(it.first_seen)}</dd>
-            <dt>Zuletzt</dt><dd>{fmtDateTime(it.last_seen)}</dd>
-            <dt>Schlüssel</dt><dd className="mono muted">{it.label}</dd>
+            {it.snapshot_url && it.crop_url && <><dt>{m.crop}</dt><dd><Img src={it.crop_url} className="avatar" /></dd></>}
+            {it.identity && <><dt>{m.instance}</dt><dd>{it.identity.display_name}{it.identity_score != null && <span className="muted"> · {m.similarity(Math.round(it.identity_score * 100))}</span>}</dd></>}
+            <dt>{m.status}</dt><dd><StateBadge state={it.state} /> <span className="dim" style={{ marginLeft: 6 }}>{seenText(it)}</span></dd>
+            <dt>{m.camera}</dt><dd>{it.camera_name}</dd>
+            <dt>{m.room}</dt><dd>{it.room ?? <span className="muted">–</span>}</dd>
+            {it.zone_names.length > 0 && <><dt>{m.zones}</dt><dd>{it.zone_names.join(", ")}</dd></>}
+            <dt>{m.location}</dt><dd>{it.relation?.text ?? <span className="muted">{m.noInfo}</span>}</dd>
+            <dt>{m.confidence}</dt><dd>{Math.round(it.score * 100)} %</dd>
+            <dt>{m.firstSeen}</dt><dd>{fmtDateTime(it.first_seen)}</dd>
+            <dt>{m.lastSeenLabel}</dt><dd>{fmtDateTime(it.last_seen)}</dd>
+            <dt>{m.key}</dt><dd className="mono muted">{it.label}</dd>
           </dl>
         </div>
         <div>
-          <div className="section-title"><History size={12} style={{ verticalAlign: -1, marginRight: 6 }} />Verlauf</div>
-          {hist.isLoading ? <Loading /> : !hist.data?.length ? <div className="muted">Noch kein Verlauf.</div> : (
+          <div className="section-title"><History size={12} style={{ verticalAlign: -1, marginRight: 6 }} />{m.history}</div>
+          {hist.isLoading ? <Loading /> : !hist.data?.length ? <div className="muted">{m.noHistory}</div> : (
             <div className="card" style={{ maxHeight: 260, overflow: "auto" }}>
               <table className="table">
-                <thead><tr><th></th><th>Zeit</th><th>Status</th><th>Konfidenz</th></tr></thead>
+                <thead><tr><th></th><th>{m.time}</th><th>{m.status}</th><th>{m.confidence}</th></tr></thead>
                 <tbody>
                   {hist.data.map((h, i) => (
                     <tr key={`${h.ts}-${i}`}>
@@ -178,8 +180,8 @@ function ItemDialog({ item, onClose }: { item: InventoryItem; onClose: () => voi
           )}
         </div>
       </div>
-      {confirm && <ConfirmDialog title="Gegenstand entfernen?" busy={del.isPending} confirmLabel="Entfernen"
-        text={<>„{it.name_de}“ wird samt Verlauf gelöscht (z. B. bei einer Fehlerkennung). Wird er erneut erkannt, erscheint er wieder.</>}
+      {confirm && <ConfirmDialog title={m.removeTitle} busy={del.isPending} confirmLabel={m.remove}
+        text={m.removeText(itemName(it))}
         onConfirm={() => del.mutate()} onClose={() => setConfirm(false)} />}
       {teach && <ItemTeachDialog fromItem={it} onClose={() => setTeach(false)} />}
     </Dialog>
@@ -195,10 +197,12 @@ function useDebounced<T>(v: T, ms = 300): T {
   return d;
 }
 
-const NO_ROOM = "Ohne Raum";
+/** Sortierschlüssel für Raum „ohne Raum“ (Anzeige über m.items.noRoom) */
+const NO_ROOM = "\u0000";
 
 export function ObjectsPage() {
   useTick();
+  const m = useMsgs().items;
   const [sp, setSp] = useSearchParams();
   const [picked, setPicked] = useState<InventoryItem | null>(null);
   const f = {
@@ -246,21 +250,22 @@ export function ObjectsPage() {
     const s = new Set<string>();
     for (const c of cams.data ?? []) if (c.room) s.add(c.room);
     for (const i of list.data?.items ?? []) if (i.room) s.add(i.room);
-    return [...s].sort((a, b) => a.localeCompare(b, "de"));
+    return [...s].sort((a, b) => a.localeCompare(b, intlLocale()));
   }, [cams.data, list.data]);
   const invCams = (cams.data ?? []).filter((c) => c.inventory_enabled);
 
   // Gruppierung nach Raum (ohne Suche); bei der Suche zählt die Trefferreihenfolge
   const groups = useMemo(() => {
     if (f.q) return null;
-    const m = new Map<string, InventoryItem[]>();
+    const g = new Map<string, InventoryItem[]>();
     for (const it of items) {
       const k = it.room || NO_ROOM;
-      if (!m.has(k)) m.set(k, []);
-      m.get(k)!.push(it);
+      if (!g.has(k)) g.set(k, []);
+      g.get(k)!.push(it);
     }
-    for (const arr of m.values()) arr.sort((a, b) => Number(b.visible) - Number(a.visible) || a.name_de.localeCompare(b.name_de, "de"));
-    return [...m.entries()].sort(([a], [b]) => (a === NO_ROOM ? 1 : b === NO_ROOM ? -1 : a.localeCompare(b, "de")));
+    const loc = intlLocale();
+    for (const arr of g.values()) arr.sort((a, b) => Number(b.visible) - Number(a.visible) || itemName(a).localeCompare(itemName(b), loc));
+    return [...g.entries()].sort(([a], [b]) => (a === NO_ROOM ? 1 : b === NO_ROOM ? -1 : a.localeCompare(b, loc)));
   }, [items, f.q]);
 
   const tabParam = sp.get("tab");
@@ -278,59 +283,59 @@ export function ObjectsPage() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1>Gegenstände</h1>
+          <h1>{m.title}</h1>
           <div className="sub">
-            {items.length.toLocaleString("de-DE")} Gegenstände{hasFilter ? " (gefiltert)" : ""} · {visibleCount} aktuell sichtbar
-            {invCams.length > 0 && <> · Erkennung aktiv auf {invCams.map((c) => c.name).join(", ")}</>}
+            {m.countLine(fmtNum(items.length), hasFilter, visibleCount)}
+            {invCams.length > 0 && <> · {m.detectionActiveOn(invCams.map((cm) => cm.name).join(", "))}</>}
           </div>
         </div>
       </div>
 
       <div className="tabs">
-        <button className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}><Package size={15} />Übersicht</button>
-        <button className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}><History size={15} />Veränderungen</button>
-        <button className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")}><BadgeCheck size={15} />Meine Gegenstände</button>
+        <button className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}><Package size={15} />{m.tabOverview}</button>
+        <button className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}><History size={15} />{m.tabChanges}</button>
+        <button className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")}><BadgeCheck size={15} />{m.tabMine}</button>
       </div>
 
       {tab === "mine" ? <MyItems onPickItem={setPicked} /> : tab === "changes" ? <ObjectChanges cams={cams.data ?? []} rooms={rooms} onPick={setPicked} /> : <>
       <div className="card filters">
-        <div className="field" style={{ flex: "1 1 280px" }}><label>Suche</label>
+        <div className="field" style={{ flex: "1 1 280px" }}><label>{m.search}</label>
           <div className="input-group">
             <Search size={15} />
-            <input className="input input-sm" value={qInput} placeholder="Wo ist …? z. B. Fernbedienung, Schlüssel, Brille"
+            <input className="input input-sm" value={qInput} placeholder={m.searchPlaceholder}
               onChange={(e) => setQInput(e.target.value)} autoFocus={tab === "overview"} />
           </div>
         </div>
-        <div className="field"><label>Kamera</label>
+        <div className="field"><label>{m.camera}</label>
           <select className="select input-sm" value={f.camera} onChange={(e) => setF("camera", e.target.value)}>
-            <option value="">Alle Kameras</option>
-            {cams.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="">{m.allCameras}</option>
+            {cams.data?.map((cm) => <option key={cm.id} value={cm.id}>{cm.name}</option>)}
           </select>
         </div>
-        <div className="field"><label>Raum</label>
+        <div className="field"><label>{m.room}</label>
           <select className="select input-sm" value={f.room} onChange={(e) => setF("room", e.target.value)}>
-            <option value="">Alle Räume</option>
+            <option value="">{m.allRooms}</option>
             {rooms.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </div>
-        <div className="field"><label>Gegenstand</label>
+        <div className="field"><label>{m.item}</label>
           <select className="select input-sm" value={f.label} onChange={(e) => setF("label", e.target.value)}>
-            <option value="">Alle Gegenstände</option>
+            <option value="">{m.allItems}</option>
             {labels.data?.filter((l) => l.count_total > 0).map((l) => (
-              <option key={l.label} value={l.label}>{l.name_de} ({l.count_present}/{l.count_total})</option>
+              <option key={l.label} value={l.label}>{itemName(l)} ({l.count_present}/{l.count_total})</option>
             ))}
           </select>
         </div>
-        <div className="field"><label>Status</label>
+        <div className="field"><label>{m.status}</label>
           <select className="select input-sm" value={f.state} onChange={(e) => setF("state", e.target.value)}>
-            <option value="">Alle</option>
-            <option value="present">Aktuell sichtbar</option>
-            <option value="missing">Nicht mehr gesehen</option>
-            <option value="stale">Stand unklar (Kamera liefert nichts)</option>
-            <option value="missing,stale">Nicht sichtbar (alle)</option>
+            <option value="">{m.allStates}</option>
+            <option value="present">{m.filterPresent}</option>
+            <option value="missing">{m.filterMissing}</option>
+            <option value="stale">{m.filterStale}</option>
+            <option value="missing,stale">{m.filterNotVisible}</option>
           </select>
         </div>
-        {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => { setQInput(""); setSp(new URLSearchParams(), { replace: true }); }}><RotateCcw size={14} />Zurücksetzen</button>}
+        {hasFilter && <button className="btn btn-ghost btn-sm" onClick={() => { setQInput(""); setSp(new URLSearchParams(), { replace: true }); }}><RotateCcw size={14} />{m.reset}</button>}
       </div>
 
       {f.q && search.data && (
@@ -338,24 +343,24 @@ export function ObjectsPage() {
           <MessageSquareText size={20} color="var(--accent)" style={{ flex: "none", marginTop: 1 }} />
           <div>
             <div style={{ fontWeight: 600 }}>{search.data.answer}</div>
-            {search.data.items.length > 1 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{search.data.items.length} Treffer</div>}
+            {search.data.items.length > 1 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{m.hits(search.data.items.length)}</div>}
           </div>
         </div>
       )}
 
-      {loading ? <Loading /> : q.isError ? <Empty title="Fehler beim Laden" text={(q.error as Error).message} />
+      {loading ? <Loading /> : q.isError ? <Empty title={m.loadError} text={(q.error as Error).message} />
         : items.length === 0 ? (
-          <Empty icon={<Package size={44} />} title={f.q ? "Nichts gefunden" : "Keine Gegenstände"}
-            text={f.q || hasFilter ? "Für diese Suche bzw. Filter wurde nichts gefunden."
-              : invCams.length ? "Die Gegenstandserkennung läuft – erkannte Gegenstände erscheinen hier nach wenigen Durchläufen."
-              : "Aktiviere die Gegenstandserkennung unter Administration → Kameras."} />
+          <Empty icon={<Package size={44} />} title={f.q ? m.nothingFound : m.noItems}
+            text={f.q || hasFilter ? m.nothingForFilter
+              : invCams.length ? m.detectionRunning
+              : m.enableDetection} />
         ) : groups ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
             {groups.map(([room, arr]) => (
               <section key={room}>
                 <div className="section-title row" style={{ gap: 8 }}>
-                  <Home size={13} />{room}
-                  <span className="badge outline" style={{ textTransform: "none", letterSpacing: 0 }}>{arr.filter((i) => i.visible).length}/{arr.length} sichtbar</span>
+                  <Home size={13} />{room === NO_ROOM ? m.noRoom : room}
+                  <span className="badge outline" style={{ textTransform: "none", letterSpacing: 0 }}>{m.visibleOf(arr.filter((i) => i.visible).length, arr.length)}</span>
                 </div>
                 <ItemGrid items={arr} onPick={setPicked} />
               </section>

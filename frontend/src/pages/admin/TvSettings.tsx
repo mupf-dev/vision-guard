@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 import type { Settings, TvTarget } from "../../lib/types";
 import { Switch } from "../../components/ui";
 import { toast } from "../../lib/store";
+import { msgs, useMsgs } from "../../i18n";
 
 /**
  * Einstellungen → Fernseher (CONTRACT „Nachträge: Fernseher“): Fernseher im Heimnetz (DLNA), auf denen Regeln das
@@ -15,19 +16,22 @@ import { toast } from "../../lib/store";
 const ID_RE = /^[a-z0-9_-]{1,40}$/;
 
 export function tvProblem(t: TvTarget): string | null {
-  if (!ID_RE.test(t.id)) return "ID: nur a–z, 0–9, _ und -";
-  if (!t.name.trim()) return "Name fehlt";
-  if (!t.description_url.trim()) return "Adresse fehlt";
+  const m = msgs().settings;
+  if (!ID_RE.test(t.id)) return m.shared.idProblem;
+  if (!t.name.trim()) return m.shared.nameMissing;
+  if (!t.description_url.trim()) return m.tv.addressMissing;
   return null;
 }
 
 function newTv(existing: TvTarget[]): TvTarget {
   let n = existing.length + 1;
   while (existing.some((t) => t.id === `tv${n}`)) n++;
-  return { id: `tv${n}`, name: "Fernseher", enabled: true, type: "dlna", description_url: "" };
+  return { id: `tv${n}`, name: msgs().settings.tv.defaultName, enabled: true, type: "dlna", description_url: "" };
 }
 
 function TvEditor({ t, saved, onChange, onRemove }: { t: TvTarget; saved: TvTarget | undefined; onChange: (t: TvTarget) => void; onRemove: () => void }) {
+  const all = useMsgs();
+  const m = all.settings.tv;
   const [busy, setBusy] = useState<"probe" | "show" | "stop" | null>(null);
   const cams = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
   const [camId, setCamId] = useState<number | "">("");
@@ -35,20 +39,21 @@ function TvEditor({ t, saved, onChange, onRemove }: { t: TvTarget; saved: TvTarg
   const unsaved = !saved || JSON.stringify(saved) !== JSON.stringify(t);
   const run = async (kind: "probe" | "show" | "stop", fn: () => Promise<void>) => {
     setBusy(kind);
-    try { await fn(); } catch (e) { toast.error("Fernseher", (e as Error).message); } finally { setBusy(null); }
+    try { await fn(); } catch (e) { toast.error(msgs().settings.tv.toastTitle, (e as Error).message); } finally { setBusy(null); }
   };
   const probe = () => run("probe", async () => {
     const r = await api.tvProbe(t.description_url);
     if (r.ok) {
-      toast.success("Fernseher gefunden", [r.name, r.model].filter(Boolean).join(" · ") || r.description_url);
-      onChange({ ...t, description_url: r.description_url, name: t.name === "Fernseher" && r.name ? r.name : t.name });
-    } else toast.error("Fernseher nicht gefunden", r.error ?? "unbekannter Fehler");
+      const tm = msgs().settings.tv;
+      toast.success(tm.toastFound, [r.name, r.model].filter(Boolean).join(" · ") || r.description_url);
+      onChange({ ...t, description_url: r.description_url, name: t.name === tm.defaultName && r.name ? r.name : t.name });
+    } else toast.error(msgs().settings.tv.toastNotFound, r.error ?? msgs().common.errorUnknown);
   });
   const cam = camId === "" ? (cams.data ?? [])[0]?.id : camId;
   const show = () => run("show", async () => {
     if (!cam) return;
     await api.tvShow(t.id, cam, 20);
-    toast.success("Livebild gesendet", "Der Fernseher zeigt die Kamera 20 Sekunden lang.");
+    toast.success(msgs().settings.tv.toastShown, msgs().settings.tv.toastShownText);
   });
   const stop = () => run("stop", async () => { await api.tvStop(t.id); });
   return (
@@ -56,57 +61,56 @@ function TvEditor({ t, saved, onChange, onRemove }: { t: TvTarget; saved: TvTarg
       <div className="ah">
         <span className="ico"><Tv size={15} /></span>DLNA
         <span className="spacer" />
-        <Switch checked={t.enabled} onChange={(v) => onChange({ ...t, enabled: v })} label="aktiv" />
-        <button type="button" className="btn btn-sm" disabled={!!busy || !t.description_url.trim()} onClick={probe} title="Erreichbarkeit prüfen">
-          {busy === "probe" ? <span className="spinner" /> : <Search size={14} />}Prüfen
+        <Switch checked={t.enabled} onChange={(v) => onChange({ ...t, enabled: v })} label={all.common.active} />
+        <button type="button" className="btn btn-sm" disabled={!!busy || !t.description_url.trim()} onClick={probe} title={m.probeTitle}>
+          {busy === "probe" ? <span className="spinner" /> : <Search size={14} />}{m.probe}
         </button>
-        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onRemove} title="Fernseher entfernen"><Trash2 size={15} /></button>
+        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onRemove} title={m.remove}><Trash2 size={15} /></button>
       </div>
       <div className="form-grid">
-        <div className="field"><label>Name</label><input className="input input-sm" value={t.name} onChange={(e) => onChange({ ...t, name: e.target.value })} /></div>
-        <div className="field"><label>ID (für Regeln)</label><input className="input input-sm mono" value={t.id} onChange={(e) => onChange({ ...t, id: e.target.value.trim() })} /></div>
-        <div className="field span-2"><label>Adresse (IP oder URL der Gerätebeschreibung)</label>
-          <input className="input input-sm mono" value={t.description_url} placeholder="192.168.1.50 oder http://192.168.1.50:9197/dmr"
+        <div className="field"><label>{all.settings.shared.name}</label><input className="input input-sm" value={t.name} onChange={(e) => onChange({ ...t, name: e.target.value })} /></div>
+        <div className="field"><label>{all.settings.shared.idForRules}</label><input className="input input-sm mono" value={t.id} onChange={(e) => onChange({ ...t, id: e.target.value.trim() })} /></div>
+        <div className="field span-2"><label>{m.address}</label>
+          <input className="input input-sm mono" value={t.description_url} placeholder={m.addressPlaceholder}
             onChange={(e) => onChange({ ...t, description_url: e.target.value })} />
-          <span className="hint">Nur die IP-Adresse genügt bei Samsung (Port 9197). „Prüfen“ ergänzt die vollständige Adresse.</span>
+          <span className="hint">{m.addressHint}</span>
         </div>
       </div>
       {problem && <span className="hint" style={{ color: "var(--warn)" }}>{problem}</span>}
       <div className="row-wrap" style={{ gap: 8 }}>
-        <select className="select input-sm" style={{ maxWidth: 220 }} value={camId} aria-label="Kamera für den Test"
+        <select className="select input-sm" style={{ maxWidth: 220 }} value={camId} aria-label={m.testCamera}
           onChange={(e) => setCamId(e.target.value ? Number(e.target.value) : "")}>
           {(cams.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <button type="button" className="btn btn-sm" disabled={!!busy || unsaved || !!problem || !cam} onClick={show}
-          title={unsaved ? "Erst speichern" : "Livebild 20 s auf dem Fernseher zeigen"}>
-          {busy === "show" ? <span className="spinner" /> : <Tv size={14} />}Testbild 20 s
+          title={unsaved ? all.settings.shared.saveFirst : m.showTitle}>
+          {busy === "show" ? <span className="spinner" /> : <Tv size={14} />}{m.show}
         </button>
-        <button type="button" className="btn btn-sm btn-ghost" disabled={!!busy || unsaved} onClick={stop} title="Anzeige beenden">
-          {busy === "stop" ? <span className="spinner" /> : <Square size={13} />}Beenden
+        <button type="button" className="btn btn-sm btn-ghost" disabled={!!busy || unsaved} onClick={stop} title={m.stopTitle}>
+          {busy === "stop" ? <span className="spinner" /> : <Square size={13} />}{m.stop}
         </button>
-        {unsaved && <span className="muted" style={{ fontSize: 12 }}>Zum Testen erst speichern.</span>}
+        {unsaved && <span className="muted" style={{ fontSize: 12 }}>{m.saveToTest}</span>}
       </div>
     </div>
   );
 }
 
 export function TvSettingsCard({ f, saved, patch }: { f: Settings; saved?: Settings; patch: (p: Partial<Settings>) => void }) {
+  const m = useMsgs().settings.tv;
   const tvs = f.tv_targets ?? [];
   const setTvs = (t: TvTarget[]) => patch({ tv_targets: t });
   return (
     <div className="card">
-      <div className="card-head"><Tv size={18} color="var(--accent)" /><h3>Fernseher</h3></div>
+      <div className="card-head"><Tv size={18} color="var(--accent)" /><h3>{m.title}</h3></div>
       <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div className="muted" style={{ fontSize: 12 }}>
-          Regeln zeigen über die Aktion „Auf Fernseher zeigen“ das Livebild einer Kamera im Vollbild (DLNA, z. B. Samsung).
-          Das laufende Programm wird unterbrochen und kehrt danach zurück. Das Bild läuft einige Sekunden hinterher.
+          {m.intro}
         </div>
-        <div className="field"><label>Adresse, unter der Fernseher VisionGuard erreichen</label>
+        <div className="field"><label>{m.baseUrl}</label>
           <input className="input mono" value={f.tv_stream_base_url ?? ""} placeholder="http://192.168.1.10:8090"
             onChange={(e) => patch({ tv_stream_base_url: e.target.value })} />
           <span className="hint">
-            IP dieses Rechners im Heimnetz und Port. Unter WSL2 eine Windows-Portweiterleitung auf 127.0.0.1:8080 einrichten,
-            die nur der Fernseher nutzen darf (siehe AGENTS.md). Ohne Adresse zeigt keine Regel etwas an.
+            {m.baseUrlHint}
           </span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -115,7 +119,7 @@ export function TvSettingsCard({ f, saved, patch }: { f: Settings; saved?: Setti
               onRemove={() => setTvs(tvs.filter((_, k) => k !== i))} />
           ))}
         </div>
-        <div><button type="button" className="btn btn-sm" onClick={() => setTvs([...tvs, newTv(tvs)])}><Plus size={14} />Fernseher</button></div>
+        <div><button type="button" className="btn btn-sm" onClick={() => setTvs([...tvs, newTv(tvs)])}><Plus size={14} />{m.defaultName}</button></div>
       </div>
     </div>
   );

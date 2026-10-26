@@ -31,7 +31,7 @@ from typing import Any, Optional
 from sqlalchemy import or_, select
 
 from . import inventory_names as names
-from . import registry, rules, settings_store, weather
+from . import i18n, registry, rules, settings_store, weather
 from .config import config
 from .db import SessionLocal
 from .models import Event, InventoryHistory, InventoryItem
@@ -72,10 +72,11 @@ def _vocab() -> dict[str, dict[str, Any]]:
 
 
 def _join_de(xs: list[str]) -> str:
+    """„A, B und C“ / "A, B and C" (Sprache der Anfrage bzw. Systemsprache)."""
     xs = list(dict.fromkeys(x for x in xs if x))
     if len(xs) <= 1:
         return "".join(xs)
-    return f"{', '.join(xs[:-1])} und {xs[-1]}"
+    return i18n.t("rules.join_and", first=", ".join(xs[:-1]), last=xs[-1])
 
 
 def _cam_ok(camera_id: int, camera_ids: list[int], room: Optional[str]) -> bool:
@@ -92,7 +93,7 @@ def item_place(it: InventoryItem) -> str:
     """„Flur, Schlüsselbrett“ (Raum bzw. Kamera, Zonen) oder „Wohnzimmer, vermutlich auf dem Tisch“."""
     cam = registry.get(it.camera_id) or {}
     zmap = cam.get("zones") or {}
-    parts = [cam.get("room") or cam.get("name") or f"Kamera {it.camera_id}"]
+    parts = [cam.get("room") or cam.get("name") or i18n.t("rules.camera_n", id=it.camera_id)]
     zone_names = [zmap.get(z) or z for z in (it.zones or [])]
     if zone_names:
         parts += zone_names
@@ -111,7 +112,7 @@ def _since_dt(since: str, now: datetime) -> datetime:
 
 
 def _items_ctx(items: list[InventoryItem], vocab: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    return {"items": _join_de([names.display_name(i.label, vocab) for i in items]),
+    return {"items": _join_de([names.localized_name(i.label, vocab) for i in items]),
             "item_place": _join_de([item_place(i) for i in items[:3]]) if items else ""}
 
 
@@ -127,19 +128,21 @@ def eval_inventory(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondRe
                 if _cam_ok(r.camera_id, c.camera_ids, c.room)
                 and (not c.zone_ids or set(c.zone_ids) & set(r.zones or []))]
         present = [r for r in rows if r.state == "present"]
-        label_names = _join_de([names.display_name(lbl, vocab) for lbl in c.labels])
+        label_names = _join_de([names.localized_name(lbl, vocab) for lbl in c.labels])
         if c.state == "present":
             if not present:
-                return rules.CondResult(ok=False, reason=f"{label_names}: nicht sichtbar")
+                return rules.CondResult(ok=False, reason=i18n.t("rules.cond.not_visible", items=label_names))
             present.sort(key=lambda r: -float(r.score or 0))
             top = present[0]
             return rules.CondResult(
                 ok=True, ctx=_items_ctx(present, vocab), item_ids=[r.id for r in present],
                 image_path=top.crop_path, snapshot_path=top.snapshot_path, camera_id=top.camera_id,
-                reason=f"{label_names}: sichtbar ({item_place(top)}, Score {float(top.score or 0):.2f})")
+                reason=i18n.t("rules.cond.visible", items=label_names, place=item_place(top),
+                              score=i18n.fmt_num(float(top.score or 0), 2)))
         # absent
         if present:
-            return rules.CondResult(ok=False, reason=f"{label_names}: noch sichtbar ({item_place(present[0])})")
+            return rules.CondResult(ok=False, reason=i18n.t("rules.cond.still_visible", items=label_names,
+                                                            place=item_place(present[0])))
         last = rows[0] if rows else None
         out = rules.CondResult(ok=True, ctx={"items": label_names,
                                              "item_place": item_place(last) if last else ""},
@@ -147,8 +150,8 @@ def eval_inventory(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondRe
                                image_path=last.crop_path if last else None,
                                snapshot_path=last.snapshot_path if last else None,
                                camera_id=last.camera_id if last else None)
-        out.reason = (f"{label_names}: nicht sichtbar (zuletzt {item_place(last)})" if last
-                      else f"{label_names}: nie gesehen")
+        out.reason = (i18n.t("rules.cond.not_visible_last", items=label_names, place=item_place(last)) if last
+                      else i18n.t("rules.cond.never_seen", items=label_names))
         return out
 
 
@@ -158,7 +161,7 @@ def eval_inventory(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondRe
 def untouched_since(s, it: InventoryItem, since_dt: datetime, now: datetime) -> tuple[bool, str]:
     """Liegt der Gegenstand seit `since_dt` unberührt da? → (ok, Grund)."""
     if it.state != "present":
-        return False, "nicht sichtbar"
+        return False, i18n.t("rules.untouched.not_visible")
     first = _utc(it.first_seen)
     before = s.scalar(select(InventoryHistory).where(InventoryHistory.item_id == it.id,
                                                      InventoryHistory.ts <= since_dt)
@@ -167,7 +170,7 @@ def untouched_since(s, it: InventoryItem, since_dt: datetime, now: datetime) -> 
                                                           InventoryHistory.ts > since_dt)
                            .order_by(InventoryHistory.ts)).all())
     if before is None and (first is None or first > since_dt):
-        return False, "erst nach dem Stichzeitpunkt aufgetaucht"
+        return False, i18n.t("rules.untouched.appeared_later")
     entries = ([before] if before is not None else []) + after
     ref = None
     gap_start: Optional[datetime] = None
@@ -180,12 +183,12 @@ def untouched_since(s, it: InventoryItem, since_dt: datetime, now: datetime) -> 
             if gap_start is not None:
                 dur = (ts - max(gap_start, since_dt)).total_seconds()
                 if _dist(ref, h.bbox) > MOVED_DIST:
-                    return False, "nach einer Lücke an anderer Stelle"
+                    return False, i18n.t("rules.untouched.elsewhere_after_gap")
                 if gap_state == "missing" and dur > FLICKER_TOLERANCE_S:
-                    return False, f"zwischendurch {int(dur // 60)} min weg"
+                    return False, i18n.t("rules.untouched.gone_for", n=int(dur // 60))
                 gap_start = None
             elif ts >= since_dt and _dist(ref, h.bbox) > MOVED_DIST:
-                return False, "verschoben"
+                return False, i18n.t("rules.untouched.moved")
         else:
             if gap_start is None:
                 gap_start, gap_state = ts, h.state
@@ -194,13 +197,13 @@ def untouched_since(s, it: InventoryItem, since_dt: datetime, now: datetime) -> 
     if ref is None:
         ref = list(it.bbox or [])
     if _dist(ref, it.bbox) > MOVED_DIST:
-        return False, "verschoben"
+        return False, i18n.t("rules.untouched.moved")
     if gap_start is not None:
         # Historie endet mit einer Lücke, aktuell aber present (Historie wird je 5 min geschrieben) – nur kurze Lücken
         dur = (now - max(gap_start, since_dt)).total_seconds()
         if gap_state == "missing" and dur > FLICKER_TOLERANCE_S:
-            return False, f"zwischendurch {int(dur // 60)} min weg"
-    return True, "unberührt"
+            return False, i18n.t("rules.untouched.gone_for", n=int(dur // 60))
+    return True, i18n.t("rules.untouched.untouched")
 
 
 def eval_inventory_untouched(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondResult:
@@ -208,22 +211,24 @@ def eval_inventory_untouched(cond: dict[str, Any], ctx: rules.CondContext) -> ru
     vocab = _vocab()
     now = ctx.now
     since_dt = _since_dt(c.since, now)
-    label_names = _join_de([names.display_name(lbl, vocab) for lbl in c.labels])
+    label_names = _join_de([names.localized_name(lbl, vocab) for lbl in c.labels])
     since_txt = since_dt.astimezone(config.tz).strftime("%H:%M")
     with SessionLocal() as s:
         rows = [r for r in s.scalars(select(InventoryItem).where(InventoryItem.label.in_(c.labels),
                                                                   InventoryItem.state == "present")).all()
                 if _cam_ok(r.camera_id, c.camera_ids, None)]
         if not rows:
-            return rules.CondResult(ok=False, reason=f"{label_names}: nicht sichtbar")
+            return rules.CondResult(ok=False, reason=i18n.t("rules.cond.not_visible", items=label_names))
         # nur Gegenstände, die zu `since` schon da waren (später aufgetauchte sind neu bzw. Dubletten)
         old = [r for r in rows if (_utc(r.first_seen) or now) <= since_dt]
         if not old:
-            return rules.CondResult(ok=False, reason=f"{label_names}: erst nach {since_txt} aufgetaucht")
+            return rules.CondResult(ok=False, reason=i18n.t("rules.cond.appeared_after", items=label_names,
+                                                                         since=since_txt))
         for r in old:
             ok, why = untouched_since(s, r, since_dt, now)
             if not ok:
-                return rules.CondResult(ok=False, reason=f"{label_names}: seit {since_txt} berührt ({why})")
+                return rules.CondResult(ok=False, reason=i18n.t("rules.cond.touched_since", items=label_names,
+                                                                             since=since_txt, why=why))
         if c.zone_ids:
             cams = sorted({r.camera_id for r in old} | set(c.camera_ids))
             evs = s.scalars(select(Event).where(Event.label == "person", Event.camera_id.in_(cams),
@@ -234,11 +239,13 @@ def eval_inventory_untouched(cond: dict[str, Any], ctx: rules.CondContext) -> ru
             hit = next((e for e in evs if zones & set(e.zones or [])), None)
             if hit is not None:
                 when = _utc(hit.start_ts).astimezone(config.tz).strftime("%H:%M")
-                return rules.CondResult(ok=False, reason=f"{label_names}: Person um {when} in der Zone")
+                return rules.CondResult(ok=False, reason=i18n.t("rules.cond.person_in_zone", items=label_names,
+                                                                             time=when))
         top = max(old, key=lambda r: float(r.score or 0))
         return rules.CondResult(ok=True, ctx=_items_ctx(old, vocab), item_ids=[r.id for r in old],
                                 image_path=top.crop_path, snapshot_path=top.snapshot_path, camera_id=top.camera_id,
-                                reason=f"{label_names}: seit {since_txt} unberührt ({item_place(top)})")
+                                reason=i18n.t("rules.cond.untouched_since", items=label_names, since=since_txt,
+                                              place=item_place(top)))
 
 
 # ------------------------------------------------------------------ weather
@@ -247,15 +254,16 @@ def eval_inventory_untouched(cond: dict[str, Any], ctx: rules.CondContext) -> ru
 def eval_weather(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondResult:
     c = CondWeather(**cond)
     if weather.location() is None:
-        return rules.CondResult(ok=False, reason="Wetter: kein Standort eingestellt")
+        return rules.CondResult(ok=False, reason=i18n.t("rules.cond.weather_no_location"))
     o = weather.rain_outlook(c.hours, c.min)
     if o is None:
         err = weather.last_error()
-        return rules.CondResult(ok=False, reason=f"Wetter unbekannt{f' ({err})' if err else ''}")
+        return rules.CondResult(ok=False, reason=(i18n.t("rules.cond.weather_unknown_err", error=err) if err
+                                                  else i18n.t("rules.cond.weather_unknown")))
     text = o.text(c.min)
     ok = o.max_probability >= c.min
     return rules.CondResult(ok=ok, ctx={"weather": text},
-                            reason=f"Wetter: {text} (Schwelle {int(c.min)} % in {c.hours} h)")
+                            reason=i18n.t("rules.cond.weather", text=text, min=int(c.min), hours=c.hours))
 
 
 # ------------------------------------------------------------------ track_came_from
@@ -265,7 +273,7 @@ def eval_track_came_from(cond: dict[str, Any], ctx: rules.CondContext) -> rules.
     c = CondTrackCameFrom(**cond)
     tr = ctx.track
     if tr is None:
-        return rules.CondResult(ok=False, reason="kam aus Zone: kein Track")
+        return rules.CondResult(ok=False, reason=i18n.t("rules.cond.came_from_no_track"))
     want = {str(z) for z in c.zone_ids}
     trig_ts = ctx.trigger_ts if ctx.trigger_ts is not None else ctx.now.timestamp()
     entries = list(getattr(tr, "zone_entries", []) or [])
@@ -277,8 +285,8 @@ def eval_track_came_from(cond: dict[str, Any], ctx: rules.CondContext) -> rules.
     zmap = cam.get("zones") or {}
     zn = _join_de([zmap.get(z) or z for z in c.zone_ids])
     if came:
-        return rules.CondResult(ok=True, reason=f"kam aus {zn}")
-    return rules.CondResult(ok=False, reason=f"kam nicht aus {zn}")
+        return rules.CondResult(ok=True, reason=i18n.t("rules.cond.came_from", zones=zn))
+    return rules.CondResult(ok=False, reason=i18n.t("rules.cond.not_came_from", zones=zn))
 
 
 def eval_sensor(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondResult:
@@ -288,11 +296,13 @@ def eval_sensor(cond: dict[str, Any], ctx: rules.CondContext) -> rules.CondResul
     with SessionLocal() as s:
         vs = s.get(VirtualSensor, int(cond.get("sensor_id") or 0))
         if vs is None:
-            return rules.CondResult(ok=False, reason=f"Sensor {cond.get('sensor_id')} unbekannt")
+            return rules.CondResult(ok=False, reason=i18n.t("rules.cond.sensor_unknown", id=cond.get("sensor_id")))
         want = str(cond.get("state") or "on")
         cur = vs.state or "unknown"
         ok = bool(vs.enabled) and cur == want
-        reason = f"Sensor {vs.name}: {rules.sensor_state_de(cur)}" + ("" if ok else f" (verlangt {rules.sensor_state_de(want)})")
+        reason = (i18n.t("rules.cond.sensor", name=vs.name, state=rules.sensor_state_de(cur)) if ok
+                  else i18n.t("rules.cond.sensor_wanted", name=vs.name, state=rules.sensor_state_de(cur),
+                              wanted=rules.sensor_state_de(want)))
         return rules.CondResult(ok=ok, reason=reason, camera_id=vs.camera_id,
                                 ctx={"sensor": vs.name, "sensor_state": rules.sensor_state_de(cur)})
 

@@ -5,12 +5,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
+from .. import i18n
 from .. import history
 from ..auth import require_user
 
 router = APIRouter(prefix="/api/history", tags=["history"], dependencies=[Depends(require_user)])
 
-NO_VECTOR = "Zeitmaschine nicht verfügbar (Datenbank ohne pgvector)"
+def NO_VECTOR() -> str:   # noqa: N802 – Text in der Sprache der Anfrage
+    return i18n.t("errors.history_no_pgvector")
 
 
 def _utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -27,10 +29,10 @@ async def search(q: str = Query(min_length=1, max_length=200), camera_id: Option
     """Textsuche („roter Karton im Flur“) → `{query, queries, model, items: HistoryEpisode[]}`, beste zuerst.
     `queries` = tatsächlich kodierte Texte (Original + englische Fassung)."""
     if not history.enabled():
-        raise HTTPException(503, NO_VECTOR)
+        raise HTTPException(503, NO_VECTOR())
     q = q.strip()
     if not q:
-        raise HTTPException(422, "Suchtext fehlt")
+        raise HTTPException(422, i18n.t("errors.search_text_missing"))
     try:
         return await run_in_threadpool(history.search, q, camera_id=camera_id, room=room, since=_utc(since),
                                        until=_utc(until), limit=limit)
@@ -43,7 +45,7 @@ async def frames(camera_id: int, around: datetime, span_min: int = Query(10, ge=
                  signed: bool = Query(False, description="thumb_url signieren (Middleware)")):
     """Filmstreifen: gespeicherte Bilder einer Kamera um `around` (± `span_min`)."""
     if not history.enabled():
-        raise HTTPException(503, NO_VECTOR)
+        raise HTTPException(503, NO_VECTOR())
     return await run_in_threadpool(history.frames, camera_id, _utc(around), span_min)
 
 
@@ -57,6 +59,6 @@ async def stats():
 async def delete_history(camera_id: Optional[int] = None, before: Optional[datetime] = None):
     """Verlauf löschen (Scope `write`): alles, nur eine Kamera und/oder nur Bilder vor `before`. → `{deleted}`."""
     if not history.enabled():
-        raise HTTPException(503, NO_VECTOR)
+        raise HTTPException(503, NO_VECTOR())
     n = await run_in_threadpool(history.delete_frames, camera_id, _utc(before))
     return {"deleted": n}

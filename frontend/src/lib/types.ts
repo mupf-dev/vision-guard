@@ -758,6 +758,8 @@ export interface InventorySearchResult {
 }
 
 export interface InventoryLabel {
+  /** Anzeigename in der Sprache der Anfrage (CONTRACT I18N.C) */
+  name?: string;
   label: string;
   name_de: string;
   group: string;
@@ -935,6 +937,8 @@ export type ReviewKind = "inventory_label" | "inventory_identity" | "identity_ma
 export type ReviewStatus = "open" | "yes" | "no" | "skipped" | "expired";
 
 export interface ReviewRequest {
+  /** Gegenstandsname in der Sprache der Anfrage (CONTRACT I18N.C) */
+  name?: string | null;
   id: number;
   kind: ReviewKind;
   status: ReviewStatus;

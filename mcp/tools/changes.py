@@ -12,10 +12,7 @@ from typing import Any, Optional
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
-from .common import READ_ONLY, BackendError, api, cameras, compact_item, fail, find_camera, fmt_time, ok
-
-TYPE_DE = {"appeared": "neu", "disappeared": "weg", "moved": "verschoben", "uncertain": "unklar",
-           "transient": "zwischendurch"}
+from .common import READ_ONLY, BackendError, api, cameras, compact_item, fail, find_camera, fmt_time, mapped, ok, t
 
 
 def _snap(s: Optional[dict]) -> Optional[dict]:
@@ -32,10 +29,10 @@ def _compact(ch: dict) -> dict[str, Any]:
 
 
 def _line(c: dict) -> str:
-    line = f"- [{TYPE_DE.get(c['type'], c['type'])} {fmt_time(c.get('at'))}] {c.get('text')} [id {c['item'].get('id')}]"
+    line = f"- [{mapped('changes.type', c['type'])} {fmt_time(c.get('at'))}] {c.get('text')} [id {c['item'].get('id')}]"
     img = (c.get("after") or {}).get("crop_url") or (c.get("before") or {}).get("crop_url")
     if img:
-        line += f" Bild: {img}"
+        line += " " + t("common.image", url=img)
     return line
 
 
@@ -44,11 +41,11 @@ def register(mcp: MCPServer) -> None:
     async def what_changed(ctx: Context, since: str = "today", until: Optional[str] = None,
                            camera_id: Optional[int] = None, camera_name: Optional[str] = None,
                            room: Optional[str] = None, limit: int = 30) -> CallToolResult:
-        """Was hat sich bei den Gegenständen verändert? Listet neu aufgetauchte, verschwundene und verschobene
-        Gegenstände (mit Vorher-/Nachher-Ausschnitt) sowie Gegenstände mit unklarem Stand (Kamera ohne Analyse).
-        `since`/`until`: ISO-8601 oder relativ wie „3h“, „90m“, „2d“, oder „today“ (heute 00:00), „morning“
-        (heute 06:00), „yesterday“ (gestern 00:00). Optional nur eine Kamera (camera_id/camera_name) oder ein
-        Raum (room)."""
+        """What changed among the objects? Lists newly appeared, disappeared and moved objects (with before/after
+        crops) and objects with an unclear state (camera without analysis).
+        `since`/`until`: ISO-8601 or relative like "3h", "90m", "2d", or "today" (00:00 today), "morning"
+        (06:00 today), "yesterday" (00:00 yesterday). Optionally only one camera (camera_id/camera_name) or one
+        room (room)."""
         try:
             if camera_id is None and camera_name:
                 camera_id = find_camera(await cameras(ctx), None, camera_name)["id"]
@@ -60,11 +57,11 @@ def register(mcp: MCPServer) -> None:
             counts = data.get("counts") or {}
             structured = {"since": data.get("since"), "until": data.get("until"), "summary": data.get("summary"),
                           "counts": counts, "changes": changes}
-            lines = [data.get("summary") or "Keine Angaben."]
+            lines = [data.get("summary") or t("changes.no_data")]
             lines += [_line(c) for c in changes]
             total = sum(int(v or 0) for v in counts.values())
             if total > len(changes):
-                lines.append(f"(nur die ersten {len(changes)} von {total} Änderungen; limit erhöhen für mehr)")
+                lines.append(t("changes.truncated", shown=len(changes), total=total))
             return ok("\n".join(lines), structured)
         except BackendError as e:
             return fail(str(e))

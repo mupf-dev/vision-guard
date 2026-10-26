@@ -6,19 +6,21 @@ import { api } from "../lib/api";
 import type { Camera, InventoryChange, InventoryChangeType, InventoryItem } from "../lib/types";
 import { fmtAgo, fmtTime, localToIso } from "../lib/format";
 import { Empty, Loading } from "../components/ui";
+import { itemName } from "../components/ItemTeachDialog";
+import { useMsgs, type Messages } from "../i18n";
 
 /** Zeitraum-Chips (Werte = `since` laut CONTRACT W1.E) */
-const PERIODS: { k: string; label: string }[] = [
-  { k: "morning", label: "Seit heute Morgen" },
-  { k: "3h", label: "Letzte 3 h" },
-  { k: "yesterday", label: "Seit gestern" },
-  { k: "custom", label: "Eigener Zeitraum" },
+const periods = (m: Messages["items"]): { k: string; label: string }[] => [
+  { k: "morning", label: m.periodMorning },
+  { k: "3h", label: m.period3h },
+  { k: "yesterday", label: m.periodYesterday },
+  { k: "custom", label: m.periodCustom },
 ];
 
-const COLS: { type: InventoryChangeType; title: string; icon: ReactNode; color: string; empty: string }[] = [
-  { type: "appeared", title: "Neu", icon: <PackagePlus size={15} />, color: "var(--ok)", empty: "Nichts Neues aufgetaucht." },
-  { type: "disappeared", title: "Weg", icon: <PackageMinus size={15} />, color: "var(--bad)", empty: "Nichts verschwunden." },
-  { type: "moved", title: "Verschoben", icon: <MoveRight size={15} />, color: "var(--accent)", empty: "Nichts verschoben." },
+const cols = (m: Messages["items"]): { type: InventoryChangeType; title: string; icon: ReactNode; color: string; empty: string }[] => [
+  { type: "appeared", title: m.colNew, icon: <PackagePlus size={15} />, color: "var(--ok)", empty: m.emptyNew },
+  { type: "disappeared", title: m.colGone, icon: <PackageMinus size={15} />, color: "var(--bad)", empty: m.emptyGone },
+  { type: "moved", title: m.colMoved, icon: <MoveRight size={15} />, color: "var(--accent)", empty: m.emptyMoved },
 ];
 
 const placeOf = (it: InventoryItem) => it.room && it.room !== it.camera_name ? `${it.room} · ${it.camera_name}` : it.camera_name;
@@ -39,18 +41,19 @@ function Thumb({ src, label, empty }: { src?: string | null; label: string; empt
 }
 
 function ChangeCard({ c, color, onPick }: { c: InventoryChange; color: string; onPick: (it: InventoryItem) => void }) {
+  const m = useMsgs().items;
   const it = c.item;
-  const beforeEmpty = c.type === "appeared" || c.type === "transient" ? "noch nicht da" : "kein Ausschnitt";
-  const afterEmpty = c.type === "disappeared" ? "nicht mehr da" : c.type === "uncertain" ? "Stand unklar" : "kein Ausschnitt";
+  const beforeEmpty = c.type === "appeared" || c.type === "transient" ? m.notYetThere : m.noCrop;
+  const afterEmpty = c.type === "disappeared" ? m.notThereAnymore : c.type === "uncertain" ? m.stateName.stale : m.noCrop;
   return (
     <div className="card" role="button" tabIndex={0} style={{ padding: 10, cursor: "pointer", borderLeft: `3px solid ${color}` }}
-      onClick={() => onPick(it)} onKeyDown={(k) => k.key === "Enter" && onPick(it)} title="Details anzeigen">
+      onClick={() => onPick(it)} onKeyDown={(k) => k.key === "Enter" && onPick(it)} title={m.showDetails}>
       <div className="row" style={{ gap: 6, alignItems: "center" }}>
-        <Thumb src={c.before?.crop_url} label={c.before ? `vorher ${fmtTime(c.before.ts)}` : "vorher"} empty={beforeEmpty} />
+        <Thumb src={c.before?.crop_url} label={c.before ? m.beforeAt(fmtTime(c.before.ts)) : m.before} empty={beforeEmpty} />
         <ArrowRight size={16} color="var(--text-3)" style={{ flex: "none" }} />
-        <Thumb src={c.after?.crop_url} label={c.after ? `nachher ${fmtTime(c.after.ts)}` : "nachher"} empty={afterEmpty} />
+        <Thumb src={c.after?.crop_url} label={c.after ? m.afterAt(fmtTime(c.after.ts)) : m.after} empty={afterEmpty} />
       </div>
-      <div style={{ fontWeight: 600, marginTop: 8 }} className="row"><Package size={14} color={color} style={{ marginRight: 6 }} />{it.name_de}</div>
+      <div style={{ fontWeight: 600, marginTop: 8 }} className="row"><Package size={14} color={color} style={{ marginRight: 6 }} />{itemName(it)}</div>
       <div className="dim" style={{ fontSize: 12.5, marginTop: 3 }}>{c.text}</div>
       <div className="meta row" style={{ gap: 10, marginTop: 6, fontSize: 12, color: "var(--text-3)", flexWrap: "wrap" }}>
         <span className="row" style={{ gap: 4 }}><Clock size={12} />{fmtTime(c.at)} · {fmtAgo(c.at)}</span>
@@ -80,6 +83,7 @@ function Column({ title, icon, color, items, empty, onPick, grid }: {
 
 /** Reiter „Veränderungen“ der Seite „Gegenstände“ (B2): Was ist seit … neu, weg, verschoben? */
 export function ObjectChanges({ cams, rooms, onPick }: { cams: Camera[]; rooms: string[]; onPick: (it: InventoryItem) => void }) {
+  const m = useMsgs().items;
   const [sp, setSp] = useSearchParams();
   const f = {
     period: sp.get("period") ?? "morning",
@@ -120,46 +124,46 @@ export function ObjectChanges({ cams, rooms, onPick }: { cams: Camera[]; rooms: 
   return (
     <>
       <div className="card filters">
-        <div className="field"><label>Zeitraum</label>
+        <div className="field"><label>{m.period}</label>
           <div className="seg">
-            {PERIODS.map((p) => (
+            {periods(m).map((p) => (
               <button key={p.k} className={f.period === p.k ? "on" : ""} onClick={() => setF("period", p.k === "morning" ? "" : p.k)}>{p.label}</button>
             ))}
           </div>
         </div>
         {custom && <>
-          <div className="field"><label>Von</label><input type="datetime-local" className="input input-sm" value={f.from} onChange={(e) => setF("from", e.target.value)} /></div>
-          <div className="field"><label>Bis (leer = jetzt)</label><input type="datetime-local" className="input input-sm" value={f.to} onChange={(e) => setF("to", e.target.value)} /></div>
+          <div className="field"><label>{m.from}</label><input type="datetime-local" className="input input-sm" value={f.from} onChange={(e) => setF("from", e.target.value)} /></div>
+          <div className="field"><label>{m.toEmptyNow}</label><input type="datetime-local" className="input input-sm" value={f.to} onChange={(e) => setF("to", e.target.value)} /></div>
         </>}
-        <div className="field"><label>Kamera</label>
+        <div className="field"><label>{m.camera}</label>
           <select className="select input-sm" value={f.camera} onChange={(e) => setF("camera", e.target.value)}>
-            <option value="">Alle Kameras</option>
+            <option value="">{m.allCameras}</option>
             {cams.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
-        <div className="field"><label>Raum</label>
+        <div className="field"><label>{m.room}</label>
           <select className="select input-sm" value={f.room} onChange={(e) => setF("room", e.target.value)}>
-            <option value="">Alle Räume</option>
+            <option value="">{m.allRooms}</option>
             {rooms.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </div>
         <label className="row" style={{ gap: 6, fontSize: 13, alignSelf: "flex-end", paddingBottom: 6, cursor: "pointer" }}
-          title="Gegenstände, die im Zeitraum auftauchten und wieder verschwanden (auch kurz gezeigte)">
+          title={m.transientHint}>
           <input type="checkbox" checked={f.transient} onChange={(e) => setF("transient", e.target.checked ? "1" : "")} />
-          Zwischendurch Sichtbares zeigen
+          {m.showTransient}
         </label>
       </div>
 
-      {custom && !since ? <Empty icon={<Clock size={44} />} title="Zeitraum wählen" text="Bitte einen Beginn („Von“) angeben." />
+      {custom && !since ? <Empty icon={<Clock size={44} />} title={m.choosePeriod} text={m.choosePeriodText} />
         : q.isLoading ? <Loading />
-        : q.isError ? <Empty title="Fehler beim Laden" text={(q.error as Error).message} />
+        : q.isError ? <Empty title={m.loadError} text={(q.error as Error).message} />
         : q.data && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div className="card card-pad row" style={{ alignItems: "flex-start", borderColor: "color-mix(in srgb, var(--accent) 35%, var(--line))" }}>
               <MessageSquareText size={20} color="var(--accent)" style={{ flex: "none", marginTop: 1 }} />
               <div>
                 <div style={{ fontWeight: 600 }}>{q.data.summary}</div>
-                {shown < total && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Angezeigt: {shown} von {total} Veränderungen</div>}
+                {shown < total && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{m.shownOf(shown, total)}</div>}
               </div>
             </div>
 
@@ -167,23 +171,22 @@ export function ObjectChanges({ cams, rooms, onPick }: { cams: Camera[]; rooms: 
               <div className="card card-pad row" style={{ alignItems: "flex-start", borderColor: "color-mix(in srgb, var(--warn) 55%, transparent)" }}>
                 <TriangleAlert size={18} color="var(--warn)" style={{ flex: "none", marginTop: 1 }} />
                 <div style={{ fontSize: 13 }}>
-                  <div style={{ fontWeight: 600, color: "var(--warn)" }}>Stand unklar bei {by.uncertain.length} {by.uncertain.length === 1 ? "Gegenstand" : "Gegenständen"}</div>
+                  <div style={{ fontWeight: 600, color: "var(--warn)" }}>{m.unclearFor(by.uncertain.length)}</div>
                   <div className="dim" style={{ marginTop: 2 }}>
-                    {unclearCams.length === 1 ? `Kamera ${unclearCams[0]} liefert` : `Die Kameras ${unclearCams.join(", ")} liefern`} gerade keine Gegenstandsanalyse
-                    (Kamera offline, Erkennung aus oder Worker neu gestartet). Ob sich dort etwas verändert hat, ist nicht bekannt:
-                    {" "}{by.uncertain.slice(0, 8).map((c) => c.item.name_de).join(", ")}{by.uncertain.length > 8 ? " …" : ""}
+                    {m.unclearCams(unclearCams)} {m.unclearReason}
+                    {" "}{by.uncertain.slice(0, 8).map((c) => itemName(c.item)).join(", ")}{by.uncertain.length > 8 ? " …" : ""}
                   </div>
                 </div>
               </div>
             )}
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 18, alignItems: "start" }}>
-              {COLS.map((col) => <Column key={col.type} {...col} items={by[col.type]} onPick={onPick} />)}
+              {cols(m).map((col) => <Column key={col.type} {...col} items={by[col.type]} onPick={onPick} />)}
             </div>
 
             {f.transient && (
-              <Column title="Zwischendurch da" icon={<Timer size={15} />} color="var(--text-2)" items={by.transient} onPick={onPick} grid
-                empty="Nichts, das nur zwischendurch zu sehen war." />
+              <Column title={m.transientTitle} icon={<Timer size={15} />} color="var(--text-2)" items={by.transient} onPick={onPick} grid
+                empty={m.transientEmpty} />
             )}
           </div>
         )}

@@ -4,6 +4,8 @@ Der Dienst hat keinen eigenen Zugang: Er verlangt vom MCP-Client einen API-Key (
 prüft ihn über `GET /api/auth/me` und reicht denselben Header bei jedem Backend-Aufruf durch. Keys werden nie
 geloggt. Lesende Tools brauchen Scope `read`; Tools mit Wirkung (ab W2) prüfen `write` selbst
 (`tools.common.require_write`). Siehe CONTRACT.md, Abschnitt „I. MCP-Dienst“.
+Sprache (I18N.D): Tool-Beschreibungen englisch, Antworttexte in der Systemsprache des Backends (`i18n.py`,
+`locales/<code>.json`); die Sprache wird vor jeder Anfrage aufgefrischt (60 s gecacht, `ensure_language`).
 Die Tools liegen je Thema unter `tools/` (Aufteilung seit Welle 1, siehe `tools/__init__.py`).
 """
 
@@ -22,7 +24,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from tools import register_all
-from tools.common import AUTH_ERROR, http
+from i18n import t
+from tools.common import auth_error, ensure_language, http
 
 log = logging.getLogger("vg.mcp")
 
@@ -35,10 +38,12 @@ AUTH_CACHE_S = 30.0
 mcp = MCPServer(
     "VisionGuard",
     instructions=(
-        "VisionGuard ist eine private Videoanalyse für Heimkameras. Die Tools beantworten, wo Gegenstände "
-        "(z. B. Schlüssel, Fernbedienung, Buch) zuletzt gesehen wurden, welche Gegenstände gerade sichtbar sind, "
-        "wer bzw. welches Tier gerade wo ist, und liefern aktuelle Kamerabilder. Lagebeziehungen („auf dem Tisch“) "
-        "sind 2D-Schätzungen und deshalb mit „vermutlich“ formuliert. Bild-URLs sind signiert und zeitlich begrenzt."
+        "VisionGuard is a private video analytics system for home cameras. The tools answer where objects "
+        "(e.g. keys, remote control, book) were last seen, which objects are visible right now, who (people, pets) "
+        "is where, what changed, camera health, alerts, sensors and supplies, and they return current camera "
+        "images. Spatial relations (\"on the table\") are 2D estimates and therefore phrased as \"probably\". "
+        "Image URLs are signed and expire. Parameters and searches may be given in English or in the system "
+        "language; answers come in the language configured in VisionGuard (system language)."
     ),
     log_level="WARNING",
 )
@@ -91,13 +96,14 @@ class BearerAuth:
                 break
         challenge = [(b"www-authenticate", b'Bearer realm="VisionGuard MCP"')]
         if not auth.lower().startswith("bearer ") or len(auth) < 12:
-            return await self._send_json(send, 401, {"detail": "API-Key fehlt (Authorization: Bearer vgt_…)"},
+            return await self._send_json(send, 401, {"detail": t("common.key_missing")},
                                          challenge)
         status = await self._check(auth)
         if status == 401:
-            return await self._send_json(send, 401, {"detail": AUTH_ERROR}, challenge)
+            return await self._send_json(send, 401, {"detail": auth_error()}, challenge)
         if status != 200:
-            return await self._send_json(send, 503, {"detail": "VisionGuard-Backend ist nicht erreichbar."})
+            return await self._send_json(send, 503, {"detail": t("common.backend_unreachable")})
+        await ensure_language(auth)   # Antwortsprache = Systemsprache (60 s gecacht)
         return await self.app(scope, receive, send)
 
 

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from ..auth import require_user
 from ..db import get_db
 from ..models import Event
@@ -79,7 +80,7 @@ def list_events(
 def get_event(event_id: str, db: Session = Depends(get_db)):
     e = db.get(Event, event_id)
     if e is None:
-        raise HTTPException(404, "Event nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.event_not_found"))
     return event_json(e)
 
 
@@ -87,7 +88,7 @@ def get_event(event_id: str, db: Session = Depends(get_db)):
 def delete_event(event_id: str, db: Session = Depends(get_db)):
     e = db.get(Event, event_id)
     if e is None:
-        raise HTTPException(404, "Event nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.event_not_found"))
     paths = (e.snapshot_path, e.clip_path, e.thumb_path)
     data = event_json(e)
     db.delete(e)
@@ -106,7 +107,7 @@ def ack_event(event_id: str, db: Session = Depends(get_db)):
 
     e = db.get(Event, event_id)
     if e is None:
-        raise HTTPException(404, "Event nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.event_not_found"))
     if e.acknowledged_at is None:
         e.acknowledged_at = utcnow()
         db.commit()

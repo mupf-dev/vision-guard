@@ -35,7 +35,7 @@ from typing import Any, Iterable, Optional
 
 from sqlalchemy import delete, func, select, update
 
-from . import registry, settings_store
+from . import i18n, registry, settings_store
 from .config import config
 from .db import SessionLocal
 from .models import Event, Identity, IdentitySample, PetVisit
@@ -46,9 +46,6 @@ from .ws import hub
 log = logging.getLogger("vg.pets")
 
 PURPOSES = ("food", "water", "litter")
-PURPOSE_DE = {"food": "Napf", "water": "Wasser", "litter": "Klo"}
-PURPOSE_AT = {"food": "am Napf", "water": "am Wasser", "litter": "auf dem Klo"}
-LABEL_DE = {"cat": "Katze", "dog": "Hund", "bird": "Vogel", "horse": "Pferd", "sheep": "Schaf", "cow": "Kuh"}
 
 MERGE_GAP_S = 60.0          # Vertrag: Besuche innerhalb von 60 s zusammenfassen
 HISTORY_DAYS = 14           # Normalwert aus 14 Tagen
@@ -152,9 +149,9 @@ def _quantile(values: list[float], q: float) -> float:
 
 def _fmt_dur(sec: float) -> str:
     if sec < 3600:
-        return f"{max(1, round(sec / 60))} min"
+        return i18n.t("pets.dur_min", n=max(1, round(sec / 60)))
     h = sec / 3600
-    return f"{h:.1f} h".replace(".", ",") if h < 10 else f"{round(h)} h"
+    return i18n.t("pets.dur_h", n=i18n.fmt_num(h, 1) if h < 10 else round(h))
 
 
 def _range_text(lo: int, hi: int) -> str:
@@ -164,12 +161,18 @@ def _range_text(lo: int, hi: int) -> str:
 def pet_name(identity: Optional[Identity], label: str) -> str:
     if identity is not None:
         return identity.name or identity.display_name
-    return LABEL_DE.get(label, label) + " (unbekannt)"
+    return i18n.t("pets.unknown", label=i18n.label(label))
 
 
 def pet_slug(identity: Optional[Identity], label: str) -> str:
     if identity is not None:
-        return slugify(identity.name or identity.display_name or f"tier_{identity.id}")
+        if identity.name:
+            return slugify(identity.name)
+        # MQTT-Topics müssen sprachunabhängig stabil bleiben: unbenannte Tiere immer mit der deutschen Form
+        # („Tier #3“ → tier_3), wie vor der Mehrsprachigkeit
+        from . import i18n
+        with i18n.use_lang("de"):
+            return slugify(identity.display_name or f"tier_{identity.id}")
     return slugify(label)
 
 
@@ -222,7 +225,7 @@ def visit_json(s, v: PetVisit, *, ident: Any = "load", thumb: Any = "load") -> d
                      if ident is not None else None),
         "label": v.label,
         "camera_id": v.camera_id,
-        "camera_name": cam.get("name") or f"Kamera {v.camera_id}",
+        "camera_name": cam.get("name") or i18n.t("pets.camera", id=v.camera_id),
         "zone_id": v.zone_id,
         "zone_name": (cam.get("zones") or {}).get(v.zone_id) or v.zone_id,
         "purpose": v.purpose,
@@ -370,7 +373,7 @@ def _persist(v: _Visit, now: float, *, final: bool) -> None:
                 _st.track_visits.setdefault((v.camera_id, v.track_id), set()).add(row.id)
                 if v.fallback:
                     _st.fallback_ids.add(row.id)
-                log.info("Tierbesuch %s: %s %s (Kamera %s, Zone %s)", row.id, v.label, PURPOSE_DE[v.purpose],
+                log.info("Tierbesuch %s: %s %s (Kamera %s, Zone %s)", row.id, v.label, v.purpose,
                          v.camera_id, v.zone_id)
                 _emit(s, row, "new")
                 return
@@ -639,25 +642,32 @@ def check(now_ts: Optional[float] = None, *, close_day: Optional[date] = None) -
                 st = compute_stats(lst, firsts.get((_pet_key(iid, label), purpose)), day, as_of)
                 if st.normal is None:
                     continue
-                at = PURPOSE_AT[purpose]
-                when = "gestern" if close_day and close_day == now.astimezone(config.tz).date() - timedelta(days=1) \
-                    else (f"am {day.strftime('%d.%m.')}" if close_day else "heute")
+                at = i18n.t(f"pets.at.{purpose}")
+                if close_day and close_day == now.astimezone(config.tz).date() - timedelta(days=1):
+                    when = i18n.t("pets.when_yesterday")
+                elif close_day:
+                    when = i18n.t("pets.when_day", date=day.strftime(i18n.t("pets.date_short")))
+                else:
+                    when = i18n.t("pets.when_today")
                 normal = _range_text(*st.normal)
                 if st.today > st.p90 + HIGH_MARGIN:
                     n = _alert(s, kind="too_many", iid=iid, label=label, purpose=purpose, day=day, value=st.today,
-                               expected=st.normal, title=f"{name}: {when} {st.today}× {at}",
-                               message=f"{name} war {when} {st.today}× {at} (normal {normal}).")
+                               expected=st.normal,
+                               title=i18n.t("pets.many_title", name=name, when=when, n=st.today, at=at),
+                               message=i18n.t("pets.many_msg", name=name, when=when, n=st.today, at=at,
+                                              normal=normal))
                     if n:
                         created.append(n)
                 elif st.today < st.p10_now - LOW_MARGIN:
                     exp = st.expected_now or st.normal
                     if close_day or exp == st.normal:
-                        msg = f"{name} war {when} nur {st.today}× {at} (normal {normal})."
+                        msg = i18n.t("pets.few_msg", name=name, when=when, n=st.today, at=at, normal=normal)
                     else:
-                        msg = (f"{name} war heute bis {now.astimezone(config.tz):%H:%M} erst {st.today}× {at} "
-                               f"(normal bis dahin {_range_text(*exp)}, am ganzen Tag {normal}).")
+                        msg = i18n.t("pets.few_msg_so_far", name=name, time=f"{now.astimezone(config.tz):%H:%M}",
+                                     n=st.today, at=at, expected=_range_text(*exp), normal=normal)
                     n = _alert(s, kind="too_few", iid=iid, label=label, purpose=purpose, day=day, value=st.today,
-                               expected=exp, title=f"{name}: {when} {'nur' if close_day else 'erst'} {st.today}× {at}",
+                               expected=exp, title=i18n.t("pets.few_title" if close_day else "pets.few_title_so_far",
+                                                          name=name, when=when, n=st.today, at=at),
                                message=msg)
                     if n:
                         created.append(n)
@@ -665,9 +675,9 @@ def check(now_ts: Optional[float] = None, *, close_day: Optional[date] = None) -
                         st.gap_s > GAP_FACTOR * st.usual_gap_s:
                     n = _alert(s, kind="long_gap", iid=iid, label=label, purpose=purpose, day=day,
                                value=round(st.gap_s), expected=[0, round(st.usual_gap_s)],
-                               title=f"{name}: seit {_fmt_dur(st.gap_s)} nicht {at}",
-                               message=(f"{name} war seit {_fmt_dur(st.gap_s)} nicht mehr {at} "
-                                        f"(übliche längste Pause {_fmt_dur(st.usual_gap_s)})."))
+                               title=i18n.t("pets.gap_title", name=name, dur=_fmt_dur(st.gap_s), at=at),
+                               message=i18n.t("pets.gap_msg", name=name, dur=_fmt_dur(st.gap_s), at=at,
+                                              usual=_fmt_dur(st.usual_gap_s)))
                     if n:
                         created.append(n)
     return created

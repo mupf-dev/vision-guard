@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import i18n
 from .. import sensors as vs
 from .. import settings_store, shopping
 from ..auth import require_user
@@ -31,7 +32,7 @@ def _vlm_item(p_in: dict, q: str, default: str = "") -> dict[str, Any]:
     """C4-VLM: englischer Artikelname (`item`) für die Fragevorlage und/oder eigene Frage (`question`)."""
     item = " ".join(str(p_in.get("item") or "").split())[:80] or default
     if not item and not q:
-        raise HTTPException(422, "Artikel (englisch, z. B. „bottles“) oder eigene Frage an das Bildmodell angeben")
+        raise HTTPException(422, i18n.t("errors.sensor_item_or_question"))
     out: dict[str, Any] = {}
     if item:
         out["item"] = item
@@ -71,7 +72,7 @@ class SensorIn(BaseModel):
     def _name(cls, v: str) -> str:
         v = " ".join(v.split())
         if not v:
-            raise ValueError("Name fehlt")
+            raise ValueError(i18n.t("errors.name_missing"))
         return v
 
     @field_validator("region")
@@ -80,11 +81,11 @@ class SensorIn(BaseModel):
         out = []
         for p in v:
             if len(p) != 2 or not all(-0.001 <= float(c) <= 1.001 for c in p):
-                raise ValueError("Bereich: Punkte normiert [x,y] (0..1)")
+                raise ValueError(i18n.t("errors.sensor_region_points"))
             out.append([round(min(1.0, max(0.0, float(p[0]))), 4), round(min(1.0, max(0.0, float(p[1]))), 4)])
         xs, ys = [p[0] for p in out], [p[1] for p in out]
         if max(xs) - min(xs) < 0.005 or max(ys) - min(ys) < 0.005:
-            raise ValueError("Bereich zu klein")
+            raise ValueError(i18n.t("errors.sensor_region_too_small"))
         return out
 
 
@@ -93,84 +94,82 @@ def _num(p: dict, key: str, default: float, lo: float, hi: float, label: str) ->
     try:
         v = float(v)
     except (TypeError, ValueError):
-        raise HTTPException(422, f"{label}: Zahl erwartet") from None
+        raise HTTPException(422, i18n.t("errors.number_expected", label=i18n.t(label))) from None
     if not lo <= v <= hi:
-        raise HTTPException(422, f"{label}: erlaubt {lo:g}..{hi:g}")
+        raise HTTPException(422, i18n.t("errors.value_range", label=i18n.t(label), lo=f"{lo:g}", hi=f"{hi:g}"))
     return v
 
 
 def _validate(body: SensorIn, db: Session) -> dict[str, Any]:
     """SensorIn → Spaltenwerte (Defaults je Art, Prüfungen mit deutschen Meldungen)."""
     if db.get(Camera, body.camera_id) is None:
-        raise HTTPException(422, "Kamera nicht gefunden")
+        raise HTTPException(422, i18n.t("errors.camera_not_found"))
     k = body.kind
     p_in = dict(body.params or {})
     q = str(p_in.get("question") or "").strip()
     if len(q) > 300:
-        raise HTTPException(422, "Frage: höchstens 300 Zeichen")
+        raise HTTPException(422, i18n.t("errors.question_max_300"))
     params: dict[str, Any] = {}
     if k == "brightness":
-        params = {"threshold": _num(p_in, "threshold", 0.5, 0, 1, "Schwelle"), "invert": bool(p_in.get("invert"))}
+        params = {"threshold": _num(p_in, "threshold", 0.5, 0, 1, "errors.sensor_param_threshold"), "invert": bool(p_in.get("invert"))}
     elif k == "blink":
-        params = {"min_std": _num(p_in, "min_std", 0.05, 0.005, 1, "Mindest-Schwankung"),
-                  "window_s": _num(p_in, "window_s", 3, 1, 30, "Zeitfenster")}
+        params = {"min_std": _num(p_in, "min_std", 0.05, 0.005, 1, "errors.sensor_param_min_std"),
+                  "window_s": _num(p_in, "window_s", 3, 1, 30, "errors.sensor_param_window")}
     elif k == "reference":
         params = {}
     elif k == "inventory_count":
         labels = p_in.get("labels") or []
         if not isinstance(labels, list) or not labels:
-            raise HTTPException(422, "Mindestens einen Gegenstand wählen")
+            raise HTTPException(422, i18n.t("errors.sensor_select_item"))
         known = {e.get("label") for e in (settings_store.get().get("inventory_vocabulary") or [])}
         clean: list[str] = []
         for lb in labels:
             lb = str(lb).strip()
             if lb not in known:
-                raise HTTPException(422, f"Unbekannter Gegenstand: {lb}")
+                raise HTTPException(422, i18n.t("errors.unknown_item", item=lb))
             if lb not in clean:
                 clean.append(lb)
-        params = {"labels": clean, "min_count": int(_num(p_in, "min_count", 1, 1, 100, "Mindestanzahl"))}
+        params = {"labels": clean, "min_count": int(_num(p_in, "min_count", 1, 1, 100, "errors.sensor_param_min_count"))}
     elif k == "fill":
-        low = _num(p_in, "low_below", 0.4, 0, 1, "Knapp unter")
-        out = _num(p_in, "out_below", 0.15, 0, 1, "Leer unter")
+        low = _num(p_in, "low_below", 0.4, 0, 1, "errors.sensor_param_low_below")
+        out = _num(p_in, "out_below", 0.15, 0, 1, "errors.sensor_param_out_below")
         if out >= low:
-            raise HTTPException(422, "„Leer unter“ muss kleiner als „Knapp unter“ sein")
+            raise HTTPException(422, i18n.t("errors.sensor_out_below_low"))
         params = {"low_below": low, "out_below": out}
     elif k == "vlm":
         measure = str(p_in.get("measure") or "yesno")
         if measure not in VLM_MEASURES:
-            raise HTTPException(422, "Messart: yesno, count oder fill")
+            raise HTTPException(422, i18n.t("errors.sensor_measure_invalid"))
         if measure == "yesno":
             if not q:
-                raise HTTPException(422, "Frage an das Bildmodell fehlt")
+                raise HTTPException(422, i18n.t("errors.sensor_question_missing"))
         else:                                   # C4-VLM-Modus (W4): zählen bzw. Füllstand
             params = {"measure": measure, **_vlm_item(p_in, q)}
             if measure == "count":
-                params["min_count"] = int(_num(p_in, "min_count", 1, 1, vs.VLM_COUNT_MAX_MIN, "Mindestanzahl"))
+                params["min_count"] = int(_num(p_in, "min_count", 1, 1, vs.VLM_COUNT_MAX_MIN, "errors.sensor_param_min_count"))
     if k == "inventory_count" and body.verify_vlm:
         params.update(_vlm_item(p_in, q, default=_vocab_item(params["labels"])))
         if params["min_count"] > vs.VLM_COUNT_MAX_MIN:
-            raise HTTPException(422, f"Bestätigung per Bildmodell nur bis Mindestanzahl {vs.VLM_COUNT_MAX_MIN} "
-                                     "(das Bildmodell zählt größere Mengen zu niedrig)")
+            raise HTTPException(422, i18n.t("errors.sensor_verify_count_max", max=vs.VLM_COUNT_MAX_MIN))
     elif q and (k == "vlm" or k in vs.VERIFY_KINDS):
         params["question"] = q
     state_set = vs.default_state_set(k, body.state_set or ("level" if body.supply else None), params)
     if body.state_set and body.state_set != state_set:
-        raise HTTPException(422, f"Art {vs.KIND_DE[k]} liefert nur Zustände „{'ok/knapp/leer' if state_set == 'level' else 'an/aus'}“")
+        raise HTTPException(422, i18n.t("errors.sensor_kind_states", kind=i18n.t(f"errors.sensor_kind_{k}"),
+                                        states=i18n.t("errors.sensor_states_level" if state_set == "level"
+                                                      else "errors.sensor_states_binary")))
     if body.supply and state_set != "level":
-        raise HTTPException(422, "Vorrat nur mit Zuständen ok/knapp/leer (Füllstand, Gegenstände zählen oder "
-                                 "Bildmodell mit Anzahl/Füllstand)")
+        raise HTTPException(422, i18n.t("errors.sensor_supply_level_only"))
     if body.verify_vlm:
         if k not in vs.VERIFY_ALL_KINDS:
-            raise HTTPException(422, "Bestätigung per Bildmodell nur für Helligkeit, Blinken, Referenzbilder und "
-                                     "Gegenstände zählen")
+            raise HTTPException(422, i18n.t("errors.sensor_verify_kinds"))
         if k in vs.VERIFY_KINDS and not q:
-            raise HTTPException(422, "Für die Bestätigung per Bildmodell eine Frage angeben")
+            raise HTTPException(422, i18n.t("errors.sensor_verify_question"))
     interval = body.interval_s if body.interval_s is not None else KIND_INTERVAL[k]
     if k == "vlm" and interval < VLM_MIN_INTERVAL:
-        raise HTTPException(422, "Bildmodell-Sensoren: Intervall mindestens 60 s")
+        raise HTTPException(422, i18n.t("errors.sensor_vlm_interval"))
     if k == "vlm" and params.get("measure") in ("count", "fill") and body.vlm_max_age_s < VLM_SUPPLY_MIN_AGE:
-        raise HTTPException(422, "Vorräte per Bildmodell: „spätestens erneut nach“ mindestens 30 min "
-                                 "(jede Frage pausiert Gegenstandserkennung und Zeitmaschine)")
+        raise HTTPException(422, i18n.t("errors.sensor_vlm_supply_age"))
     if k == "blink" and interval < params.get("window_s", 3):
         interval = float(params["window_s"])
     return {"name": body.name, "camera_id": body.camera_id, "enabled": body.enabled, "kind": k,
@@ -182,7 +181,7 @@ def _validate(body: SensorIn, db: Session) -> dict[str, Any]:
 def _sensor_or_404(db: Session, sensor_id: int) -> VirtualSensor:
     r = db.get(VirtualSensor, sensor_id)
     if r is None:
-        raise HTTPException(404, "Sensor nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.sensor_not_found"))
     return r
 
 
@@ -210,7 +209,7 @@ async def create_sensor(body: SensorIn, db: Session = Depends(get_db)):
 def get_sensor(sensor_id: int, signed: bool = Query(False, description="snapshot_url signieren (Middleware)")):
     data = vs.get_json(sensor_id)
     if data is None:
-        raise HTTPException(404, "Sensor nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.sensor_not_found"))
     return data
 
 
@@ -225,14 +224,14 @@ async def update_sensor(sensor_id: int, body: SensorIn, db: Session = Depends(ge
     r.updated_at = datetime.now(timezone.utc)
     db.commit()
     if reset:
-        await run_in_threadpool(vs.set_state_unknown, sensor_id, "Art oder Kamera geändert")
+        await run_in_threadpool(vs.set_state_unknown, sensor_id, "sensors.reason.config_changed")
     return await run_in_threadpool(vs.after_change, sensor_id, reset=reset)
 
 
 @router.delete("/sensors/{sensor_id}", status_code=204)
 async def delete_sensor(sensor_id: int):
     if not await run_in_threadpool(vs.delete_sensor, sensor_id):
-        raise HTTPException(404, "Sensor nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.sensor_not_found"))
     return Response(status_code=204)
 
 
@@ -241,7 +240,7 @@ async def evaluate_sensor(sensor_id: int):
     """Sofort bewerten (ohne Hysterese): letzte Messung bzw. neu zählen / Bildmodell fragen."""
     data = await run_in_threadpool(vs.evaluate_now, sensor_id)
     if data is None:
-        raise HTTPException(404, "Sensor nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.sensor_not_found"))
     return data
 
 
@@ -281,19 +280,19 @@ async def add_reference(sensor_id: int, body: ReferenceIn, db: Session = Depends
     r = _sensor_or_404(db, sensor_id)
     allowed = vs.REF_STATES.get(r.kind)
     if not allowed:
-        raise HTTPException(422, "Referenzbilder nur für die Arten „Referenzbilder“ und „Füllstand“")
+        raise HTTPException(422, i18n.t("errors.sensor_refs_kinds"))
     if body.state not in allowed:
-        raise HTTPException(422, f"Zustand für diese Art: {', '.join(allowed)}")
+        raise HTTPException(422, i18n.t("errors.sensor_ref_state", states=", ".join(allowed)))
     n = db.scalar(select(func.count()).select_from(SensorReference).where(
         SensorReference.sensor_id == sensor_id, SensorReference.state == body.state)) or 0
     if n >= vs.MAX_REFS_PER_STATE:
-        raise HTTPException(422, f"Höchstens {vs.MAX_REFS_PER_STATE} Referenzen je Zustand – erst alte löschen")
+        raise HTTPException(422, i18n.t("errors.sensor_refs_max", max=vs.MAX_REFS_PER_STATE))
     cam = db.get(Camera, r.camera_id)
     if cam is None or not cam.enabled:
-        raise HTTPException(409, "Kamera ist deaktiviert")
+        raise HTTPException(409, i18n.t("errors.camera_disabled"))
     data = await run_in_threadpool(vs.grab_jpeg, r.camera_id)
     if not data:
-        raise HTTPException(502, "Kamerabild nicht verfügbar")
+        raise HTTPException(502, i18n.t("errors.camera_image_unavailable"))
     now = datetime.now(timezone.utc)
     rel = f"sensors/ref/sensor{sensor_id}_{body.state}_{int(now.timestamp() * 1000)}.jpg"
     await run_in_threadpool(vs.store, rel, data)
@@ -309,7 +308,7 @@ async def add_reference(sensor_id: int, body: ReferenceIn, db: Session = Depends
 async def delete_reference(sensor_id: int, ref_id: int, db: Session = Depends(get_db)):
     ref = db.get(SensorReference, ref_id)
     if ref is None or ref.sensor_id != sensor_id:
-        raise HTTPException(404, "Referenz nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.reference_not_found"))
     path = ref.image_path
     db.delete(ref)
     db.commit()
@@ -330,7 +329,7 @@ class ShoppingIn(BaseModel):
     def _name(cls, v: str) -> str:
         v = " ".join(v.split())
         if not v:
-            raise ValueError("Name fehlt")
+            raise ValueError(i18n.t("errors.name_missing"))
         return v
 
 
@@ -361,12 +360,12 @@ async def add_shopping_item(body: ShoppingIn, request: Request, response: Respon
 async def update_shopping_item(item_id: int, body: ShoppingPatch):
     item = await run_in_threadpool(shopping.patch, item_id, done=body.done, name=body.name, note=body.note)
     if item is None:
-        raise HTTPException(404, "Eintrag nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.entry_not_found"))
     return item
 
 
 @router.delete("/shopping-list/{item_id}", status_code=204)
 async def delete_shopping_item(item_id: int):
     if not await run_in_threadpool(shopping.remove, item_id):
-        raise HTTPException(404, "Eintrag nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.entry_not_found"))
     return Response(status_code=204)

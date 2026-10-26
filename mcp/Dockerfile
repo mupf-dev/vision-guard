@@ -3,7 +3,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server.py selftest.py ./
+COPY server.py selftest.py i18n.py ./
+COPY locales/ ./locales/
 COPY tools/ ./tools/
 EXPOSE 8100
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \

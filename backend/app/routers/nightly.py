@@ -8,6 +8,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from .. import i18n
 from .. import nightly
 from ..auth import require_user
 from ..schemas import NightlyApplyIn, NightlyRunIn
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/api/nightly", tags=["nightly"], dependencies=[Depend
 def _session_only(request: Request) -> None:
     p = getattr(request.state, "principal", None)
     if getattr(p, "kind", "session") == "token":
-        raise HTTPException(403, "Nur mit Anmeldung im Browser")
+        raise HTTPException(403, i18n.t("errors.browser_login_only"))
 
 
 @router.get("/status")
@@ -35,7 +36,7 @@ def nightly_reports(limit: int = Query(20, ge=1, le=200), offset: int = Query(0,
 def nightly_report(rid: int):
     r = nightly.get_report(rid)
     if r is None:
-        raise HTTPException(404, "Bericht nicht gefunden")
+        raise HTTPException(404, i18n.t("errors.report_not_found"))
     return r
 
 
@@ -46,7 +47,7 @@ def nightly_run(body: NightlyRunIn, request: Request):
     try:
         return nightly.start(body.mode, "manual")
     except nightly.RunningError:
-        raise HTTPException(409, "Es läuft bereits ein Nachtlauf")
+        raise HTTPException(409, i18n.t("errors.nightly_running"))
 
 
 @router.post("/reports/{rid}/apply", status_code=202)
@@ -55,6 +56,6 @@ def nightly_apply(rid: int, body: NightlyApplyIn, request: Request):
     try:
         return nightly.start("apply", "apply", apply_from=rid, idx=body.idx)
     except nightly.RunningError:
-        raise HTTPException(409, "Es läuft bereits ein Nachtlauf")
+        raise HTTPException(409, i18n.t("errors.nightly_running"))
     except nightly.ApplyError as e:
         raise HTTPException(e.status, e.detail)

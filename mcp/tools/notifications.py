@@ -15,12 +15,9 @@ from typing import Optional
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult
 
-from .common import LOCAL_TZ, READ_ONLY, BackendError, api, fail, fmt_ago, fmt_time, n_de, ok
+from .common import LOCAL_TZ, READ_ONLY, BackendError, api, fail, fmt_ago, fmt_time, mapped, ok, t
 
 SOURCES = ("rule", "health", "pet", "review", "report", "sensor")
-SOURCE_DE = {"rule": "Regel", "health": "Kamera-Zustand", "pet": "Tiere", "review": "Rückfrage",
-             "report": "Bericht", "sensor": "Sensor"}
-LEVEL_DE = {"alarm": "Alarm", "warning": "Warnung", "info": "Hinweis"}
 _REL = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(m|min|h|std|d|t)\s*$", re.IGNORECASE)
 
 
@@ -32,6 +29,8 @@ def parse_since(value: Optional[str], now: Optional[datetime] = None) -> Optiona
     now = now or datetime.now(timezone.utc)
     loc = now.astimezone(LOCAL_TZ)
     midnight = loc.replace(hour=0, minute=0, second=0, microsecond=0)
+    if v in ("now", "jetzt"):
+        return now
     if v in ("today", "heute"):
         return midnight.astimezone(timezone.utc)
     if v in ("morning", "heute morgen", "morgens"):
@@ -47,8 +46,7 @@ def parse_since(value: Optional[str], now: Optional[datetime] = None) -> Optiona
     try:
         dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
     except ValueError:
-        raise ValueError(f"Unbekannte Zeitangabe „{value}“ – erlaubt: ISO-Zeit, 3h, 90m, 2d, today, morning, "
-                         "yesterday.") from None
+        raise ValueError(t("notifications.bad_time", value=value)) from None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=LOCAL_TZ)
     return dt.astimezone(timezone.utc)
@@ -58,9 +56,9 @@ def register(mcp: MCPServer) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def list_notifications(ctx: Context, since: Optional[str] = None, limit: int = 10,
                                  source: Optional[str] = None) -> CallToolResult:
-        """Listet die letzten Hinweise von VisionGuard (z. B. „Schlüssel liegt noch am Brett“, Kamera verdeckt),
-        neueste zuerst. `since`: ISO-Zeit oder „3h“, „90m“, „2d“, „today“, „morning“, „yesterday“.
-        `source`: rule, health, pet, review, report oder sensor (kommagetrennt möglich)."""
+        """List the latest VisionGuard notifications (e.g. "keys are still on the hook", camera covered),
+        newest first. `since`: ISO time or "3h", "90m", "2d", "today", "morning", "yesterday".
+        `source`: rule, health, pet, review, report or sensor (comma-separated allowed)."""
         try:
             try:
                 since_dt = parse_since(since)
@@ -71,7 +69,7 @@ def register(mcp: MCPServer) -> None:
                 parts = [p.strip().lower() for p in source.split(",") if p.strip()]
                 bad = [p for p in parts if p not in SOURCES]
                 if bad:
-                    return fail(f"Unbekannte Quelle {', '.join(bad)} – erlaubt: {', '.join(SOURCES)}.")
+                    return fail(t("notifications.bad_source", bad=", ".join(bad), allowed=", ".join(SOURCES)))
                 src = ",".join(parts)
             limit = max(1, min(int(limit), 100))
             data = await api(ctx, "/notifications", {
@@ -81,21 +79,22 @@ def register(mcp: MCPServer) -> None:
                       "camera_id": n.get("camera_id"), "image_url": n.get("image_url")}
                      for n in data.get("items", [])]
             total = int(data.get("total", len(items)))
-            scope = f" seit {fmt_time(since_dt.isoformat())}" if since_dt else ""
+            scope = " " + t("common.since", time=fmt_time(since_dt.isoformat())) if since_dt else ""
             if not items:
-                return ok(f"Keine Hinweise{scope}.", {"total": 0, "items": []})
-            lines = [f"{n_de(total, 'Hinweis', 'Hinweise')}{scope}"
-                     + (f", die neuesten {len(items)}:" if total > len(items) else ":")]
+                return ok(t("notifications.none", scope=scope), {"total": 0, "items": []})
+            lines = [t("notifications.n_items", n=total, scope=scope)
+                     + (t("common.newest", n=len(items)) if total > len(items) else ":")]
             for n in items:
-                head = f"{fmt_time(n['ts'])} ({fmt_ago(n['ts'])}) – {LEVEL_DE.get(n['level'] or '', 'Hinweis')}"
-                head += f", {SOURCE_DE.get(n['source'] or '', n['source'])}"
+                head = (f"{fmt_time(n['ts'])} ({fmt_ago(n['ts'])}) – "
+                        f"{mapped('notifications.level', n['level'], t('notifications.level.info'))}")
+                head += f", {mapped('notifications.source', n['source'])}"
                 if n["rule"] and n["source"] == "rule" and n["rule"] != n["title"]:
-                    head += f" „{n['rule']}“"
+                    head += " " + t("common.quoted", text=n["rule"])
                 text = f"- {head}: {n['title'] or ''}"
                 if n["message"]:
                     text += f" – {n['message']}"
                 if n["image_url"]:
-                    text += f" Bild: {n['image_url']}"
+                    text += " " + t("common.image", url=n["image_url"])
                 lines.append(text)
             return ok("\n".join(lines), {"total": total, "items": items})
         except BackendError as e:

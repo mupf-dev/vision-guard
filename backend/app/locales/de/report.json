@@ -1,1 +1,131 @@
-{}
+{
+  "weekdays": {
+    "0": "Montag",
+    "1": "Dienstag",
+    "2": "Mittwoch",
+    "3": "Donnerstag",
+    "4": "Freitag",
+    "5": "Samstag",
+    "6": "Sonntag"
+  },
+  "date_head": "%d.%m.",
+  "title_daily": "Tagesbericht {head}",
+  "title_manual": "Bericht {head}",
+  "and": "und",
+  "more": "{n} weitere",
+  "camera": "Kamera {id}",
+  "labels": {
+    "person": {
+      "one": "Person",
+      "other": "Personen"
+    },
+    "car": {
+      "one": "Auto",
+      "other": "Autos"
+    },
+    "truck": {
+      "one": "Lkw",
+      "other": "Lkw"
+    },
+    "bus": {
+      "one": "Bus",
+      "other": "Busse"
+    },
+    "motorcycle": {
+      "one": "Motorrad",
+      "other": "Motorräder"
+    },
+    "bicycle": {
+      "one": "Fahrrad",
+      "other": "Fahrräder"
+    },
+    "dog": {
+      "one": "Hund",
+      "other": "Hunde"
+    },
+    "cat": {
+      "one": "Katze",
+      "other": "Katzen"
+    },
+    "bird": {
+      "one": "Vogel",
+      "other": "Vögel"
+    },
+    "horse": {
+      "one": "Pferd",
+      "other": "Pferde"
+    }
+  },
+  "purpose": {
+    "food": "Futternapf",
+    "water": "Wassernapf",
+    "litter": "Katzenklo"
+  },
+  "source": {
+    "health": "Kamera-Zustand",
+    "pet": "Tiere",
+    "review": "Rückfragen",
+    "sensor": "Sensoren",
+    "rule": "Regeln",
+    "report": "Berichte"
+  },
+  "sec": {
+    "people": "Personen",
+    "vehicles": "Fahrzeuge",
+    "animals": "Tiere",
+    "inventory": "Gegenstände",
+    "rules": "Regeln",
+    "system": "Hinweise",
+    "quiet": "Ruhiger Zeitraum"
+  },
+  "people_none": "keine erkannt.",
+  "people_detected": "{times} erkannt",
+  "people_known": "bekannt: {list}",
+  "people_unknown": {
+    "one": "1 unbekanntes Gesicht",
+    "other": "{n} unbekannte Gesichter"
+  },
+  "people_new": ", davon {n} neu",
+  "people_no_face": "{times} ohne erkanntes Gesicht",
+  "last": "zuletzt {time}",
+  "vehicle_item": "{n} {label} (zuletzt {time})",
+  "plates": "Kennzeichen: {list}",
+  "animals_total": "insgesamt",
+  "bowls": "Näpfe/Klo: {list}",
+  "visit": "{who} {place} {times} (zuletzt {time})",
+  "inv_unavailable": "nicht auswertbar ({error}).",
+  "inventory_unavailable": "Gegenstände nicht auswertbar",
+  "rule_once": "„{name}“ {time}",
+  "rule_many": "„{name}“ {times} (zuletzt {time})",
+  "notif_item": "{times} {source}",
+  "offline": {
+    "one": "Kamera {names} ist aktuell offline.",
+    "other": "Kameras {names} sind aktuell offline."
+  },
+  "quiet_text": "keine Personen, Fahrzeuge, Tiere, Regeln oder Veränderungen.",
+  "no_llm": "Kein Sprachmodell eingerichtet",
+  "problem": {
+    "auto_name": "„{text}“ steht nicht in den Fakten",
+    "plate": "Kennzeichen „{text}“ steht nicht in den Fakten",
+    "date": "Datum „{text}“ steht nicht in den Fakten",
+    "time": "Uhrzeit „{text}“ steht nicht in den Fakten",
+    "number": "Zahl „{text}“ steht nicht in den Fakten",
+    "name": "Name „{text}“ steht nicht in den Fakten",
+    "not_prose": "kein Fließtext (JSON, Liste oder Markdown)",
+    "too_long": "zu lang ({n} Wörter)"
+  },
+  "deliver": {
+    "mqtt_not_connected": "MQTT nicht verbunden",
+    "duplicate": "Hinweis nicht angelegt (Dublette)",
+    "no_push_target": "kein Push-Ziel für „Tagesbericht“ gewählt",
+    "push_unknown": "Push-Ziel(e) unbekannt oder deaktiviert",
+    "webhook_timeout": "keine Antwort binnen {s} s",
+    "webhook_unreachable": "nicht erreichbar ({error})",
+    "smtp_not_configured": "SMTP nicht konfiguriert",
+    "smtp_auth": "SMTP-Anmeldung fehlgeschlagen",
+    "smtp_starttls": "Server unterstützt STARTTLS nicht (VG_SMTP_STARTTLS=0?)",
+    "smtp_error": "SMTP-Fehler ({error})",
+    "smtp_unreachable": "SMTP nicht erreichbar ({error})",
+    "internal": "interner Fehler ({error})"
+  }
+}
